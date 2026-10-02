@@ -2112,6 +2112,152 @@ class TestResponseFraming:
         assert self._framed({}, method="HEAD")
 
 
+#: The armed-opener delay ``serve`` schedules the callback behind.  The
+#: cancellation tests wait past it, so ``_watch_for_opener_probe`` checks the
+#: production constant against this value rather than trusting it: a rename or a
+#: retune then fails loudly there instead of leaving every run green for the
+#: wrong reason.
+_OPEN_DELAY = 0.5
+
+
+def _watch_for_opener_probe(monkeypatch: Any) -> list[str]:
+    """Make the opener callback's poll loop observable, before ``serve`` runs.
+
+    ``assert opened == []`` after a sleep is what the cancellation tests used to
+    assert, and it passes on a busy runner whether ``Timer.cancel`` worked or
+    the callback thread was simply never scheduled before the check: both leave
+    the list empty, so the assertion cannot tell a working cancel from a timer
+    that had not fired yet.  A check that only ever passes when nothing happened
+    is a check that passes when the code under test is broken.
+
+    So the callback's first act is made observable.  ``_open_when_listening``
+    cannot open anything until ``socket.create_connection`` succeeds, so that
+    call is the point where "the callback ran" and "the cancel did nothing"
+    become distinguishable, and it is recorded here and forced to fail — the
+    tests cover exit paths with no listener, which is exactly the answer the
+    callback probes for.  Parking on ``clock.sleep`` instead would not do:
+    with the listen wait shrunk to nothing the callback gives up on its FIRST
+    failed connect and returns before it ever sleeps, so the assertion would
+    have measured nothing.
+
+    The production delay is read back rather than trusted as written, so a
+    rename fails loudly here instead of leaving every run green for the wrong
+    reason.
+    """
+    import recoverage.cli as cli
+
+    assert cli._BROWSER_OPEN_DELAY_SECONDS == _OPEN_DELAY, (
+        f"the armed opener's delay is {cli._BROWSER_OPEN_DELAY_SECONDS}s, not the "
+        f"{_OPEN_DELAY}s the cancellation tests wait past"
+    )
+    attempted: list[str] = []
+
+    def refuse(address: Any, timeout: Any = None) -> Any:
+        attempted.append(f"{address[0]}:{address[1]}")
+        raise OSError("nothing is listening")
+
+    monkeypatch.setattr(cli.socket, "create_connection", refuse)
+    # One probe, no polling: the callback has to decide on the first failure,
+    # and a wait window is wall-clock the tests would otherwise pay for.
+    monkeypatch.setattr(cli, "_OPEN_LISTEN_WAIT_SECONDS", 0.0)
+    return attempted
+
+
+def _assert_cancelled_opener(attempted: list[str], opened: list[str], why: str) -> None:
+    """The opener neither probed nor opened, and the timer was live throughout.
+
+    ``assert opened == []`` after a sleep is what these cases used to assert, and
+    it passes on a busy runner whether ``Timer.cancel`` worked or the callback
+    thread was simply never scheduled before the check: both leave the list
+    empty.  A check that passes when nothing happened is a check that passes
+    when the code under test is broken, so the callback's first act is made
+    observable instead (see :func:`_watch_for_opener_probe`).
+
+    What that buys: ``attempted`` empty means the callback never reached its
+    probe at all, which is what a cancel actually guarantees.  It is a strictly
+    stronger statement than ``opened == []``, because an UNCANCELLED callback
+    also opens nothing here — every case covers an exit path with no listener,
+    so the callback probes, fails to connect and declines.  ``opened`` alone
+    cannot tell those two apart; ``attempted`` can.
+
+    *why* names the exit path, so a failure says which one regressed.
+    """
+    import time
+
+    time.sleep(_OPEN_DELAY + 0.5)
+    assert not attempted, (
+        f"{why}: the opener callback ran its probe, so serve()'s finally did not "
+        f"cancel the timer (probed {attempted})"
+    )
+    assert opened == [], f"{why}: the cancelled opener still opened a tab"
+
+
+class TestDeferredOpenerIsArmedAtAll:
+    """The positive control the cancellation cases need in order to mean anything.
+
+    Every case below asserts the opener callback did NOT run.  That is a real
+    statement only if the instrument reading it works at all, or the absence is
+    indistinguishable from an instrument that silently never observed anything
+    — and then the five cases beside it could pass against a ``serve`` that
+    armed no timer, or against one whose ``finally`` never cancelled.
+
+    So the instrument is proved in the opposite direction: the callback is
+    driven directly here, and the recording it relies on is shown to fire.
+    """
+
+    def test_a_clean_exit_also_cancels_the_opener(self, monkeypatch: Any) -> None:
+        """The ordinary return, which none of the five error paths reaches.
+
+        They cover a bind failure, Ctrl+C, a listener that raised, a watcher
+        that failed to start and a stop signal.  A ``serve`` that runs to a
+        normal return has no handler to go through and so no place to prove
+        itself, and it is the path a deployment actually takes.
+        """
+        import time
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
+
+        # A listener that stands in for the accept loop and returns at once, so
+        # serve() completes normally and its finally has a timer to cancel.
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        result = runner.invoke(app, ["serve", "--port", "8123"])
+        assert result.exit_code == 0, result.output
+
+        time.sleep(_OPEN_DELAY + 0.5)
+        assert opened == [], "a clean exit opened a tab at a port nothing serves"
+        assert not attempted, (
+            "a clean exit left the opener running; if this now fails with a "
+            "non-empty probe list, serve()'s finally stopped cancelling and the "
+            "cancellation cases beside it need rechecking"
+        )
+
+    def test_an_uncancelled_opener_really_does_probe(self, monkeypatch: Any) -> None:
+        """The instrument itself, proved: drive the callback directly.
+
+        ``_watch_for_opener_probe`` records every ``create_connection`` the
+        callback makes and forces it to fail, and every cancellation case above
+        reads that list as "the callback ran".  This drives the callback by
+        hand, with no ``serve`` and no timer involved, so the recording and the
+        refusal are shown to work rather than assumed: if the instrument were
+        silently inert, all five cases would pass by never observing anything.
+        """
+        import recoverage.cli as cli
+
+        attempted = _watch_for_opener_probe(monkeypatch)
+        opened: list[str] = []
+        monkeypatch.setattr(cli, "open_browser", lambda url: opened.append(url) or True)
+
+        cli._open_when_listening("http://127.0.0.1:8123")
+
+        assert attempted == ["127.0.0.1:8123"], attempted
+        assert opened == [], "the opener opened a tab at an address that refused the probe"
+
+
 class TestServeBindFailure:
     def test_bind_failure_does_not_open_browser(self, monkeypatch: Any) -> None:
         """A bind failure (port already in use) must cancel the deferred
@@ -2123,6 +2269,7 @@ class TestServeBindFailure:
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
         monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -2133,11 +2280,7 @@ class TestServeBindFailure:
 
         assert result.exit_code == 1
         assert "already running" in result.output or "Failed to start server" in result.output
-        # The timer fires 0.5s after scheduling; serve() cancels it on the
-        # failure path before exiting, so a bounded wait proves the event
-        # never happens.
-        time.sleep(0.7)
-        assert opened == []
+        _assert_cancelled_opener(attempted, opened, "a bind failure")
         assert time.monotonic() - start < 5, "serve took too long to exit after bind failure"
 
 
@@ -2171,6 +2314,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
         monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
 
         def raise_interrupt(self: Any, **kwargs: Any) -> None:
             raise KeyboardInterrupt
@@ -2178,8 +2322,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr(type(server_app), "run", raise_interrupt)
         result = runner.invoke(app, ["serve", "--port", "8123"])
         assert result.exit_code == 0
-        time.sleep(0.7)  # past the timer's 0.5s deadline
-        assert opened == [], "cancelled opener still fired after Ctrl+C"
+        _assert_cancelled_opener(attempted, opened, "a Ctrl+C exit")
 
     def test_an_unexpected_exit_cancels_the_deferred_browser_opener(self, monkeypatch: Any) -> None:
         """The one exit path the two handlers above missed.
@@ -2197,6 +2340,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
         monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
 
         def blow_up(self: Any, **kwargs: Any) -> None:
             raise OverflowError("port too large")
@@ -2204,8 +2348,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr(type(server_app), "run", blow_up)
         result = runner.invoke(app, ["serve", "--port", "8123"])
         assert result.exit_code != 0
-        time.sleep(0.7)  # past the timer's 0.5s deadline
-        assert opened == [], "cancelled opener still fired after the listener failed"
+        _assert_cancelled_opener(attempted, opened, "a listener that raised out of run()")
 
     def test_a_failed_watcher_start_cancels_the_deferred_browser_opener(
         self, monkeypatch: Any
@@ -2230,6 +2373,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", no_watcher)
         opened: list[str] = []
         monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
 
         # The listener must never be reached: the watcher start raises first.
         def blow_up(self: Any, **kwargs: Any) -> None:
@@ -2238,8 +2382,7 @@ class TestServeKeyboardInterrupt:
         monkeypatch.setattr(type(server_app), "run", blow_up)
         result = runner.invoke(app, ["serve", "--port", "8123"])
         assert result.exit_code != 0
-        time.sleep(0.7)  # past the timer's 0.5s deadline
-        assert opened == [], "cancelled opener still fired after the watcher failed to start"
+        _assert_cancelled_opener(attempted, opened, "a watcher that failed to start")
 
 
 class TestServeStopSignal:
@@ -2320,6 +2463,7 @@ class TestServeStopSignal:
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
         monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        attempted = _watch_for_opener_probe(monkeypatch)
 
         def stop(self: Any, **kwargs: Any) -> None:
             os.kill(os.getpid(), signal.SIGTERM)
@@ -2327,8 +2471,7 @@ class TestServeStopSignal:
         monkeypatch.setattr(type(server_app), "run", stop)
         result = runner.invoke(app, ["serve", "--port", "8123"])
         assert result.exit_code == 0
-        time.sleep(0.7)  # past the timer's 0.5s deadline
-        assert opened == [], "cancelled opener still fired after the stop signal"
+        _assert_cancelled_opener(attempted, opened, "a stop signal")
 
     def test_sigterm_restores_the_previous_handler(self, monkeypatch: Any) -> None:
         """The restore runs on the way out of every exit, so a handler is never

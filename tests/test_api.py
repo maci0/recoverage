@@ -2115,6 +2115,137 @@ class TestLastVerify:
         assert "last_verify" not in data
 
 
+#: Every key ``server.function_json`` projects, written out here rather than read
+#: back from the projection itself.  The batch case below asserts only a
+#: SUBSET of them, and a subset cannot tell an addition from a removal: a key
+#: dropped from the dict reaches the SPA's panel and Potato's detail pane as
+#: ``undefined`` / a KeyError with every other test still green.
+_FUNCTION_DETAIL_KEYS = frozenset(
+    {
+        "va",
+        "name",
+        "vaStart",
+        "size",
+        "fileOffset",
+        "status",
+        "module",
+        "cflags",
+        "symbol",
+        "markerType",
+        "ghidra_name",
+        "list_name",
+        "is_thunk",
+        "is_export",
+        "sha256",
+        "files",
+        "detected_by",
+        "size_by_tool",
+        "textOffset",
+        "blocker",
+        "blockerDelta",
+        "size_reason",
+        "similarity",
+        "updated_by",
+        "updated_at",
+    }
+)
+
+#: The same for ``server.global_json``, whose ``isGlobal`` is the discriminator
+#: the batch and detail responses carry so a client can tell a data symbol from
+#: a function without a second request.
+_GLOBAL_DETAIL_KEYS = frozenset(
+    {"va", "name", "decl", "files", "module", "size", "isGlobal", "status"}
+)
+
+
+class TestDetailProjectionIsTheWholeColumn:
+    """The detail projections are the served shape, not a summary of it.
+
+    ``function_json`` feeds ``GET /functions/<va>``, ``POST /functions`` and
+    Potato Mode's detail pane, and its own docstring promises the FULL column
+    set — "a coverage document always carries every column, so the shape is the
+    full one" — because the two v6 columns (``updated_by``/``updated_at``)
+    used to be emitted only when the database happened to carry them.  Nothing
+    asserted that promise: the batch case below pins six keys as a subset, which
+    passes just as well against a projection that lost the other nineteen.
+
+    Two failures this closes.  A key dropped from the dict is a silent
+    regression in every consumer at once, and a container field that lost its
+    ``_plain`` call is worse than a missing key: ``size_by_tool`` is a frozen
+    ``MappingProxyType`` and ``files``/``detected_by`` are tuples, so
+    ``json.dumps`` raises ``TypeError: Object of type mappingproxy is not JSON
+    serializable`` and the whole route answers 500 rather than 200.
+    """
+
+    def test_the_function_detail_carries_every_column(self) -> None:
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        # `last_verify` is the one key the handler adds, so the projection's
+        # own set is the served set minus it.
+        assert set(data) - {"last_verify"} == _FUNCTION_DETAIL_KEYS, (
+            f"the function projection drifted: missing "
+            f"{sorted(_FUNCTION_DETAIL_KEYS - set(data))}, added "
+            f"{sorted(set(data) - _FUNCTION_DETAIL_KEYS - {'last_verify'})}"
+        )
+
+    def test_the_global_detail_carries_every_column(self) -> None:
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10002000")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert set(data) == _GLOBAL_DETAIL_KEYS
+        assert data["isGlobal"] == 1
+        assert "last_verify" not in data, "a global has no verify row to attach"
+
+    def test_the_batch_and_the_detail_route_agree_on_the_function_shape(self) -> None:
+        """Two projections of one row, two endpoints: a client reads either.
+
+        The batch docstring calls its response "the same shape as ``GET
+        /functions/<va>``", which is true only while both go through
+        ``function_json``.  A future arm that built the batch row itself would
+        drop a column the detail route still serves, and the two shapes would
+        disagree for every reader that fetches one and reuses it for the
+        other.
+        """
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001010")
+        assert status.startswith("200")
+        detail = json.loads(decode_body(body, headers))
+        # 0x10001010 has no verify row, so neither answer carries the extra
+        # key and the two key sets are directly comparable.
+        assert "last_verify" not in detail
+
+        status, headers, body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"vas": ["0x10001010"]}),
+        )
+        assert status.startswith("200")
+        batched = json.loads(decode_body(body, headers))
+        assert batched == [detail], "the batch row and the detail row describe different shapes"
+
+    def test_a_frozen_container_column_is_served_as_json(self) -> None:
+        """``size_by_tool`` is a ``MappingProxyType`` and the lists are tuples.
+
+        The snapshot is frozen on purpose, and ``json.dumps`` refuses both, so
+        every container field is thawed by ``server._plain`` at the call.  A
+        field that stopped being thawed takes the route down with a 500 rather
+        than a wrong value, which is why this asserts on the served BODY: a
+        key-set assertion alone would still pass against a projection that
+        carries every key, and only the round-trip through ``json.dumps`` sees
+        the exception.
+        """
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
+        assert status.startswith("200"), status
+        data = json.loads(decode_body(body, headers))
+        assert isinstance(data["size_by_tool"], dict), data["size_by_tool"]
+        assert isinstance(data["files"], list)
+        assert isinstance(data["detected_by"], list)
+
+
 def test_an_unmeasured_verify_figure_is_served_as_null() -> None:
     """A verify record writes "" for a figure it did not measure; served as-is,
     the SPA and Potato Mode both drew a labelled row with no value."""
