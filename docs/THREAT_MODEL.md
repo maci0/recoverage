@@ -3,7 +3,7 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Last reviewed: 2026-10-03,
-against `__version__ = "4.2.0"` (`src/recoverage/__init__.py:42`) as of commit
+against `__version__ = "4.3.0"` (`src/recoverage/__init__.py:42`) as of commit
 `5fe9ea7`.
 
 **This pass re-derived every `file:line` reference below against the tree at

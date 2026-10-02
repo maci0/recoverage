@@ -5,8 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-10-02
+
 ### Added
 
+- A coverage map dimmed by status filters or search now displays an informative
+  caption indicating how many blocks remain lit, which rule dimmed the rest, and
+  what undoes it.
+- Cell names in coverage maps and search jump targets are folded for Unicode
+  normalization before matching against search results (`foldCellName`).
+- Dynamic cell-state vocabulary resolution across `rebrew.coverage_db` and
+  `rebrew.build_db`.
+- Strongly-typed `NaiveStamp` regex group matching in date/time formatting.
 - `/api/health` answers `degraded` when the newest coverage document is more
   than `config.DEFAULT_MAX_DB_AGE_HOURS` (24) old, and logs the transition the
   way every other health reason does. Stale coverage is the one fault the rest
@@ -48,7 +58,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `serve_static_asset`, `handle_potato`), `cli.main`, `server.clear_target_cache`,
   `server.NameIndex`, `cli.ExportFormat` and the two `stats.start` counters.
 
-### Breaking
+### Changed
 
 - `recoverage regen` exits 2 where it exited 1 when `rebrew-project.toml` is
   missing or unreadable as a project file. Nothing was rebuilt in either case
@@ -56,8 +66,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pipeline failure for what is a misconfiguration, but a script that branched
   on the code — treating non-zero as "the rebuild failed, retry" — now sees 2,
   which this package uses for every other case where the operator has to change
-  something first. Retry a 1; do not retry a 2. `docs/UPGRADING.md` gathers this
-  with the other breaks.
+  something first. Retry a 1; do not retry a 2.
 - `recoverage open` writes its `Opening <url>` line to stderr instead of stdout.
   The line is status, not data, and `open` is the one command that mixed the
   two: a container entrypoint that captured stdout and treated a non-empty
@@ -65,8 +74,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that exits 1. A caller that reads the URL from `recoverage open`'s stdout gets
   an empty string now. Every other command is unchanged (`export` writes its
   document to stdout, `regen` writes no data at all).
-
-### Changed
 
 - `docs/RECOVERY.md`'s backup crontab now says which timezone its `03:17` is.
   The five cron fields are a wall-clock time read in whatever zone the host is
