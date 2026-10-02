@@ -1506,9 +1506,9 @@ class TestSpaDimmedMapSaysSo:
     def test_the_caption_is_rendered_from_the_survivor_count(self) -> None:
         map_source = _web("components/CoverageMap.tsx")
         assert "const summary = useMemo(" in map_source
-        assert "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source, (
-            "the caption is not the survivor count it claims to be"
-        )
+        assert (
+            "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source
+        ), "the caption is not the survivor count it claims to be"
         assert "const visible = useMemo(" in map_source
         # It counts the SAME columns the paint walks, over the whole section.
         assert "isDimmed(pack.states[i] ?? 0" in map_source

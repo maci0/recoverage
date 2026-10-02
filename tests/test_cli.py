@@ -2307,7 +2307,6 @@ class TestServeKeyboardInterrupt:
         """A Ctrl+C inside the opener's 0.5s scheduling window is a failed
         start: like the bind-failure path, it must cancel the timer so no
         browser tab opens pointing at a port that was never served."""
-        import time
 
         from recoverage.server import app as server_app
 
@@ -2333,7 +2332,6 @@ class TestServeKeyboardInterrupt:
         armed, so half a second after the traceback a tab opens on a port
         nothing is listening on.
         """
-        import time
 
         from recoverage.server import app as server_app
 
@@ -2363,7 +2361,6 @@ class TestServeKeyboardInterrupt:
         was listening on — the outcome the surrounding comment claimed the
         finally covered.
         """
-        import time
 
         from recoverage.server import app as server_app
 
@@ -2456,7 +2453,6 @@ class TestServeStopSignal:
         ``serve``'s finally restores it.
         """
         import signal
-        import time
 
         from recoverage.server import app as server_app
 
