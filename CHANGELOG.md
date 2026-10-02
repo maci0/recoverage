@@ -102,6 +102,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A coverage document that declares a NEGATIVE address rendered it as a
+  malformed one everywhere the address was shown: the Potato panel, the
+  disassembly, the search index, the `/asm` operand column and the hex dump
+  each printed `0x-0000001` (or `0x000-1000` in the browser), because
+  `f"{value:08x}"` puts the sign inside the field. That is not a hex address
+  and resolves to nothing in a debugger. The value is document input, not a
+  programming error, and it is now rendered as the unsigned reading of the same
+  bits through one helper per language: `server.hex_addr` in the server and
+  `format.hex` in the dashboard. A positive address is unchanged, and a 64-bit
+  one still prints all sixteen digits beside the padded eight of a 32-bit
+  image.
 - `recoverage backup`'s verification pass, and therefore `recoverage restore`
   (which verifies before it writes anything), read an archive member to
   whatever length its tar header declares, with no bound of their own, and they

@@ -288,6 +288,40 @@ def origin_is_this_dashboard(origin: str, host: str) -> bool:
     return _authority_of(origin) == request_host
 
 
+def hex_addr(address: int, width: int = 8) -> str:
+    """``address`` as ``0x`` plus at least *width* lowercase hex digits.
+
+    One definition for every address this package spells, and it lives here
+    because the shared kernel below the route modules is the only place a
+    sibling module's rule can live (the same reason :func:`is_plain_relative`
+    is not in a handler).
+
+    A negative *address* is document data rather than a programming error:
+    ``Function.va`` and ``Global.va`` are ints the reader takes as stored, and
+    a cell's ``start`` is added to a section's ``va`` to make one.
+    ``f"{v:08x}"`` on a negative renders the SIGN inside the field --
+    ``0x-0000001`` for -1 -- so a panel, a search index and a hex dump each
+    printed something that is not a hex address at all, and that a reader
+    pasting it into a debugger cannot resolve.  The unsigned reading of the
+    same bits is the answer: it keeps the value and the column width.
+
+    *width* is a FLOOR on the digit count, exactly as the ``f"{v:0{width}x}"``
+    this replaces is one, so a 64-bit image's ``0x7ff6_1234_5678`` prints all
+    sixteen digits beside the padded eight of a 32-bit one rather than losing
+    its high bits to the field. Only a NEGATIVE is read at the width, because
+    a negative carries no width of its own: the caller's supplies it, and -1
+    is the 32-bit reading ``0xffffffff`` at width 8. ``width=0`` spells the
+    bare magnitude, which is the second of the two search columns
+    :func:`_folded_va_table` builds.
+    """
+    digits = max(0, width)
+    if address < 0:
+        magnitude = address & ((1 << (4 * digits)) - 1) if digits else abs(address)
+    else:
+        magnitude = address
+    return f"0x{magnitude:0{digits}x}"
+
+
 def fs_text_bytes(text: str) -> bytes:
     """*text* as the bytes the filesystem named it in, for hashing.
 
@@ -2837,8 +2871,8 @@ def _folded_va_table(rows: Sequence[Any]) -> Mapping[int, tuple[str, str]]:
     """``id(row) -> (folded padded, folded bare)`` hex spellings of ``row.va``."""
     return {
         id(row): (
-            fold_text(f"0x{int(getattr(row, 'va', 0)):08x}") or "",
-            fold_text(f"0x{int(getattr(row, 'va', 0)):x}") or "",
+            fold_text(hex_addr(int(getattr(row, "va", 0)))) or "",
+            fold_text(hex_addr(int(getattr(row, "va", 0)), 0)) or "",
         )
         for row in rows
     }
@@ -2961,7 +2995,7 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
     lines: list[str] = []
     for i in range(0, len(data), 16):
         chunk = data[i : i + 16]
-        offset = f"{base_offset + i:08x}"
+        offset = hex_addr(base_offset + i)[2:]
         hex_left = " ".join(f"{b:02x}" for b in chunk[:8])
         hex_right = " ".join(f"{b:02x}" for b in chunk[8:])
         ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)

@@ -1644,7 +1644,7 @@ def _build_search_index(snap: CoverageSnapshot) -> dict[str, Any]:
     for fn in snap.functions:
         index.setdefault(fn.name, entry(fn.name, fn.vaStart, fn.symbol))
     for gl in snap.globals:
-        index.setdefault(gl.name, entry(gl.name, hex(gl.va), ""))
+        index.setdefault(gl.name, entry(gl.name, _server.hex_addr(gl.va), ""))
     return index
 
 
@@ -2585,7 +2585,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
             md = get_capstone_md()
             instructions: list[dict[str, Any]] = [
                 {
-                    "addr": f"0x{insn.address:08x}",
+                    "addr": _server.hex_addr(insn.address),
                     "mnemonic": insn.mnemonic,
                     "op_str": insn.op_str,
                     "size": insn.size,

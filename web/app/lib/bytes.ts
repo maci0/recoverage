@@ -29,7 +29,12 @@ export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
   let out = "";
   for (let i = 0; i < bytes.length; i += 16) {
     const slice = bytes.subarray(i, i + 16);
-    const offset = (baseOffset + i).toString(16).toUpperCase().padStart(8, "0");
+    // `hex`, not the open-coded `toString(16)` this used to spell: the row
+    // offset is a document-derived address (`section.va + cell.start`), and
+    // `(-4096).toString(16)` is `"-1000"`, which `padStart` pads on the left
+    // of the MINUS into `"000-1000"`. One spelling per address, so the gutter
+    // cannot go on rendering an address the debugger will not accept.
+    const offset = hex(baseOffset + i, 8).slice(2);
     const parts = Array.from({ length: 16 }, (_, j) =>
       j < slice.length ? (slice[j] ?? 0).toString(16).toUpperCase().padStart(2, "0") : "  ",
     );

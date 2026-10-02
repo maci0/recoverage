@@ -86,6 +86,7 @@ from recoverage.server import (
     functions_by_name,
     globals_by_name,
     globals_by_va,
+    hex_addr,
     lookup_function,
     lookup_global,
     mtime_ns_to_utc,
@@ -3620,6 +3621,60 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WEB_APP = REPO_ROOT / "web" / "app"
 
 
+class TestHexAddr:
+    """``server.hex_addr``: the one spelling of an address this package renders.
+
+    A negative VA is document data, not a programming error: ``Function.va``
+    and ``Global.va`` are ints the reader takes as stored, and a cell's
+    ``start`` is added to a section's ``va`` to make one.  ``f"{v:08x}"`` puts
+    the SIGN inside the field, so the panel, the search index, the hex dump
+    and the disassembly each printed ``0x-0000001`` -- a string that is not a
+    hex address, and that resolves to nothing in a debugger.
+    """
+
+    def test_a_negative_reads_as_its_unsigned_bits(self) -> None:
+        assert hex_addr(-1) == "0xffffffff"
+        assert hex_addr(-0x1000) == "0xfffff000"
+        assert hex_addr(-0x1000_1000) == "0xeffff000"
+
+    def test_a_positive_is_untouched(self) -> None:
+        assert hex_addr(0) == "0x00000000"
+        assert hex_addr(0x1000_1000) == "0x10001000"
+        assert hex_addr(255, 1) == "0xff"
+
+    def test_the_width_is_a_floor_not_a_cap(self) -> None:
+        """A 64-bit image's VA is wider than the eight digits a 32-bit one is
+        padded to, and the format it replaces already printed all sixteen of
+        them.  Reading EVERY value at the width masks the high bits off a
+        positive, so the distinction between the two arms is the whole point.
+        """
+        assert hex_addr(0x7FF6_1234_5678, 8) == "0x7ff612345678"
+        assert hex_addr(0x7FF6_1234_5678, 16) == "0x00007ff612345678"
+        assert hex_addr(-1, 16) == "0xffffffffffffffff"
+
+    def test_width_zero_spells_the_bare_magnitude(self) -> None:
+        """The second of the two search columns ``f"{v:x}"`` builds."""
+        assert hex_addr(0x1234_5678_9ABC, 0) == "0x123456789abc"
+        assert hex_addr(-1, 0) == "0x1"
+
+    def test_every_address_this_package_renders_reads_through_it(self) -> None:
+        """One spelling, or two surfaces drift apart the moment a format needs
+        changing.  ``potato._format_va`` and the disassembler's rendered line
+        are the two that were open-coding ``f"{v:08x}"`` themselves.
+        """
+        import recoverage.disasm as disasm
+
+        assert disasm.hex_addr is hex_addr, "disasm holds its own copy of the spelling"
+        source = (REPO_ROOT / "src" / "recoverage" / "disasm.py").read_text(encoding="utf-8")
+        assert 'f"0x{insn.address:08x}' not in source, (
+            "disasm spells an address itself again rather than through hex_addr"
+        )
+        potato = (REPO_ROOT / "src" / "recoverage" / "potato.py").read_text(encoding="utf-8")
+        assert 'f"0x{val:08x}"' not in potato, (
+            "potato._format_va spells an address itself again rather than through hex_addr"
+        )
+
+
 def _web(relative: str) -> str:
     """One frontend source file, as written.
 
@@ -4018,6 +4073,104 @@ class TestSpaNumericBoundaries:
         assert "DEFAULT_GRID_COLUMNS" in narrowed.group(1)
         # The narrowed value is the one the lattice is measured from.
         assert "Math.max(1, declared," in layout
+
+    def test_a_negative_address_is_not_spelled_as_a_signed_hex_string(self) -> None:
+        """`hex` pads a LENGTH, and a sign is not padding.
+
+        Every address the dashboard renders comes from a coverage document:
+        `Function.va` and `Global.va` are ints the reader takes as stored, and
+        `toVa` parses the `vaStart` hex spelling a document may carry a sign on.
+        `(-4096).toString(16)` is `"-1000"`, and `padStart(8, "0")` pads the
+        left of the MINUS — `"000-1000"` — so the panel, the search row and the
+        map's own range read `0x000-1000` beside the eight digits every other
+        address on the page carries, and a reader copying one into a debugger
+        gets nothing back.
+
+        A negative address is not a meaningful address, so the question is only
+        which side of the sign it is rendered on: the unsigned two's-complement
+        reading of the same bits, which keeps the column width, is the one that
+        still parses.  Skipped without bun (CI installs it; see package.json
+        `packageManager`).
+        """
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        # The last three are the regression the fix is easy to reintroduce:
+        # reading EVERY value at the width masks a positive whose image is
+        # wider than its own field, so a 64-bit VA loses its high bits.
+        cases = [
+            (-1, 8),
+            (-4096, 8),
+            (-0x1000_1000, 8),
+            (-255, 1),
+            (-1, 16),
+            (0, 8),
+            (0x1000_1000, 8),
+            (0x7FF6_1234_5678, 8),
+            (0x7FF6_1234_5678, 16),
+            (0xFFFF_FFFF_FFFF_FFFF, 16),
+        ]
+        driver = (
+            "import { hex } from "
+            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + ";\n"
+            + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+            + "console.log(JSON.stringify(cases.map(([a, w]) => hex(a, w))));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "hex.ts"
+            script.write_text(driver, encoding="utf-8")
+            path = Path(tmp) / "cases.json"
+            path.write_text(json.dumps(cases), encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script), str(path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"hex harness failed to run: {proc.stderr}"
+        rendered = json.loads(proc.stdout)
+        for (address, width), text in zip(cases, rendered, strict=True):
+            assert re.fullmatch(r"0x[0-9A-F]+", text), (
+                f"hex({address}, {width}) = {text!r}: a signed digit string is not a hex address"
+            )
+            # The width is a floor, and the padded sign pushed it past: every
+            # address on the page is at least `width` digits, which is the
+            # alignment the panel, the map range and the search row all share.
+            assert len(text) - 2 >= width, (
+                f"hex({address}, {width}) = {text!r}: shorter than the width it pads to"
+            )
+        # The two's-complement reading, so the value is the one a reader pastes
+        # into a debugger rather than a silent clamp that renumbers it.
+        negatives = [(a, w) for a, w in cases if a < 0]
+        assert rendered[: len(negatives)] == [
+            "0x" + format(address & (2 ** (4 * width) - 1), f"0{width}X")
+            for address, width in negatives
+        ], "hex no longer renders a negative address as its unsigned bits"
+
+    def test_the_hex_dump_gutter_reads_through_hex(self) -> None:
+        """The dump's row offset is a document-derived address, and it was the
+        same ``toString(16).padStart`` this just fixed in ``hex``.
+
+        ``formatBytes(buffer, baseOffset)`` is handed ``section.va +
+        cell.start``, and the guard above it refuses a negative SLICE start
+        without ever looking at the base it renders, so a section declaring a
+        negative ``va`` printed ``000-1000`` beside the eight-digit offsets its
+        neighbours carry.  One spelling per address is the point: the fix
+        belongs in ``formatBytes`` rather than in a second copy of the
+        conversion, so this holds it there.
+        """
+        body = _web("lib/bytes.ts").split("export function formatBytes", 1)[1]
+        body = body.split("const parts =", 1)[0]
+        assert "hex(baseOffset + i" in body, (
+            "formatBytes spells the row offset itself again: a negative base "
+            "pads a minus sign instead of a digit"
+        )
+        assert "baseOffset + i).toString(16)" not in body, (
+            "formatBytes still open-codes the hex conversion hex() owns"
+        )
 
 
 # The colour maths behind both token gates. Every relumea token is declared

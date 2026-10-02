@@ -22,8 +22,43 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The unsigned reading of *address* as *width* hex digits, `0x` prefixed.
+ *
+ * A negative value is document data — `Function.va` / `Global.va` are ints the
+ * reader takes as stored, and `toVa` parses a `vaStart` hex spelling a document
+ * may carry a sign on — and a sign is not a digit: `(-4096).toString(16)` is
+ * `"-1000"`, which `padStart` padded on the left of the MINUS into
+ * `"000-1000"`. Every address on the page then reads `0x000-1000` beside the
+ * eight digits its neighbours carry, and the string a reader pastes into a
+ * debugger names nothing. The unsigned two's-complement reading of the same
+ * bits keeps the value and the column width.
+ *
+ * `width` is a FLOOR on the digit count, which is what `padStart` already
+ * meant, so a 64-bit image's `0x7ff612345678` prints all sixteen digits beside
+ * the padded eight of a 32-bit one. Only a NEGATIVE is read at the width: a
+ * negative carries no width of its own, so the caller's supplies it, and -1 is
+ * the 32-bit reading `0xFFFFFFFF` at width 8. */
 export function hex(address: number, width: number): string {
-  return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;
+  const digits = Math.max(1, width);
+  // A negative needs the two's-complement reading, which only a BigInt holds
+  // all 64 bits of; a positive needs none of that and keeps every digit it has.
+  const text = address < 0 ? twoComplement(address, digits) : Math.trunc(address).toString(16);
+  return `0x${text.toUpperCase().padStart(digits, "0")}`;
+}
+
+/** *address*'s unsigned two's-complement reading, at *digits* hex digits.
+ *
+ *  A `Number` is a double: 2 ** 64 is not exactly representable as one, so a
+ *  modulus built that way loses the value, and a 32-bit shift reads 32 of the
+ *  64 bits.  A BigInt is the only integer type here that holds all 64, and the
+ *  bitwise `&` is the only spelling that reaches it, so this is the one
+ *  function in the file that turns `no-bitwise` off.  The mask itself is
+ *  exponentiation, not a shift, and needs no exemption. */
+function twoComplement(address: number, digits: number): string {
+  const mask = 2n ** BigInt(digits * 4) - 1n;
+  const truncated = BigInt(Math.trunc(address));
+  // oxlint-disable-next-line no-bitwise -- BigInt two's-complement; no arithmetic spelling of it holds all 64 bits
+  return (truncated & mask).toString(16);
 }
 
 /** Decimal places every percentage is printed at, and the scale that floors it. */

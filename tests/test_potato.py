@@ -1633,7 +1633,17 @@ class TestFormatVa:
         assert _format_va(0) == "0x00000000"
 
     def test_negative_string(self) -> None:
-        assert _format_va("-1") == "0x-0000001"
+        """A negative VA is document data, and it renders as an address.
+
+        `f"{-1:08x}"` is `-0000001`, so the sign landed INSIDE the field and
+        the panel printed `0x-0000001` -- a string that is not a hex address
+        and that resolves to nothing in a debugger. The unsigned reading of the
+        same bits keeps both the value and the column width, and is what every
+        other surface in the package spells it as.
+        """
+        assert _format_va("-1") == "0xffffffff"
+        assert _format_va(-1) == "0xffffffff"
+        assert _format_va(-0x1000_1000) == "0xeffff000"
 
     # ── _format_va fuzz ───────────────────────────────────────────
 

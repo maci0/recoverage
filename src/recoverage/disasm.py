@@ -15,7 +15,7 @@ import logging
 import threading
 from typing import Any
 
-from recoverage.server import _load_dll, binary_stamp
+from recoverage.server import _load_dll, binary_stamp, hex_addr
 
 _log = logging.getLogger("recoverage")
 
@@ -355,7 +355,7 @@ def _disassemble_loaded(
 
     md = get_capstone_md(_target_width_bits(target, target_data))
     asm_lines = [
-        f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}"
+        f"{hex_addr(insn.address)}  {insn.mnemonic:8s} {insn.op_str}"
         for insn in md.disasm(code_bytes, va)
     ]
 

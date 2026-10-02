@@ -62,6 +62,7 @@ from recoverage.server import (
     function_sort_key,
     functions_by_name,
     global_json,
+    hex_addr,
     is_plain_relative,
     load_metadata,
     lookup_function,
@@ -900,14 +901,22 @@ def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any]) -> int | N
 
 
 def _format_va(val: int | str) -> str:
-    """Format a VA value as hex string."""
+    """Format a VA value as hex string.
+
+    ``server.hex_addr`` for every value that IS a number, so a document's
+    negative ``va`` does not render as ``0x-0000001`` here while every other
+    surface spells it as the unsigned bits of the same value. A string that
+    already carries a prefix is passed through: it is a document's own
+    spelling, and second-guessing one the writer chose is not this
+    function's call.
+    """
     if isinstance(val, int):
-        return f"0x{val:08x}"
+        return hex_addr(val)
     s = str(val)
     if s.startswith(("0x", "0X")):
         return s
     try:
-        return f"0x{int(s):08x}"
+        return hex_addr(int(s))
     except ValueError:
         return s
 

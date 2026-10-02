@@ -1167,6 +1167,24 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   containment rule still judges the spelling the request supplied. Pinned at
   `tests/test_api.py` (`test_decomposed_filename_is_found_from_the_composed_spelling`)
   and `tests/test_potato.py` (`test_decomposed_source_name_found_from_the_composed_spelling`).
+- An address a document supplies is not necessarily positive either.
+  `Function.va`, `Global.va` and a section's `va` are ints the reader takes as
+  stored, and a cell's `start` is added to a section's `va` to make one, so a
+  document may carry a negative one and every reader must render it.
+  `f"{v:08x}"` puts the SIGN inside the field, so the panel, the search index,
+  the hex dump and the disassembly each printed `0x-0000001`: a string that is
+  not a hex address, and that resolves to nothing in a debugger. One spelling
+  per language, both in the shared place a sibling module can reach:
+  `server.hex_addr` (Python, `& mask` at the caller's width) and
+  `format.hex` (the SPA, a BigInt two's-complement, because a `Number` is a
+  double and `2 ** 64` is not exactly representable as one). The width is a
+  FLOOR on the digit count, as `padStart` already meant, and only a NEGATIVE
+  is read at it, so a 64-bit image's VA keeps every digit. A new surface that
+  prints an address calls the helper rather than a format spec; a new call
+  site that open-codes one is a drift between two answers, and the guards
+  reading `potato._format_va` and `disasm.py`'s rendered line are how that
+  drift is caught. Pinned at `tests/test_server.py` (`TestHexAddr`,
+  `TestSpaNumericBoundaries`).
 - A filename is also not necessarily valid text. Python reads one with
   `os.fsdecode`, which is `surrogateescape`, so `coverage-ca\xff.toml` (legal on
   ext4, and produced by a checkout, an archive or a Windows tool) reaches Python
