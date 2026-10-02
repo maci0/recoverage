@@ -57,12 +57,16 @@ recoverage/
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── UPGRADING.md        # Before/after for every major that broke a consumer
 │   ├── ideas.md            # Future improvement ideas
+│   ├── RECOVERY.md         # Backup/restore runbook: what state exists, RPO/RTO, the
+│   │                        #   restore drill
+│   ├── mascot.jpg          # The raccoon detective the README shows
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint_html.py, smoke.py, payload_budget.py,
 │                           # _serve_harness.py, oxlint/, ci_clone_rebrew.sh,
+│                           # gen_full_fold.py (writes the SPA FULL_FOLD table),
 │                           # flatten_rikalabs_strict.py, normalize_sdist.py,
 │                           # check_wheel_assets.py, vendor_manifest.py,
-│                           # bundled_js_inventory.py
+│                           # bundled_js_inventory.py, license_inventory.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (WSGI request helpers, session document build)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents, and the shared

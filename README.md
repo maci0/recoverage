@@ -28,7 +28,7 @@ block that covers it.
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
-| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~41 KB today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
+| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~40 KB today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
@@ -834,12 +834,14 @@ recoverage/
 │   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
 │   ├── UPGRADING.md         # Before/after for every major that broke a consumer
 │   ├── ideas.md             # Future improvement ideas
+│   ├── RECOVERY.md          # Backup/restore runbook: RPO/RTO and the restore drill
 │   ├── mascot.jpg           # The raccoon detective the README shows
 │   └── *.png                # Screenshots for the README
 ├── web/                     # Frontend sources built into the assets (Vite + Preact + Tailwind)
 │   ├── app/                 # SPA components, hooks, grid geometry, tokens
 │   ├── index.html           # The `vite dev` shell
 │   ├── tsconfig.json        # Strict tsc settings, including the `@/` alias
+│   ├── build.ts             # The second build: assets/highlight.js, out of the IIFE bundle
 │   └── vite.config.ts       # The build that emits src/recoverage/assets/app.js and style.css
 ├── tools/                    # Lint and CI harness scripts
 │   ├── lint_html.py          # Nu Html Checker over the static and served assets
@@ -858,6 +860,7 @@ recoverage/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents
 │   ├── test_api.py           # API validation & security tests
+│   ├── test_backup.py        # Backup/restore: verification, all-or-nothing, the rollback refusal
 │   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
 │   ├── test_concurrency.py   # Barrier-driven races: single flight, counters, the admission cap
@@ -880,11 +883,13 @@ recoverage/
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
+    ├── py.typed              # PEP 561 marker: the package ships its own annotations
     ├── _paths.py             # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
     ├── documents.py          # Coverage documents read per file; the TOML parse persisted
     │                         #   under $XDG_CACHE_HOME/recoverage/documents/
+    ├── backup.py             # Verified backup/restore of those documents (the only durable state)
     ├── metrics.py            # In-process RED counters, read by /api/health
     ├── devserver.py          # WSGI serving stack: threading server + its IPv6 class, keep-alive
     │                         #   handlers
@@ -899,6 +904,7 @@ recoverage/
     └── assets/                # Built bundle + the static files the server serves
         ├── index.html        # SPA shell (the bundle is inlined into it)
         ├── app.js            # Built dashboard bundle (Preact + Tailwind)
+        ├── highlight.js      # The standalone highlighter, a SECOND build (web/build.ts)
         ├── style.css         # Built Tailwind output
         ├── print.css         # Print stylesheet
         ├── favicon.svg       # Retro "R" logo favicon
