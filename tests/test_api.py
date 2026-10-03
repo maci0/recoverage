@@ -64,6 +64,7 @@ from conftest import (
     HAS_DB,
     decode_body,
     get_first_target,
+    path_the_filesystem_holds,
     require_target,
     wsgi_get,
     wsgi_post,
@@ -2593,7 +2594,10 @@ class TestSseEvents:
         """
         import recoverage.api as api
 
-        raw_name = os.fsencode(tmp_path) + b"/dbs" + bytes([0xFF])
+        held_path = path_the_filesystem_holds(tmp_path, b"dbs\xff")
+        if held_path is None:
+            pytest.skip("filesystem cannot represent an undecodable byte in a name")
+        raw_name = os.fsencode(held_path)
         # Path() over the raw bytes keeps os.mkdir off the ruff hook (PTH102)
         # while still naming the directory by its undecodable byte, which is the
         # point: os.fsdecode turns that byte into the surrogate the frame carries.
@@ -6451,8 +6455,8 @@ class TestIndexWarmup:
         monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
         monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
 
-        if os.getuid() == 0:
-            pytest.skip("root reads a 0o000 file, so the arm under test cannot be driven")
+        if os.name == "nt" or os.getuid() == 0:
+            pytest.skip("this platform cannot make a file unreadable with chmod(0o000)")
 
         try:
             with caplog.at_level(logging.WARNING, logger="recoverage"):

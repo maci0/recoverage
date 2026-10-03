@@ -505,7 +505,7 @@ def match_filesystem_spelling(base: Path, relative: str) -> str:
         chosen = _existing_spelling(current, part)
         spelled.append(chosen)
         current = current / chosen
-    return str(PurePath(*spelled))
+    return relative if tuple(spelled) == parts else str(PurePath(*spelled))
 
 
 def decode_query_value(raw: str) -> str:
@@ -1515,7 +1515,7 @@ def binary_stamp(target: str) -> tuple[int, int, int] | None:
         return None
     try:
         st = path.stat()
-    except OSError:
+    except (OSError, ValueError):
         return None
     return st.st_mtime_ns, st.st_size, st.st_ino
 
@@ -1868,7 +1868,7 @@ def _find_dll_path(target: str) -> Path | None:
         if t_info is None:
             return None
     filename = t_info.get("filename", "") if isinstance(t_info, dict) else ""
-    if not filename:
+    if not filename or "\x00" in filename:
         return None
     root = _project_dir()
     candidate = root / filename
