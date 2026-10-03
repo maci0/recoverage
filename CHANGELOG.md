@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Global detail panels distinguish storage owners, users and declaration sites
+  in the SPA and Potato Mode. Library objects, linker imports, backing views,
+  compiler literals and layout spans retain their provenance; legacy source
+  lists are never assumed to be owners.
+- Missing source paths retain their supplied spelling on Windows; invalid binary
+  paths cannot crash Potato Mode. Browser SBOM dates support the full documented
+  calendar range on Windows. CI probes filesystem capabilities and imports the
+  locale test module through a portable file URL.
+
+
 ## [4.3.0] - 2026-10-02
 
 ### Added

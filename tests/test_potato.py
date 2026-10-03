@@ -37,6 +37,7 @@ import subprocess
 import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from urllib.parse import quote, unquote, urlparse
 
@@ -749,6 +750,65 @@ def test_globals_detail_panel():
     idx, sec = match
     html = render_potato_url(f"/potato?target={target}&section={sec}&idx={idx}")
     assert "Global Variable" in html
+
+
+@pytest.mark.parametrize(
+    ("kind", "owners", "backing", "expected_owner", "expected_type"),
+    [
+        ("object", ("LIBCMT:crt0dat.obj",), "", "LIBCMT:crt0dat.obj", "Global variable"),
+        (
+            "import",
+            ("linker:KERNEL32.dll!Sleep",),
+            "",
+            "linker:KERNEL32.dll!Sleep",
+            "Import pointer",
+        ),
+        ("span", (), "", "Layout span", "Layout span"),
+        ("alias", (), "g_storage", "View of g_storage", "Storage view"),
+    ],
+)
+def test_global_panel_distinguishes_owners_users_and_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    owners: tuple[str, ...],
+    backing: str,
+    expected_owner: str,
+    expected_type: str,
+):
+    import recoverage.potato as potato
+
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "GLOBAL_ROLES",
+        {".data": {"va": 0x2000, "size": 4, "cells": [cell(0, 4, "data", functions=["g_value"])]}},
+        globals_=[{"va": 0x2000, "name": "g_value", "files": ["declarations.h"]}],
+    )
+    # Exercise a newer producer's optional fields while retaining the supported
+    # older coverage reader in the consumer's CI environment.
+    row = SimpleNamespace(
+        va=0x2000,
+        name="g_value",
+        decl="int g_value",
+        files=("declarations.h",),
+        module="GLOBAL_ROLES",
+        size=4,
+        status="UNKNOWN",
+        owners=owners,
+        storage_kind=kind,
+        backing=backing,
+        referenced_in=("consumer.c",),
+        declared_in=("declarations.h",),
+    )
+    monkeypatch.setattr(potato, "lookup_global", lambda *_: row)
+    html = render_potato_url("/potato?target=GLOBAL_ROLES&section=.data&idx=0")
+    assert expected_owner in html
+    assert expected_type in html
+    assert "consumer.c" in html
+    assert "declarations.h" in html
+    assert "storage_kind" not in html
+    assert "Unknown" not in html
 
 
 def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

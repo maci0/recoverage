@@ -4271,7 +4271,7 @@ class TestSpaNumericBoundaries:
         ]
         driver = (
             "import { hex } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map(([a, w]) => hex(a, w))));\n"
@@ -4947,7 +4947,9 @@ class TestSpaTimestampRendering:
             pytest.skip("bun not on PATH")
 
         driver = (
-            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "import { dateTime } from "
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
+            + ";\n"
             "console.log(JSON.stringify([dateTime(process.argv[2]), "
             "dateTime(process.argv[3]), dateTime('not a timestamp')]));\n"
         )
@@ -5045,7 +5047,9 @@ class TestSpaRefusesAWallTimeTheReadersZoneCannotPlace:
         if bun is None:
             pytest.skip("bun not on PATH")
         driver = (
-            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "import { dateTime } from "
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
+            + ";\n"
             "console.log(JSON.stringify(dateTime(process.argv[2])));\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -5203,7 +5207,7 @@ class TestSpaCountsAgreeWithTheReadersLocale:
             pytest.skip("node not on PATH")
         driver = (
             "import { plural, reading } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             "const forms = { zero: 'zero', one: 'one', two: 'two', few: 'few',"
             " many: 'many', other: 'other' };\n"
@@ -5224,6 +5228,7 @@ class TestSpaCountsAgreeWithTheReadersLocale:
                 [node, str(script)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=60,
                 check=False,
             )
@@ -6627,7 +6632,7 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
 
         driver = (
             "import { sameOriginPath } from "
-            + json.dumps(str(self._module_path()))
+            + json.dumps((self._module_path()).resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map(([v, f]) => sameOriginPath(v, f))));\n"
@@ -6717,10 +6722,10 @@ class TestSpaDocumentPathsArePercentEncoded:
 
         driver = (
             "import { sourceFileUrl } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             "import { originalDllPath } from "
-            + json.dumps(str(WEB_APP / "hooks" / "useOriginalBinary.ts"))
+            + json.dumps((WEB_APP / "hooks" / "useOriginalBinary.ts").resolve().as_uri())
             + ";\n"
             "const payload = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             "const BASE = 'http://dashboard.invalid/';\n"
@@ -6985,7 +6990,7 @@ class TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8:
 
         driver = (
             "import { encodeUrlValue } from "
-            + json.dumps(str(self._module_path()))
+            + json.dumps((self._module_path()).resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map((v) => encodeUrlValue(v))));\n"

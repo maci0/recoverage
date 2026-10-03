@@ -64,6 +64,7 @@ from conftest import (
     HAS_DB,
     decode_body,
     get_first_target,
+    path_the_filesystem_holds,
     require_target,
     wsgi_get,
     wsgi_post,
@@ -2154,7 +2155,21 @@ _FUNCTION_DETAIL_KEYS = frozenset(
 #: the batch and detail responses carry so a client can tell a data symbol from
 #: a function without a second request.
 _GLOBAL_DETAIL_KEYS = frozenset(
-    {"va", "name", "decl", "files", "module", "size", "isGlobal", "status"}
+    {
+        "va",
+        "name",
+        "decl",
+        "files",
+        "module",
+        "size",
+        "isGlobal",
+        "status",
+        "owners",
+        "referenced_in",
+        "declared_in",
+        "storage_kind",
+        "backing",
+    }
 )
 
 
@@ -2197,6 +2212,8 @@ class TestDetailProjectionIsTheWholeColumn:
         data = json.loads(decode_body(body, headers))
         assert set(data) == _GLOBAL_DETAIL_KEYS
         assert data["isGlobal"] == 1
+        assert data["owners"] == [], "legacy declaration files are not owners"
+        assert data["declared_in"] == data["files"]
         assert "last_verify" not in data, "a global has no verify row to attach"
 
     def test_the_batch_and_the_detail_route_agree_on_the_function_shape(self) -> None:
@@ -2577,7 +2594,10 @@ class TestSseEvents:
         """
         import recoverage.api as api
 
-        raw_name = os.fsencode(tmp_path) + b"/dbs" + bytes([0xFF])
+        held_path = path_the_filesystem_holds(tmp_path, b"dbs\xff")
+        if held_path is None:
+            pytest.skip("filesystem cannot represent an undecodable byte in a name")
+        raw_name = os.fsencode(held_path)
         # Path() over the raw bytes keeps os.mkdir off the ruff hook (PTH102)
         # while still naming the directory by its undecodable byte, which is the
         # point: os.fsdecode turns that byte into the surrogate the frame carries.
@@ -6435,8 +6455,8 @@ class TestIndexWarmup:
         monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
         monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
 
-        if os.getuid() == 0:
-            pytest.skip("root reads a 0o000 file, so the arm under test cannot be driven")
+        if os.name == "nt" or os.getuid() == 0:
+            pytest.skip("this platform cannot make a file unreadable with chmod(0o000)")
 
         try:
             with caplog.at_level(logging.WARNING, logger="recoverage"):

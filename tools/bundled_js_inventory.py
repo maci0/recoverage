@@ -297,9 +297,9 @@ def created() -> str:
     # document the tool had just called reproducible.  `isoformat` pads every
     # field; the `+00:00` it writes is the same offset in the other spelling,
     # which is the one trailing `Z` means and the only change made here.
-    return (
-        datetime.datetime.fromtimestamp(stamp, tz=datetime.UTC).isoformat().replace("+00:00", "Z")
-    )
+    # Windows' CRT timestamp conversion rejects otherwise valid calendar dates.
+    moment = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(seconds=stamp)
+    return moment.isoformat().replace("+00:00", "Z")
 
 
 def _version() -> str:
