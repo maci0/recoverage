@@ -176,6 +176,34 @@ function FunctionMeta({
     ) : null;
 
   if (fn.isGlobal === true) {
+    let storageLabel = "Global variable";
+    switch (fn.storage_kind) {
+      case "import": {
+        storageLabel = "Import pointer";
+        break;
+      }
+      case "span": {
+        storageLabel = "Layout span";
+        break;
+      }
+      case "literal": {
+        storageLabel = "Compiler literal";
+        break;
+      }
+      case "alias": {
+        storageLabel = "Storage view";
+        break;
+      }
+      default: {
+        break;
+      }
+    }
+    let ownerLabel = "Unknown";
+    if (fn.storage_kind === "span") {
+      ownerLabel = "Layout span";
+    } else if (fn.backing) {
+      ownerLabel = `View of ${fn.backing}`;
+    }
     return (
       <dl className={META_GRID}>
         <MetaItem label="VA">
@@ -191,8 +219,14 @@ function FunctionMeta({
             {hex(toVa(fn.va), 8)}
           </a>
         </MetaItem>
-        <MetaItem label="Type">Global variable</MetaItem>
-        {sourceItem}
+        <MetaItem label="Type">
+          {storageLabel}
+        </MetaItem>
+        <MetaItem label="Owner">{fn.owners?.join(", ") || ownerLabel}</MetaItem>
+        <MetaItem label="Users">{fn.referenced_in?.join(", ") || "—"}</MetaItem>
+        <MetaItem label="Declarations">
+          {fn.declared_in?.join(", ") || fn.files?.join(", ") || "—"}
+        </MetaItem>
       </dl>
     );
   }

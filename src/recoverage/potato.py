@@ -3686,6 +3686,34 @@ def _render_panel(
             # the same address reads as a decimal in the global panel and as
             # hex everywhere else on the page (the function list, the search
             # box, the functions detail table).
-            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields={"va"})
+            storage_kind = gl_data["storage_kind"]
+            gl_data["type"] = {
+                "import": "Import pointer",
+                "span": "Layout span",
+                "literal": "Compiler literal",
+                "alias": "Storage view",
+            }.get(storage_kind, "Global variable")
+            owner_label = "Unknown"
+            if storage_kind == "span":
+                owner_label = "Layout span"
+            elif gl_data["backing"]:
+                owner_label = f"View of {gl_data['backing']}"
+            gl_data["owner"] = ", ".join(getattr(found_gl, "owners", ())) or owner_label
+            gl_data["users"] = ", ".join(getattr(found_gl, "referenced_in", ())) or "—"
+            gl_data["declarations"] = (
+                ", ".join(getattr(found_gl, "declared_in", found_gl.files)) or "—"
+            )
+            ctx["gl_detail_rows"] = _detail_rows(
+                gl_data,
+                skip_fields={
+                    "files",
+                    "owners",
+                    "referenced_in",
+                    "declared_in",
+                    "storage_kind",
+                    "isGlobal",
+                },
+                hex_fields={"va"},
+            )
 
     return cast(str, _PANEL_TPL.render(**ctx))

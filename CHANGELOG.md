@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Global detail panels distinguish storage owners, users and declaration sites
+  in the SPA and Potato Mode. Library objects, linker imports, backing views,
+  compiler literals and layout spans retain their provenance; legacy source
+  lists are never assumed to be owners.
+
+
 ## [4.3.0] - 2026-10-02
 
 ### Added

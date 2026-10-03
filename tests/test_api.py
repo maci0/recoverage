@@ -2154,7 +2154,21 @@ _FUNCTION_DETAIL_KEYS = frozenset(
 #: the batch and detail responses carry so a client can tell a data symbol from
 #: a function without a second request.
 _GLOBAL_DETAIL_KEYS = frozenset(
-    {"va", "name", "decl", "files", "module", "size", "isGlobal", "status"}
+    {
+        "va",
+        "name",
+        "decl",
+        "files",
+        "module",
+        "size",
+        "isGlobal",
+        "status",
+        "owners",
+        "referenced_in",
+        "declared_in",
+        "storage_kind",
+        "backing",
+    }
 )
 
 
@@ -2197,6 +2211,8 @@ class TestDetailProjectionIsTheWholeColumn:
         data = json.loads(decode_body(body, headers))
         assert set(data) == _GLOBAL_DETAIL_KEYS
         assert data["isGlobal"] == 1
+        assert data["owners"] == [], "legacy declaration files are not owners"
+        assert data["declared_in"] == data["files"]
         assert "last_verify" not in data, "a global has no verify row to attach"
 
     def test_the_batch_and_the_detail_route_agree_on_the_function_shape(self) -> None:

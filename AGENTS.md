@@ -622,6 +622,11 @@ simpler and strictly wider.
      target that silently reads as having no sections
      (`tests/test_server.py`, `TestUnreadableDocumentIsNotAnEmptyTarget`).
 2. `recoverage` → serves the coverage as a web dashboard
+   - Globals expose `owners`, `referenced_in`, `declared_in`, `storage_kind` and
+     `backing` from Rebrew's shared inventory. Owner may be a source file,
+     `library:object`, or linker import; backing views inherit storage ownership.
+     Layout spans have no standalone owner. Legacy `files` is declaration
+     provenance and must never be presented as owners. Missing roles stay unknown.
    - Cell detail panel shows parent function as a clickable navigation link
 
 ## Dependencies
