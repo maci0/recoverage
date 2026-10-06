@@ -647,6 +647,13 @@ export function App() {
     })} for "${query}"${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
   }, [active?.name, matchedNames, query, resultsOpen, sectionMatches]);
 
+  /** The match count the field shows at its end, or null with no term typed or
+   * before the index has arrived (the status line says it is loading). */
+  const matchCount =
+    query === "" || matchedNames === null
+      ? null
+      : `${count(matchedNames.size)} ${plural(matchedNames.size, { one: "match", other: "matches" })}`;
+
   /** The section an address falls in, for a search result's own row. Every
    * section is a candidate, so this reads the same ranges `jumpToAddress`
    * does; an address no section claims is listed without one rather than
@@ -989,7 +996,10 @@ export function App() {
                 <input
                   id="search-input"
                   type="search"
-                  className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover"
+                  className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover data-filled:pe-32"
+                  // With a term typed, `data-filled` widens the end padding so
+                  // the text stays clear of the count and Clear drawn there.
+                  data-filled={query === "" ? undefined : ""}
                   placeholder="Function name or address"
                   value={query}
                   // The editable-combobox pattern (ARIA 1.2): the field owns the
@@ -1040,35 +1050,50 @@ export function App() {
                   }}
                   onKeyDown={onSearchKeyDown}
                 />
+                {/* The count and Clear sit inside the field, so typing costs
+                    the topbar no row: beside it, Clear wrapped onto a line of
+                    its own at the field's full width. The count is hidden from
+                    assistive technology; the live region above says it, with
+                    the guidance this abbreviates. */}
+                {matchCount === null ? null : (
+                  <span
+                    className="pointer-events-none absolute inset-y-0 end-9 flex items-center font-mono text-micro tabular-nums text-text-muted"
+                    aria-hidden="true"
+                  >
+                    {matchCount}
+                  </span>
+                )}
+                {query !== "" && (
+                  <Button
+                    className="absolute inset-y-0 end-0"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Clear search"
+                    title="Clear search"
+                    onClick={() => {
+                      setQuery("");
+                      setResultsOpen(false);
+                      setActiveResult(null);
+                    }}
+                  >
+                    <Icon name="x" />
+                  </Button>
+                )}
               </div>
-              {query !== "" && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Clear search"
-                  title="Clear search"
-                  onClick={() => {
-                    setQuery("");
-                    setResultsOpen(false);
-                    setActiveResult(null);
-                  }}
-                >
-                  <Icon name="x" />
-                </Button>
-              )}
             </div>
             {/* The live region stays in the tree while the query is empty: a
                 status element inserted together with its text is announced by
-                some screen readers and dropped by others (WCAG 4.1.3). */}
-            <div
-              className={searchStatus === null ? "sr-only" : "text-micro text-text-muted"}
-              role="status"
-              aria-live="polite"
-            >
+                some screen readers and dropped by others (WCAG 4.1.3). It is
+                read, not seen: a visible line here grew the sticky topbar on
+                the first keystroke and pushed the map down. Sighted readers
+                get the same sentence at the head of the match list, and the
+                count inside the field while the list is closed. */}
+            <div className="sr-only" role="status" aria-live="polite">
               {searchStatus}
             </div>
-            {resultsOpen && (
+            {resultsOpen && searchStatus !== null && (
               <SearchResults
+                status={searchStatus}
                 results={searchResults}
                 total={matchedNames?.size ?? 0}
                 section={active?.name ?? null}

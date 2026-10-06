@@ -277,6 +277,48 @@ def test_a_selected_block_can_be_closed(page: Any):
     expect(page.locator("#panel")).to_contain_text("Select a block on the map", timeout=15000)
 
 
+def test_a_block_panel_states_its_length_in_bytes(page: Any):
+    """The block panel's Size is the block's byte length, `end - start`.
+
+    It printed `span`, the cell's width in lattice units, so a 16-byte block
+    read "1 bytes" beside a range and a byte dump that both said 16. The
+    sample's fourth `.text` block is 16 bytes of padding with no function.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    page.locator(".grid[role=application]").focus()
+    for _ in range(3):
+        page.keyboard.press("ArrowRight")
+    page.keyboard.press("Enter")
+    panel = page.locator("#panel")
+    expect(panel).to_contain_text("Block 3", timeout=15000)
+    expect(panel).to_contain_text("16 bytes")
+    expect(panel).not_to_contain_text("1 bytes")
+
+
+def test_typing_a_search_does_not_move_the_page(page: Any):
+    """The search status is not a row of the topbar.
+
+    It sat under the field and grew the sticky topbar by a wrapped line on
+    the first keystroke, pushing the map down under the reader. The topbar
+    keeps its height while a term is typed and the matches are listed.
+    """
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    header = page.locator("header")
+    before = header.bounding_box()
+    assert before is not None
+    page.fill("#search-input", "_func")
+    expect(page.locator(".search-results")).to_be_visible(timeout=15000)
+    expect(page.locator(".search-results")).to_contain_text("matches")
+    after = header.bounding_box()
+    assert after is not None
+    assert after["height"] == before["height"], (
+        f"the topbar grew from {before['height']}px to {after['height']}px on a keystroke"
+    )
+
+
 def test_code_modal_names_one_scroll_region(page: Any):
     """The modal's body is the pane's scroll container, so it carries the
     focusable region and its name. The <pre> inside used to declare a second

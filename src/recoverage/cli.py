@@ -1336,7 +1336,7 @@ def _echo_banner(
     typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
     if cors:
         typer.echo("  CORS: enabled")
-    typer.echo("  Regen: POST /api/regen or click Reload in UI")
+    typer.echo("  Regen: POST /api/regen or click Regenerate in the dashboard")
     typer.echo("  Stop: Ctrl+C, or SIGTERM (systemctl stop, docker stop)")
 
 

@@ -14,6 +14,9 @@ export type SearchResult = {
 };
 
 export type SearchResultsProps = {
+  /** The search status sentence (count and guidance), shown as the list's
+   * head. The shell's live region announces it, so the head is not re-read. */
+  status: string;
   results: ReadonlyArray<SearchResult>;
   /** How many matched in all, so a capped list can say what it left out. */
   total: number;
@@ -34,13 +37,14 @@ export type SearchResultsProps = {
 
 /** The matches a live search found, as a list the reader can pick from.
  *
- * The status line beside the search box counts the matches and Enter jumps to
+ * The status line at the head of this list counts the matches and Enter jumps to
  * the first one, which left a target-wide term ("Init") matching 400 names with
  * no way to reach any but the first: the reader had to narrow the term until
  * one match survived, guessing a spelling. The list is that answer, ordered by
  * address so it reads in the same order the map does, and capped by
  * `SEARCH_RESULT_LIMIT` in the shell. */
 export function SearchResults({
+  status,
   results,
   total,
   section,
@@ -49,15 +53,17 @@ export function SearchResults({
   optionId,
   onPick,
 }: SearchResultsProps): ComponentChildren {
-  if (results.length === 0) {
-    return null;
-  }
   const hidden = total - results.length;
   return (
     // Positioned under the box rather than in the topbar's flow: the topbar is
     // sticky and measured into `--topbar-h`, so a list that grew it would move
-    // the map the reader is looking at every keystroke.
-    <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-card bg-surface shadow-lift">
+    // the map the reader is looking at every keystroke. Wider than the field
+    // from `lg`, where the field is 20rem: a decompiled name and its symbol
+    // were both truncated to a few letters at that width.
+    <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-card bg-surface shadow-lift lg:w-form">
+      <p className="m-0 border-0 border-b border-border px-3 py-2 text-micro text-text-muted" aria-hidden="true">
+        {status}
+      </p>
       {/* A listbox, not an ordered list of buttons: the search box is the
           combobox that owns it, the arrow keys move the option through
           `aria-activedescendant` rather than through focus, and a list of
@@ -65,61 +71,68 @@ export function SearchResults({
           no relationship to (WCAG 4.1.2, 2.1.1). The rows are `<div>`s
           because an option is not a control and must not be in the tab order:
           a second set of tab stops behind the field the reader is typing in is
-          the pattern ARIA 1.2 exists to avoid. */}
-      <div
-        className="max-h-72 overflow-y-auto p-1"
-        id={listId}
-        role="listbox"
-        aria-label="Search matches"
-      >
-        {results.map((result, index) => (
-          <div
-            key={`${result.name}-${result.va}`}
-            id={optionId(index)}
-            role="option"
-            aria-selected={index === activeIndex}
-            className={cn(
-              // The active row wears the FIELD's focus ring, not a fill. The
-              // option is never focused, so the ring the reader can see on the
-              // field is the one that says where the arrows are, and the fills
-              // a selection could use (`surface-2` on `surface` is 1.05:1)
-              // told a low-vision reader nothing (WCAG 1.4.11). The 3px inset
-              // keeps it inside the list's own padding, so no row shifts when
-              // the arrow moves.
-              "search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip px-2 py-1.5 text-start font-mono text-micro text-text",
-              index === activeIndex && "is-active",
-            )}
-            data-active={index === activeIndex ? "" : undefined}
-            onClick={() => onPick(result)}
-          >
-            <span className="min-w-0 grow truncate" dir="auto">
-              {isolate(result.name)}
-            </span>
-            {result.symbol === null || result.symbol === result.name ? null : (
-              <span className="min-w-0 shrink truncate text-text-muted" dir="auto">
-                {result.symbol}
+          the pattern ARIA 1.2 exists to avoid. With no match there is no
+          listbox, only the head saying so. */}
+      {results.length === 0 ? null : (
+        <div
+          className="max-h-72 overflow-y-auto p-1"
+          id={listId}
+          role="listbox"
+          aria-label="Search matches"
+        >
+          {results.map((result, index) => (
+            <div
+              key={`${result.name}-${result.va}`}
+              id={optionId(index)}
+              role="option"
+              aria-selected={index === activeIndex}
+              className={cn(
+                // The active row wears the FIELD's focus ring, not a fill. The
+                // option is never focused, so the ring the reader can see on the
+                // field is the one that says where the arrows are, and the fills
+                // a selection could use (`surface-2` on `surface` is 1.05:1)
+                // told a low-vision reader nothing (WCAG 1.4.11). The 3px inset
+                // keeps it inside the list's own padding, so no row shifts when
+                // the arrow moves.
+                "search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip px-2 py-1.5 text-start font-mono text-micro text-text",
+                index === activeIndex && "is-active",
+              )}
+              data-active={index === activeIndex ? "" : undefined}
+              onClick={() => onPick(result)}
+            >
+              <span className="min-w-0 grow truncate" dir="auto">
+                {isolate(result.name)}
               </span>
-            )}
-            <span className="shrink-0 text-text-muted">{hex(result.va, 8)}</span>
-            {/* Which section each hit is in, on every row that has one. A
-                target-wide term matches `.rdata` and `.text` alike, and the
-                rows that were not in the section on screen carried nothing at
-                all, so two rows in different sections read identically and the
-                pick silently switched tabs. The current section is marked in
-                the accent and says "in", so a row that needs a tab switch is
-                the one that looks like it. */}
-            {result.section === null ? null : (
-              <span
-                className={
-                  result.section === section ? "shrink-0 text-st-exact" : "shrink-0 text-text-faint"
-                }
-              >
-                {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
+              {/* Below `sm` the symbol column truncated the name to a few
+                  letters, and the symbol is usually the name with a linker
+                  decoration, so a phone row keeps the name; the panel shows
+                  the symbol once the row is picked. */}
+              {result.symbol === null || result.symbol === result.name ? null : (
+                <span className="min-w-0 shrink truncate text-text-muted max-sm:hidden" dir="auto">
+                  {result.symbol}
+                </span>
+              )}
+              <span className="shrink-0 text-text-muted">{hex(result.va, 8)}</span>
+              {/* Which section each hit is in, on every row that has one. A
+                  target-wide term matches `.rdata` and `.text` alike, and the
+                  rows that were not in the section on screen carried nothing at
+                  all, so two rows in different sections read identically and the
+                  pick silently switched tabs. The current section is marked in
+                  the accent and says "in", so a row that needs a tab switch is
+                  the one that looks like it. */}
+              {result.section === null ? null : (
+                <span
+                  className={
+                    result.section === section ? "shrink-0 text-st-exact" : "shrink-0 text-text-faint"
+                  }
+                >
+                  {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {hidden > 0 ? (
         <p className="m-0 border-0 border-t border-border px-3 py-2 text-micro text-text-muted">
           {count(hidden)} more {plural(hidden, { one: "match", other: "matches" })} not shown. Narrow

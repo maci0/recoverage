@@ -26,11 +26,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Repeat requests for one function or global detail are served from a bounded
   per-snapshot memo, and the server's caches keep recently read entries
   instead of evicting them in insertion order.
+- Typing a search no longer grows the topbar and pushes the map down. The match
+  count sits at the end of the field beside Clear, and the guidance line heads
+  the match list, which also opens to say when nothing matched. The list is
+  wider from `lg`, so names and symbols are no longer cut to a few letters,
+  and phones list the name without the repeated symbol.
 - Typing in the search box no longer re-folds every cell name, re-highlights
   the open code panes, or resolves a section for every hit beyond the rows the
   list shows; the map reads one precomputed byte per cell for dimming.
 
 ### Fixed
+- The dashboard's block panel gives a block's size in bytes (`end - start`).
+  It printed the cell's width in map units, so a 16-byte block read
+  "1 bytes". Sizes also take the singular for one byte.
+- The caption under a map dimmed by a status filter counts the undocumented
+  blocks the filter never dims apart from the ones that match. A filter that
+  matched nothing in the section read "Showing 268 of 821 blocks" beside a
+  pill counting 0; it now says no block matches.
 - Browser panel-close verification focuses the coverage map by its role,
   avoiding an ambiguous match with the details metadata grid.
 - Global detail panels distinguish storage owners, users and declaration sites

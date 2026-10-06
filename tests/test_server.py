@@ -1507,14 +1507,63 @@ class TestSpaDimmedMapSaysSo:
         map_source = _web("components/CoverageMap.tsx")
         assert "const summary = useMemo(" in map_source
         assert (
-            "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source
+            "dimSummary(visible.lit, visible.total, visible.ground, filters, matchedFns !== null)"
+            in map_source
         ), "the caption is not the survivor count it claims to be"
         assert "const visible = useMemo(" in map_source
         # It counts the SAME column the paint reads. `isDimmed` runs once per
         # cell when the filter or the search changes; the paint reads the byte.
         assert "isDimmed(pack.states[i] ?? 0" in map_source
         assert "dimmed[index] === 1" in map_source
-        assert "for (const byte of dimmed)" in map_source
+        assert "for (const [index, byte] of dimmed.entries())" in map_source
+
+    def test_the_caption_separates_the_undocumented_ground(self, tmp_path: Path) -> None:
+        """A status filter never dims the undocumented ground, so those blocks
+        are lit without matching it. Counting them as shown matches put
+        "Showing 268 of 821 blocks" under a filter whose pill said 0. The
+        caption says how many lit blocks are ground, and says outright when
+        nothing matched. A search dims the ground like any other block, so its
+        caption is unchanged. Skipped without bun."""
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        cases = [
+            # lit, total, groundLit, filters, searching
+            (268, 821, 268, ["stub"], False),
+            (309, 821, 268, ["exact"], False),
+            (41, 821, 0, ["exact"], True),
+            (0, 821, 0, ["stub"], False),
+            (821, 821, 268, ["stub"], False),
+        ]
+        driver = (
+            "import { dimSummary } from "
+            + json.dumps((WEB_APP / "states.ts").resolve().as_uri())
+            + ";\n"
+            + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+            + "console.log(JSON.stringify(cases.map(([l, t, g, f, s]) =>"
+            + " dimSummary(l, t, g, new Set(f), s))));\n"
+        )
+        script = tmp_path / "dim.ts"
+        script.write_text(driver, encoding="utf-8")
+        payload = tmp_path / "cases.json"
+        payload.write_text(json.dumps(cases), encoding="utf-8")
+        proc = subprocess.run(
+            [bun, "run", str(script), str(payload)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert proc.returncode == 0, f"dimSummary harness failed to run: {proc.stderr}"
+        nothing, some, searched, none_lit, full = json.loads(proc.stdout)
+        assert nothing.startswith("No block here matches the status filter."), nothing
+        assert "268 lit blocks are undocumented" in nothing
+        assert "Showing" not in nothing, "a lit ground was reported as shown matches"
+        assert some.startswith("Showing 309 of 821 blocks, dimmed by the status filter.")
+        assert "268 of them are undocumented" in some
+        assert searched == "Showing 41 of 821 blocks, dimmed by the status filter and the search."
+        assert "Every block here is dimmed" in none_lit
+        assert full is None
 
     def test_the_caption_is_hidden_when_nothing_is_dimmed(self) -> None:
         """The ordinary read of a full map is unchanged: the caption is a

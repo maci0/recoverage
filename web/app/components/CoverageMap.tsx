@@ -212,20 +212,24 @@ export function CoverageMap({
     return column;
   }, [filters, isMatched, pack]);
 
+  // `ground` counts the lit blocks that are undocumented, so the caption can
+  // say which of them a status filter left lit without matching it.
   const visible = useMemo(() => {
     let lit = 0;
-    for (const byte of dimmed) {
+    let ground = 0;
+    for (const [index, byte] of dimmed.entries()) {
       if (byte === 0) {
         lit += 1;
+        ground += pack.ground[index] ?? 0;
       }
     }
-    return { lit, total: dimmed.length };
-  }, [dimmed]);
+    return { lit, ground, total: dimmed.length };
+  }, [dimmed, pack]);
 
   // The caption under the lattice, or null when nothing is dimming it. Derived
   // from the same count, so the sentence and the paint are one thing.
   const summary = useMemo(
-    () => dimSummary(visible.lit, visible.total, filters, matchedFns !== null),
+    () => dimSummary(visible.lit, visible.total, visible.ground, filters, matchedFns !== null),
     [filters, matchedFns, visible],
   );
   const describe = useCallback(

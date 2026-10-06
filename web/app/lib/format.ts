@@ -154,6 +154,11 @@ export function plural(
   return forms[category] ?? forms.other ?? "";
 }
 
+/** A byte length with its noun: "1 byte", "48 bytes". */
+export function byteCount(amount: number): string {
+  return `${count(amount)} ${plural(amount, { one: "byte", other: "bytes" })}`;
+}
+
 /** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. The `u` flag
  * is the Unicode-aware parser; `\d` stays ASCII digits under it, so a
  * non-ASCII digit spelling still fails the test and the stamp falls back to
