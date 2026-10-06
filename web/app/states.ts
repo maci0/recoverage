@@ -191,10 +191,16 @@ function dimCauseKey(filtering: boolean, searching: boolean): keyof typeof DIM_C
  * It names the rule and not its value: the search box above the map carries the
  * term and the pills carry the states, so repeating either here is one more
  * line that can fall out of step with the control it mirrors. The counts go
- * through `count` and `plural` like every other number on the page. */
+ * through `count` and `plural` like every other number on the page.
+ *
+ * `groundLit` is how many of the `lit` blocks are undocumented ground, which a
+ * status filter never dims (`survivesFilter`). Under a filter alone those
+ * blocks are lit without matching it, so a section holding none of the chosen
+ * states read "Showing 268 of 821 blocks" beside a pill that counted 0. */
 export function dimSummary(
   lit: number,
   total: number,
+  groundLit: number,
   filters: ReadonlySet<string>,
   searching: boolean,
 ): string | null {
@@ -204,10 +210,21 @@ export function dimSummary(
   const cause = DIM_CAUSE[dimCauseKey(filters.size > 0, searching)];
   const blocks = plural(total, { one: "block", other: "blocks" });
   const shown = `Showing ${count(lit)} of ${count(total)} ${blocks}, dimmed by ${cause[0]}.`;
-  if (lit > 0) {
+  if (lit === 0) {
+    return `${shown} Every block here is dimmed; ${cause[1]} to see them again.`;
+  }
+  const exempt = filters.size > 0 && !searching ? groundLit : 0;
+  if (exempt === 0) {
     return shown;
   }
-  return `${shown} Every block here is dimmed; ${cause[1]} to see them again.`;
+  const verb = plural(exempt, { one: "is", other: "are" });
+  if (exempt === lit) {
+    return `No block here matches the status filter. The ${count(exempt)} lit ${plural(exempt, {
+      one: "block",
+      other: "blocks",
+    })} ${verb} undocumented, which a status filter never dims; ${cause[1]} to see the rest.`;
+  }
+  return `${shown} ${count(exempt)} of them ${verb} undocumented, which a status filter never dims.`;
 }
 /** The state filters the stats strip offers, in palette order. A state the grid
  * can paint but no control can isolate is unreachable, so this list covers

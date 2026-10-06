@@ -34,6 +34,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The dashboard's block panel gives a block's size in bytes (`end - start`).
   It printed the cell's width in map units, so a 16-byte block read
   "1 bytes". Sizes also take the singular for one byte.
+- The caption under a map dimmed by a status filter counts the undocumented
+  blocks the filter never dims apart from the ones that match. A filter that
+  matched nothing in the section read "Showing 268 of 821 blocks" beside a
+  pill counting 0; it now says no block matches.
 - Browser panel-close verification focuses the coverage map by its role,
   avoiding an ambiguous match with the details metadata grid.
 - Global detail panels distinguish storage owners, users and declaration sites
