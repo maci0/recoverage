@@ -39,13 +39,16 @@ from recoverage.server import (
     _bucket_row,
     _cell_json,
     _compressed,
+    _contained_source_path,
     _etag_or_304,
     _evict_oldest,
     _format_hex_dump,
     _load_dll,
     _log_safe,
     _newest_mtime_ns,
+    _row_note_blocker,
     _snapshot_db_mtime,
+    _touch,
     app,
     binary_stamp,
     coverage_for,
@@ -64,11 +67,9 @@ from recoverage.server import (
     functions_by_name,
     global_json,
     hex_addr,
-    is_plain_relative,
     load_metadata,
     lookup_function,
     lookup_global,
-    match_filesystem_spelling,
     mtime_ns_to_utc,
     parse_ascii_int,
     pct_1dp,
@@ -832,9 +833,15 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
     return dll_data[file_offset:end]
 
 
-def _extract_annotations(code: str) -> list[tuple[str, str]]:
-    """Extract annotation comments (NOTE, BLOCKER, SOURCE) from C source."""
+def _extract_annotations(code: str, *, note: str = "", blocker: str = "") -> list[tuple[str, str]]:
+    """Extract NOTE, BLOCKER, and SOURCE comments from C source.
+
+    A note or blocker the file does not carry is filled from *note* and
+    *blocker*, which the caller read off the ``MODULE.0xVA`` row. A comment
+    already in the file wins. ``// SOURCE:`` stays a file comment.
+    """
     annotations: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for raw_line in code.splitlines():
         line = raw_line.strip()
         for tag in ("NOTE", "BLOCKER", "SOURCE"):
@@ -842,6 +849,11 @@ def _extract_annotations(code: str) -> list[tuple[str, str]]:
             if line.startswith(prefix):
                 text = line[len(prefix) :].strip()
                 annotations.append((tag, text))
+                seen.add(tag)
+    if note and "NOTE" not in seen:
+        annotations.append(("NOTE", note))
+    if blocker and "BLOCKER" not in seen:
+        annotations.append(("BLOCKER", blocker))
     return annotations
 
 
@@ -1323,7 +1335,7 @@ def _db_unavailable_page() -> HTTPResponse:
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>recoverage · database unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
             "<body><main><h1>Database unavailable</h1>"
-            "<p>Run 'rebrew build-db' to create or rebuild it, then "
+            "<p>Run 'rebrew coverage build' to create or rebuild it, then "
             '<a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</p></main></body></html>'
         ),
@@ -1454,7 +1466,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     # ONE frozen snapshot for the whole render.  A Potato page reads metadata,
     # sections, cells, functions, globals and (for the detail panels)
     # verify_results, and takes long enough doing it — the grid is the most
-    # expensive render in the package — that a `rebrew build-db` committing
+    # expensive render in the package — that a `rebrew coverage build` committing
     # midway is a real window.  The snapshot's immutability is the pin the read
     # transaction used to provide: the page cannot pair one build's section rows
     # with the next build's cells.
@@ -1599,6 +1611,8 @@ def _load_section_data(
     if key is not None:
         with _SECTION_DATA_CACHE_LOCK:
             cached = _SECTION_DATA_CACHE.get(key)
+            if cached is not None:
+                _touch(_SECTION_DATA_CACHE, key)
         if cached is not None:
             return cached
 
@@ -1766,6 +1780,8 @@ def _load_grid_cells(
     if key is not None:
         with _GRID_CACHE_LOCK:
             cached = _GRID_CACHE.get(key)
+            if cached is not None:
+                _touch(_GRID_CACHE, key)
         if cached is not None:
             return cached[0], cached[1], cached[2]
 
@@ -1807,6 +1823,8 @@ def _parent_index(key: _GridKey | None, cells: list[dict[str, Any]]) -> dict[str
     if key is not None:
         with _PARENT_INDEX_LOCK:
             cached = _PARENT_INDEX.get(key)
+            if cached is not None:
+                _touch(_PARENT_INDEX, key)
         if cached is not None:
             return cached
     index: dict[str, int] = {}
@@ -1848,6 +1866,8 @@ def _section_stats_cached(
     if key is not None:
         with _POTATO_STATS_CACHE_LOCK:
             cached = _POTATO_STATS_CACHE.get(key)
+            if cached is not None:
+                _touch(_POTATO_STATS_CACHE, key)
         if cached is not None:
             return cached
     stats = _compute_section_stats(coverage, sections, data)
@@ -3331,85 +3351,17 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
     """Read the function's C source, or None when unresolvable.
 
-    Two containment checks, because the source root and the file name are
-    separate inputs and either one can leave the tree.  Anchored at the
-    PROJECT dir (cwd) — an older __file__-relative anchor resolved inside the
-    recoverage package and silently failed every C-source load.
-
-    The first is the SOURCE ROOT.  ``sourceRoot`` is document data, and its
-    fallback is built from ``target``, which is the request's ``?target=``
-    verbatim: ``?target=../../../..`` made the root resolve outside the
-    project, and the per-file check below then held that moved root as its
-    own baseline, so it passed.  The panel read a file outside the tree.
-    ``sourceRoot`` is project-relative wherever it comes from — rebrew writes
-    ``/<path relative to the project root>`` — so a root that resolves
-    outside the project names a tree this server does not serve (``/src`` is
-    rooted here too) and the pane is empty for it either way.
-
-    The second is the FILE NAME, the check that was already here: anchored
-    paths and ``..`` are rejected before the resolve, and the resolved path
-    must sit under the root.
+    Containment lives in :func:`recoverage.server._contained_source_path`:
+    the source root and the file name are separate inputs, and either one
+    can leave the tree. Anchored at the project directory (cwd).
     """
-    project_root = Path.cwd().resolve()
-    files = fn_data.get("files", [])
-    if not files:
-        return None
     # A non-object paths value (valid JSON of another type in a foreign DB)
-    # would crash .get() below with AttributeError — which escapes
-    # handle_potato's except tuple as a raw 500.  Same guard as the summary
+    # would crash .get() below with AttributeError, which escapes
+    # handle_potato's except tuple as a raw 500. Same guard as the summary
     # reads in _compute_section_stats/_build_progress.
-    paths = data.get("paths")
-    # The target id verbatim, matching rebrew's `src/<target>` and the SPA's
-    # fallback: a lowercased spelling only resolves on a case-insensitive
-    # filesystem, so it read the real tree on macOS and Windows and missed it
-    # on Linux.
-    default_source_root = f"/src/{target}"
-    source_root = (
-        paths.get("sourceRoot", default_source_root)
-        if isinstance(paths, dict)
-        else default_source_root
-    )
-    # source_root is the containment base, so it gets the same plain-relative
-    # rule as the file name: stripping only a leading "/" left a Windows-shaped
-    # value ("C:/...", "\...", "C:src") intact on the Windows build, where the
-    # join then REPLACES the base and every is_relative_to below passes
-    # trivially — a document built anywhere but Windows would have had to carry
-    # a POSIX path to be refused, which is the guard answering to its host.
-    # An empty root is refused for the same reason: base would become the whole
-    # project directory, and any files[0] would be read out of it.
-    source_root = str(source_root).lstrip("/")
-    if not source_root or not is_plain_relative(Path(source_root)):
-        _log.debug("Source root %r is not contained in the project", source_root)
-        return None
-    base = (project_root / source_root).resolve()
-    # The plain-relative rule above is LEXICAL: it holds "src/evil" whatever
-    # src/evil is, and resolve() follows a symlink.  A base that leaves the
-    # project makes every is_relative_to below pass trivially, because they
-    # are all measured against the base that already escaped.  Check the base
-    # against the project it was joined onto, which is the one root nothing
-    # has moved yet.  ui.py's /src route refuses the same shape for the same
-    # reason, and a checkout carries symlinks.
-    if not base.is_relative_to(project_root):
-        _log.debug("Source root %r resolves outside the project", source_root)
-        return None
-    raw = files[0]
-    # A coverage document is untrusted input and TOML puts no type on an
-    # array element: `files = [1]` reaches Path() as a TypeError, and a name
-    # carrying a NUL (legal in the document, impossible in a filename) makes
-    # resolve() raise ValueError.  ui.py refuses both on the same value, and
-    # the answer here is the panel without its source, not a failed page.
-    if not isinstance(raw, str) or "\x00" in raw:
-        return None
-    # Reject anchored paths and parent traversal before resolve
-    if not is_plain_relative(Path(raw)):
-        return None
-    # After the refusal, never before it: the document spells the source path
-    # composed and a macOS tree holds it decomposed, so the composed path
-    # opened no file at all and the panel rendered empty beside a source file
-    # that was on disk the whole time.
-    raw = match_filesystem_spelling(base, raw)
-    c_path = (base / raw).resolve()
-    if not c_path.is_relative_to(base):
+    paths = data.get("paths") if isinstance(data, dict) else None
+    c_path = _contained_source_path(Path.cwd().resolve(), paths, target, fn_data.get("files", []))
+    if c_path is None:
         return None
     try:
         # errors="replace": a decompiled project's C sources carry
@@ -3501,11 +3453,28 @@ def _panel_function_detail(
 
     ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
 
-    # Source code + annotations
+    # Source code + annotations. Comment lines win. A marker-less file fills
+    # note and blocker from the MODULE.0xVA row that names this source.
     files = fn_data.get("files", [])
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
-        ctx["annotations"] = _extract_annotations(code_text)
+        note, blocker = "", ""
+        module = fn_data.get("module")
+        va = fn_data.get("va")
+        source = _contained_source_path(
+            Path.cwd().resolve(),
+            data.get("paths") if isinstance(data, dict) else None,
+            target,
+            files,
+        )
+        if (
+            source is not None
+            and isinstance(module, str)
+            and not isinstance(va, bool)
+            and isinstance(va, int)
+        ):
+            note, blocker = _row_note_blocker(Path.cwd().resolve(), target, module, va, source)
+        ctx["annotations"] = _extract_annotations(code_text, note=note, blocker=blocker)
         ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
@@ -3686,6 +3655,34 @@ def _render_panel(
             # the same address reads as a decimal in the global panel and as
             # hex everywhere else on the page (the function list, the search
             # box, the functions detail table).
-            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields={"va"})
+            storage_kind = gl_data["storage_kind"]
+            gl_data["type"] = {
+                "import": "Import pointer",
+                "span": "Layout span",
+                "literal": "Compiler literal",
+                "alias": "Storage view",
+            }.get(storage_kind, "Global variable")
+            owner_label = "Unknown"
+            if storage_kind == "span":
+                owner_label = "Layout span"
+            elif gl_data["backing"]:
+                owner_label = f"View of {gl_data['backing']}"
+            gl_data["owner"] = ", ".join(getattr(found_gl, "owners", ())) or owner_label
+            gl_data["users"] = ", ".join(getattr(found_gl, "referenced_in", ())) or "—"
+            gl_data["declarations"] = (
+                ", ".join(getattr(found_gl, "declared_in", found_gl.files)) or "—"
+            )
+            ctx["gl_detail_rows"] = _detail_rows(
+                gl_data,
+                skip_fields={
+                    "files",
+                    "owners",
+                    "referenced_in",
+                    "declared_in",
+                    "storage_kind",
+                    "isGlobal",
+                },
+                hex_fields={"va"},
+            )
 
     return cast(str, _PANEL_TPL.render(**ctx))

@@ -50,13 +50,13 @@ dependencies = [
     # documents (rebrew.coverage_toml), so recoverage does not carry its own
     # copy of any of it.  Resolved from the sibling checkout by
     # [tool.uv.sources] below.
-    # 2.16.0 is the floor: it is the first release that ships
-    # rebrew.coverage_toml, which both the regen path writes and every read
-    # path parses; an older rebrew has no such module and no way to produce
-    # the documents.  (Regen also imports rebrew.catalog.cli.run_catalog,
-    # which rebrew.catalog stopped re-exporting in 2.7.0 — that older reason
-    # is subsumed by this floor.)
-    "rebrew>=2.16.0",
+    # 2.23.0 is the floor, the version tools/ci_clone_rebrew.sh pins: the
+    # function-detail panels read a row's note and blocker through
+    # rebrew.split.stored_file_matches (2.22.0), and every rebuild hint names
+    # `rebrew coverage build`, which replaced `rebrew build-db` in 2.22.0.
+    # rebrew.coverage_toml, which the regen path writes and every read path
+    # parses, has shipped since 2.16.0.
+    "rebrew>=2.23.0",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",

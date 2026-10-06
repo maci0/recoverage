@@ -300,7 +300,7 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     if not members:
         raise BackupError(
             f"no {COVERAGE_GLOB} document in {db_dir}; nothing to back up. "
-            "Run 'rebrew build-db' (or 'recoverage regen') first."
+            "Run 'rebrew coverage build' (or 'recoverage regen') first."
         )
     created = _created_stamp()
     manifest = _manifest(members, created)

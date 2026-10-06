@@ -95,9 +95,9 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks
-# rebrew.coverage_toml, the module that writes and reads the coverage
-# documents this dashboard serves.
-REBREW_FLOOR ?= 2.16.0
+# rebrew.split.stored_file_matches (the function panels' row documentation)
+# and the `rebrew coverage build` command every rebuild hint names.
+REBREW_FLOOR ?= 2.23.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and

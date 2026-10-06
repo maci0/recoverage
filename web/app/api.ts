@@ -204,6 +204,8 @@ export type FunctionDetail = {
   cflags?: string | null;
   markerType?: string | null;
   blocker?: string | null;
+  /** Set from the `MODULE.0xVA` row when the coverage document has no note column. */
+  note?: string | null;
   blockerDelta?: number | null;
   ghidra_name?: string | null;
   list_name?: string | null;
@@ -213,6 +215,11 @@ export type FunctionDetail = {
   is_export?: boolean;
   sha256?: string | null;
   files?: Array<string>;
+  owners?: Array<string>;
+  storage_kind?: string;
+  backing?: string;
+  referenced_in?: Array<string>;
+  declared_in?: Array<string>;
   /** Every key `server.function_json` writes is declared here, so a field the
    * server serves is never out of this type's reach. */
   detected_by?: Array<string>;

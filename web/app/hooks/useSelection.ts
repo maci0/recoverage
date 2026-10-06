@@ -234,7 +234,7 @@ export function useSelection({
           fn: detail,
           fnKey: firstFn,
           source,
-          docs: extractDocs(source) ?? MSG.NO_DOCS,
+          docs: extractDocs(source, { note: detail.note, blocker: detail.blocker }) ?? MSG.NO_DOCS,
           asm: MSG.ASM_LOADING,
           ...bytes,
         });

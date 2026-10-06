@@ -31,17 +31,20 @@ points `RECOVERAGE_DB` at it. No case reaches a real project or the network.
 
 import base64
 import functools
+import json
 import os
 import re
+import shutil
 import subprocess
 import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from urllib.parse import quote, unquote, urlparse
 
 import pytest
-from conftest import HAS_DB, path_the_filesystem_holds, require_target, wsgi_get
+from conftest import HAS_DB, decode_body, path_the_filesystem_holds, require_target, wsgi_get
 from coverage_fixture import cell, coverage_dir, known_cell_states, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
@@ -561,6 +564,237 @@ int foo(void) { return 0; }
     assert _extract_annotations("int main() { return 0; }") == []
 
 
+_FORMAT_TS = Path(__file__).resolve().parent.parent / "web" / "app" / "lib" / "format.ts"
+_ROW_NOTE = "register file lives on the row"
+_ROW_BLOCKER = "unrolled loop lives on the row"
+_COMMENT_NOTE = "comment note survives"
+_COMMENT_BLOCKER = "comment blocker survives"
+_SOURCE_TEXT = "naked"
+
+
+def _dashboard_docs(workdir: Path, cases: list[dict[str, Any]]) -> list[str | None]:
+    """Run the dashboard's ``extractDocs`` (``web/app/lib/format.ts``) on *cases*.
+
+    The same module ``useSelection`` calls, imported the way the other bun
+    harnesses in this suite import ``format.ts``. Skipped without bun.
+    """
+    bun = shutil.which("bun")
+    if bun is None:
+        pytest.skip("bun not on PATH")
+    driver = (
+        "import { extractDocs } from "
+        + json.dumps(_FORMAT_TS.resolve().as_uri())
+        + ";\n"
+        + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+        + "console.log(JSON.stringify(cases.map((c) => extractDocs(c.source, c.stored))));\n"
+    )
+    program = workdir / "docs.ts"
+    program.write_text(driver, encoding="utf-8")
+    payload = workdir / "cases.json"
+    payload.write_text(json.dumps(cases), encoding="utf-8")
+    proc = subprocess.run(
+        [bun, "run", str(program), str(payload)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = json.loads(proc.stdout)
+    assert isinstance(parsed, list)
+    return parsed
+
+
+def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marker-less row's note and blocker show on both surfaces.
+
+    The report is the Potato function panel. The dashboard is ``extractDocs`` from
+    ``web/app/lib/format.ts``, fed the note and blocker the
+    function-detail API actually served. Comment lines still win when the row
+    lacks the field, and ``// SOURCE:`` stays in the file. A file with neither
+    comments nor a row contributes nothing.
+    """
+    from rebrew.metadata import (
+        get_entry,
+        identity_file,
+        record_function_identity,
+        update_field,
+        validate_identity_file,
+    )
+
+    store = tmp_path / "src"
+    source_dir = store / "NP"
+    source_dir.mkdir(parents=True)
+    markerless = source_dir / "fill_window.c"
+    legacy = source_dir / "legacy.c"
+    orphan = source_dir / "orphan.c"
+    markerless.write_text("int fill_window(void) { return 0; }\n", encoding="utf-8")
+    legacy.write_text(
+        "\n".join(
+            (
+                "// FUNCTION: NP 0x1010",
+                "// NOTE: " + _COMMENT_NOTE,
+                "// BLOCKER: " + _COMMENT_BLOCKER,
+                "// SOURCE: " + _SOURCE_TEXT,
+                "int legacy_fn(void) { return 1; }",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    orphan.write_text("int orphan(void) { return 2; }\n", encoding="utf-8")
+    (tmp_path / "rebrew-project.toml").write_text(
+        '[project]\ndefault_target = "NP"\n\n'
+        '[targets.NP]\nbinary = "NP.bin"\nmarker = "NP"\nreversed_dir = "src/NP"\n',
+        encoding="utf-8",
+    )
+    # An empty image would warn at load and pytest treats that warning as an
+    # error. The layout package answers image_base without opening the bytes.
+    (tmp_path / "NP.bin").write_bytes(b"")
+    layout = tmp_path / "layout" / "NP"
+    layout.mkdir(parents=True)
+    (layout / "rebrew-layout.toml").write_text(
+        '[layout]\nimage_base = 0x10000000\n\n[[layout.sections]]\nname = ".text"\n'
+        "va = 0x1000\nvs = 0x1000\nraw = 0x200\nptr = 0x200\n",
+        encoding="utf-8",
+    )
+    for path, va, name in (
+        (markerless, 0x1000, "fill_window"),
+        (legacy, 0x1010, "legacy_fn"),
+    ):
+        record_function_identity(
+            store,
+            module="NP",
+            va=va,
+            file=validate_identity_file(identity_file(path, store)),
+            marker_type="FUNCTION",
+            name=name,
+        )
+    update_field(store, 0x1000, "note", _ROW_NOTE, "NP")
+    update_field(store, 0x1000, "blocker", _ROW_BLOCKER, "NP")
+    assert get_entry(store, 0x1020, "NP") == {}
+
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "NP",
+        {
+            ".text": {
+                "va": 0x1000,
+                "size": 48,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [
+                    cell(0, 16, "exact", functions=("fill_window",)),
+                    cell(16, 32, "stub", functions=("legacy_fn",)),
+                    cell(32, 48, "none", functions=("orphan",)),
+                ],
+            }
+        },
+        functions=[
+            {
+                "va": 0x1000,
+                "name": "fill_window",
+                "vaStart": "0x1000",
+                "size": 16,
+                "status": "STUB",
+                "module": "NP",
+                "files": ["NP/fill_window.c"],
+            },
+            {
+                "va": 0x1010,
+                "name": "legacy_fn",
+                "vaStart": "0x1010",
+                "size": 16,
+                "status": "STUB",
+                "module": "NP",
+                "files": ["NP/legacy.c"],
+            },
+            {
+                "va": 0x1020,
+                "name": "orphan",
+                "vaStart": "0x1020",
+                "size": 16,
+                "status": "STUB",
+                "module": "NP",
+                "files": ["NP/orphan.c"],
+            },
+        ],
+        paths={"sourceRoot": "/src"},
+    )
+    monkeypatch.chdir(tmp_path)
+
+    markerless_page = render_potato_url("/potato?target=NP&section=.text&idx=0")
+    legacy_page = render_potato_url("/potato?target=NP&section=.text&idx=1")
+    orphan_page = render_potato_url("/potato?target=NP&section=.text&idx=2")
+    assert _ROW_NOTE in markerless_page
+    assert _ROW_BLOCKER in markerless_page
+    assert "// FUNCTION:" not in markerless_page
+    assert _COMMENT_NOTE in legacy_page
+    assert _COMMENT_BLOCKER in legacy_page
+    assert _SOURCE_TEXT in legacy_page
+    assert _ROW_NOTE not in legacy_page
+    assert "Annotations" not in orphan_page
+    assert _ROW_NOTE not in orphan_page
+
+    def detail(va: int) -> dict[str, Any]:
+        status, headers, body = wsgi_get(f"/api/targets/NP/functions/{va:#x}")
+        assert status.startswith("200"), status
+        payload = json.loads(decode_body(body, headers))
+        assert isinstance(payload, dict)
+        return payload
+
+    row_detail = detail(0x1000)
+    legacy_detail = detail(0x1010)
+    orphan_detail = detail(0x1020)
+    assert row_detail["note"] == _ROW_NOTE
+    assert row_detail["blocker"] == _ROW_BLOCKER
+    assert "note" not in legacy_detail
+    assert "note" not in orphan_detail
+
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    docs = _dashboard_docs(
+        harness,
+        [
+            {
+                "source": markerless.read_text(encoding="utf-8"),
+                "stored": {"note": row_detail.get("note"), "blocker": row_detail.get("blocker")},
+            },
+            {
+                "source": legacy.read_text(encoding="utf-8"),
+                "stored": {
+                    "note": legacy_detail.get("note"),
+                    "blocker": legacy_detail.get("blocker"),
+                },
+            },
+            {
+                "source": orphan.read_text(encoding="utf-8"),
+                "stored": {
+                    "note": orphan_detail.get("note"),
+                    "blocker": orphan_detail.get("blocker"),
+                },
+            },
+        ],
+    )
+    assert docs[0] is not None
+    assert _ROW_NOTE in docs[0]
+    assert _ROW_BLOCKER in docs[0]
+    assert docs[1] is not None
+    assert _COMMENT_NOTE in docs[1]
+    assert _COMMENT_BLOCKER in docs[1]
+    assert _SOURCE_TEXT in docs[1]
+    assert _ROW_NOTE not in docs[1]
+    assert docs[2] is None
+
+    selection = (
+        Path(__file__).resolve().parent.parent / "web" / "app" / "hooks" / "useSelection.ts"
+    ).read_text(encoding="utf-8")
+    assert "extractDocs(source, { note: detail.note, blocker: detail.blocker })" in selection
+
+
 def test_cell_file_offset():
     assert _cell_file_offset({"start": 100}, {"fileOffset": 4096}) == 4196
     # 0 is a file offset, not "no file backing" (api.py serves those bytes);
@@ -749,6 +983,65 @@ def test_globals_detail_panel():
     idx, sec = match
     html = render_potato_url(f"/potato?target={target}&section={sec}&idx={idx}")
     assert "Global Variable" in html
+
+
+@pytest.mark.parametrize(
+    ("kind", "owners", "backing", "expected_owner", "expected_type"),
+    [
+        ("object", ("LIBCMT:crt0dat.obj",), "", "LIBCMT:crt0dat.obj", "Global variable"),
+        (
+            "import",
+            ("linker:KERNEL32.dll!Sleep",),
+            "",
+            "linker:KERNEL32.dll!Sleep",
+            "Import pointer",
+        ),
+        ("span", (), "", "Layout span", "Layout span"),
+        ("alias", (), "g_storage", "View of g_storage", "Storage view"),
+    ],
+)
+def test_global_panel_distinguishes_owners_users_and_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    owners: tuple[str, ...],
+    backing: str,
+    expected_owner: str,
+    expected_type: str,
+):
+    import recoverage.potato as potato
+
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "GLOBAL_ROLES",
+        {".data": {"va": 0x2000, "size": 4, "cells": [cell(0, 4, "data", functions=["g_value"])]}},
+        globals_=[{"va": 0x2000, "name": "g_value", "files": ["declarations.h"]}],
+    )
+    # Exercise a newer producer's optional fields while retaining the supported
+    # older coverage reader in the consumer's CI environment.
+    row = SimpleNamespace(
+        va=0x2000,
+        name="g_value",
+        decl="int g_value",
+        files=("declarations.h",),
+        module="GLOBAL_ROLES",
+        size=4,
+        status="UNKNOWN",
+        owners=owners,
+        storage_kind=kind,
+        backing=backing,
+        referenced_in=("consumer.c",),
+        declared_in=("declarations.h",),
+    )
+    monkeypatch.setattr(potato, "lookup_global", lambda *_: row)
+    html = render_potato_url("/potato?target=GLOBAL_ROLES&section=.data&idx=0")
+    assert expected_owner in html
+    assert expected_type in html
+    assert "consumer.c" in html
+    assert "declarations.h" in html
+    assert "storage_kind" not in html
+    assert "Unknown" not in html
 
 
 def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -4200,7 +4493,7 @@ class TestRenderIsPinnedToOneSnapshot:
     ``render_potato`` loads the snapshot once and hands it to every reader —
     sections, cells, functions, globals and (for the detail panels)
     verify_results — and the grid is the most expensive render in the package,
-    so a ``rebrew build-db`` committing midway is a real window.  The
+    so a ``rebrew coverage build`` committing midway is a real window.  The
     snapshot's immutability is what the SQLite read transaction used to buy:
     the page cannot pair one build's section rows with the next build's cells,
     which would be a grid whose coverage legend disagrees with its own bytes.
@@ -4282,7 +4575,7 @@ class TestRenderIsPinnedToOneSnapshot:
         target = require_target()
 
         # Call 1: the render's token, before it loads the snapshot.  Every call
-        # after it sees a `rebrew build-db` that committed mid-render.
+        # after it sees a `rebrew coverage build` that committed mid-render.
         tokens = iter([(1, 64), *[(2, 64)] * 64])
         monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(tokens))
 

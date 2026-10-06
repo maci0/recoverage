@@ -16,7 +16,7 @@ import { encodePathSegments, encodeUrlValue, sameOriginPath } from "@/lib/format
  * switch while the download is in flight would otherwise install the previous
  * target's bytes, and every later slice would read the wrong binary at the
  * current target's offsets. The build is half the key because a rebuild can
- * rewrite the binary under the same path — `rebrew build-db` after a recompile
+ * rewrite the binary under the same path — `rebrew coverage build` after a recompile
  * moves the bytes and the `db-updated` frame that announces it moves neither
  * the path nor the target id. Keyed on the path alone, the hook kept serving
  * the pre-rebuild binary until the reader switched targets and back, so the

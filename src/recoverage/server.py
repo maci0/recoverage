@@ -505,7 +505,175 @@ def match_filesystem_spelling(base: Path, relative: str) -> str:
         chosen = _existing_spelling(current, part)
         spelled.append(chosen)
         current = current / chosen
-    return str(PurePath(*spelled))
+    return relative if tuple(spelled) == parts else str(PurePath(*spelled))
+
+
+def _contained_source_path(
+    project_dir: Path,
+    paths: Any,
+    target: str,
+    files: Any,
+) -> Path | None:
+    """The function's C source, or None when the document cannot name one inside the project.
+
+    Two containment checks, because the source root and the file name are
+    separate inputs and either one can leave the tree. Anchored at the project
+    directory: an older ``__file__``-relative anchor resolved inside the
+    recoverage package and silently failed every C-source load.
+
+    ``sourceRoot`` is document data, and its fallback is built from *target*,
+    which is the request's ``?target=`` verbatim. A root that resolves outside
+    the project names a tree this server does not serve. Anchored paths and
+    ``..`` in the file name are rejected before ``resolve``, and the resolved
+    path must sit under the root. A symlink that moves the root out of the
+    project is refused against the project directory, which nothing has moved yet.
+    """
+    if not isinstance(files, list | tuple) or not files:
+        return None
+    # The target id verbatim, matching rebrew's `src/<target>` and the SPA's
+    # fallback: a lowercased spelling only resolves on a case-insensitive
+    # filesystem, so it read the real tree on macOS and Windows and missed it
+    # on Linux.
+    default_source_root = f"/src/{target}"
+    source_root = (
+        paths.get("sourceRoot", default_source_root)
+        if isinstance(paths, Mapping)
+        else default_source_root
+    )
+    # source_root is the containment base, so it gets the same plain-relative
+    # rule as the file name: stripping only a leading "/" left a Windows-shaped
+    # value ("C:/...", "\\...", "C:src") intact on the Windows build, where the
+    # join then replaces the base and every is_relative_to below passes
+    # trivially. An empty root is refused for the same reason: base would
+    # become the whole project directory, and any files[0] would be read out of it.
+    source_root = str(source_root).lstrip("/")
+    if not source_root or not is_plain_relative(Path(source_root)):
+        _log.debug("Source root %r is not contained in the project", source_root)
+        return None
+    base = (project_dir / source_root).resolve()
+    # The plain-relative rule above is lexical: it holds "src/evil" whatever
+    # src/evil is, and resolve() follows a symlink. A base that leaves the
+    # project makes every is_relative_to below pass trivially, because they
+    # are all measured against the base that already escaped.
+    if not base.is_relative_to(project_dir):
+        _log.debug("Source root %r resolves outside the project", source_root)
+        return None
+    raw = files[0]
+    # A coverage document is untrusted input and TOML puts no type on an
+    # array element: `files = [1]` reaches Path() as a TypeError, and a name
+    # carrying a NUL (legal in the document, impossible in a filename) makes
+    # resolve() raise ValueError.
+    if not isinstance(raw, str) or "\x00" in raw:
+        return None
+    if not is_plain_relative(Path(raw)):
+        return None
+    # After the refusal, never before it: the document spells the source path
+    # composed and a macOS tree holds it decomposed, so the composed path
+    # opened no file at all.
+    raw = match_filesystem_spelling(base, raw)
+    c_path = (base / raw).resolve()
+    if not c_path.is_relative_to(base):
+        return None
+    return c_path
+
+
+def _function_store_dir(project_dir: Path, target: str) -> Path | None:
+    """Directory of ``rebrew-functions.toml`` for *target*, or None when the project has none."""
+    from rebrew.config import ConfigError, load_config
+    from rebrew.metadata import METADATA_FILENAME
+
+    try:
+        cfg = load_config(project_dir, target=target)
+    except ConfigError:
+        try:
+            cfg = load_config(project_dir)
+        except ConfigError:
+            return None
+    directory = Path(cfg.metadata_dir)
+    if (directory / METADATA_FILENAME).is_file():
+        return directory
+    return None
+
+
+def _stored_names_source(stored: str, source: Path, *roots: Path) -> bool:
+    """True when *stored* is *source* relative to one of *roots*, or a suffix of that path."""
+    from rebrew.split import stored_file_matches
+
+    text = stored.replace("\\", "/")
+    if not text:
+        return False
+    resolved = source.resolve()
+    for root in roots:
+        try:
+            rel = resolved.relative_to(root.resolve()).as_posix()
+        except ValueError:
+            continue
+        if stored_file_matches(text, rel):
+            return True
+    return False
+
+
+def _row_note_blocker(
+    project_dir: Path,
+    target: str,
+    module: str,
+    va: int,
+    source: Path,
+) -> tuple[str, str]:
+    """Note and blocker from the ``MODULE.0xVA`` row whose ``file`` names *source*.
+
+    Both strings are empty when the project has no function store, the row is
+    missing, or its ``file`` names a different source. The ``.c`` is not read
+    here: a comment in the file wins, and the caller applies that.
+    """
+    if not module:
+        return "", ""
+    store = _function_store_dir(project_dir, target)
+    if store is None:
+        return "", ""
+    from rebrew.metadata import get_entry
+
+    try:
+        entry = get_entry(store, va, module)
+    except (OSError, ValueError):
+        return "", ""
+    stored = entry.get("file")
+    if not isinstance(stored, str) or not _stored_names_source(stored, source, store, project_dir):
+        return "", ""
+    note = entry.get("note")
+    blocker = entry.get("blocker")
+    return (
+        note.strip() if isinstance(note, str) else "",
+        blocker.strip() if isinstance(blocker, str) else "",
+    )
+
+
+def _attach_row_documentation(
+    payload: dict[str, Any],
+    *,
+    target: str,
+    paths: Any,
+    project_dir: Path,
+) -> None:
+    """Put the function row's note on *payload*, and its blocker when the document has none.
+
+    The coverage document carries ``blocker`` and does not carry ``note``. A
+    marker-less ``.c`` keeps both texts on the ``MODULE.0xVA`` row. The field
+    is added only when the row has one, so a document with no matching row
+    keeps the column set ``function_json`` already serves.
+    """
+    module = payload.get("module")
+    va = payload.get("va")
+    if not isinstance(module, str) or isinstance(va, bool) or not isinstance(va, int):
+        return
+    source = _contained_source_path(project_dir, paths, target, payload.get("files"))
+    if source is None:
+        return
+    note, blocker = _row_note_blocker(project_dir, target, module, va, source)
+    if note:
+        payload["note"] = note
+    if blocker and not str(payload.get("blocker") or "").strip():
+        payload["blocker"] = blocker
 
 
 def decode_query_value(raw: str) -> str:
@@ -978,7 +1146,7 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     snapshots = load_all(_db_path())
     if not snapshots:
         raise CoverageTomlError(
-            f"{_db_path()}: no coverage-*.toml document — run 'rebrew build-db'"
+            f"{_db_path()}: no coverage-*.toml document — run 'rebrew coverage build'"
         )
     return snapshots
 
@@ -1515,7 +1683,7 @@ def binary_stamp(target: str) -> tuple[int, int, int] | None:
         return None
     try:
         st = path.stat()
-    except OSError:
+    except (OSError, ValueError):
         return None
     return st.st_mtime_ns, st.st_size, st.st_ino
 
@@ -1868,7 +2036,7 @@ def _find_dll_path(target: str) -> Path | None:
         if t_info is None:
             return None
     filename = t_info.get("filename", "") if isinstance(t_info, dict) else ""
-    if not filename:
+    if not filename or "\x00" in filename:
         return None
     root = _project_dir()
     candidate = root / filename
@@ -2635,6 +2803,11 @@ def global_json(gl: Global) -> dict[str, Any]:
         "name": gl.name,
         "decl": gl.decl,
         "files": list(gl.files),
+        "owners": list(getattr(gl, "owners", ())),
+        "storage_kind": getattr(gl, "storage_kind", "object"),
+        "backing": getattr(gl, "backing", ""),
+        "referenced_in": list(getattr(gl, "referenced_in", ())),
+        "declared_in": list(getattr(gl, "declared_in", gl.files)),
         "module": gl.module,
         "size": gl.size,
         "isGlobal": 1,
@@ -2797,9 +2970,17 @@ def _snapshot_index[IndexT](
     with _SNAPSHOT_INDEX_LOCK:
         hit = _SNAPSHOT_INDEX.get(key)
     if hit is not None:
+        with _SNAPSHOT_INDEX_LOCK:
+            _touch(_SNAPSHOT_INDEX, key)
         return cast(IndexT, hit[1])
     index = build()
+    # Two requests can miss together and each fold every row. The first build
+    # to store wins; the second's index is dropped, so the memo holds one
+    # table per kind instead of whichever build finished last.
     with _SNAPSHOT_INDEX_LOCK:
+        hit = _SNAPSHOT_INDEX.get(key)
+        if hit is not None:
+            return cast(IndexT, hit[1])
         _evict_oldest(_SNAPSHOT_INDEX, _SNAPSHOT_INDEX_MAX)
         _SNAPSHOT_INDEX[key] = (snap, index)
     return index
@@ -3014,6 +3195,21 @@ def load_metadata(snap: CoverageSnapshot) -> dict[str, Any]:
 
 
 # ── Shared caches ──────────────────────────────────────────────────
+
+
+def _touch(cache: dict[Any, Any], key: Any) -> None:
+    """Move *key* to the newest end of *cache*, if it is present.
+
+    Eviction reads insertion order, and a hit that does not move the key
+    leaves the entry a reader keeps asking for as the oldest one. The cap
+    then drops that entry and the next request rebuilds it. Caller holds
+    the cache's own lock.
+    """
+    try:
+        value = cache.pop(key)
+    except KeyError:
+        return
+    cache[key] = value
 
 
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
@@ -3730,7 +3926,7 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         {
             "error": "Database unavailable",
             "detail": f"{type(exc).__name__} — "
-            "run 'rebrew build-db' to create or rebuild it; "
+            "run 'rebrew coverage build' to create or rebuild it; "
             "the server log has the full cause",
         },
     )

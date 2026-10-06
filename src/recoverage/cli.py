@@ -55,7 +55,7 @@ app = typer.Typer(
         "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
         "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
-        "  Run [dim]rebrew build-db[/dim] first to create "
+        "  Run [dim]rebrew coverage build[/dim] first to create "
         "db/coverage-*.toml.\n\n"
         f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "
         f"for every command). Serves SPA at "
@@ -276,7 +276,7 @@ _MD_PIPE = "\\|"
 
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
-_REBUILD_HINT = "(run 'rebrew build-db' to rebuild it)"
+_REBUILD_HINT = "(run 'rebrew coverage build' to rebuild it)"
 
 
 def _pin_utf8(stream: IO[str], errors: str) -> None:
@@ -685,7 +685,7 @@ def _run_regen(root: Path) -> list[Path]:
     # Progress, not data: stderr, like every failure this function reports, so
     # `recoverage regen` in a pipeline and `serve --regen`'s banner keep stdout
     # for the data they do carry.
-    _secho("Running rebrew catalog + build-db...", err=True)
+    _secho("Regenerating coverage documents...", err=True)
     try:
         return run_regen(root)
     except RebrewConfigError as e:
@@ -1197,7 +1197,7 @@ def _db_warnings(db: Path | None) -> list[str]:
         state = f"no coverage-*.toml in {path}"
     return [
         (
-            f"warning: {state}; the dashboard will list no targets until 'rebrew build-db' "
+            f"warning: {state}; the dashboard will list no targets until 'rebrew coverage build' "
             "writes one. If this is a service, check RECOVERAGE_DB and the directory serve "
             "was started from."
         )
@@ -2158,7 +2158,7 @@ def check(
 
 @app.command()
 def regen(no_color: bool = _no_color_option()) -> None:
-    """Re-run rebrew catalog + build-db to regenerate the coverage documents.
+    """Regenerate coverage documents from the project.
 
     Writes nothing to stdout: the progress line, the completion line and every
     error are status, and status goes to stderr, so a caller reads the report

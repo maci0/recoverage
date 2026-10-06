@@ -1510,9 +1510,11 @@ class TestSpaDimmedMapSaysSo:
             "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source
         ), "the caption is not the survivor count it claims to be"
         assert "const visible = useMemo(" in map_source
-        # It counts the SAME columns the paint walks, over the whole section.
+        # It counts the SAME column the paint reads. `isDimmed` runs once per
+        # cell when the filter or the search changes; the paint reads the byte.
         assert "isDimmed(pack.states[i] ?? 0" in map_source
-        assert "for (let i = 0; i < pack.n; i += 1)" in map_source
+        assert "dimmed[index] === 1" in map_source
+        assert "for (const byte of dimmed)" in map_source
 
     def test_the_caption_is_hidden_when_nothing_is_dimmed(self) -> None:
         """The ordinary read of a full map is unchanged: the caption is a
@@ -3714,7 +3716,7 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
     def test_the_error_names_the_command_that_writes_the_documents(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`rebrew build-db` runs the catalog analysis in process.
+        """`rebrew coverage build` runs the catalog analysis in process.
 
         An advice string naming a separate `rebrew catalog` step sends the
         operator after a command they do not have to run.
@@ -3725,7 +3727,7 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         with pytest.raises(CoverageTomlError) as excinfo:
             srv.coverage_snapshots()
         message = str(excinfo.value)
-        assert "rebrew build-db" in message
+        assert "rebrew coverage build" in message
         assert "rebrew catalog" not in message
 
     def test_the_endpoint_answers_the_db_unavailable_contract(
@@ -4271,7 +4273,7 @@ class TestSpaNumericBoundaries:
         ]
         driver = (
             "import { hex } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map(([a, w]) => hex(a, w))));\n"
@@ -4947,7 +4949,9 @@ class TestSpaTimestampRendering:
             pytest.skip("bun not on PATH")
 
         driver = (
-            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "import { dateTime } from "
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
+            + ";\n"
             "console.log(JSON.stringify([dateTime(process.argv[2]), "
             "dateTime(process.argv[3]), dateTime('not a timestamp')]));\n"
         )
@@ -5045,7 +5049,9 @@ class TestSpaRefusesAWallTimeTheReadersZoneCannotPlace:
         if bun is None:
             pytest.skip("bun not on PATH")
         driver = (
-            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "import { dateTime } from "
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
+            + ";\n"
             "console.log(JSON.stringify(dateTime(process.argv[2])));\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -5203,7 +5209,7 @@ class TestSpaCountsAgreeWithTheReadersLocale:
             pytest.skip("node not on PATH")
         driver = (
             "import { plural, reading } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             "const forms = { zero: 'zero', one: 'one', two: 'two', few: 'few',"
             " many: 'many', other: 'other' };\n"
@@ -5224,6 +5230,7 @@ class TestSpaCountsAgreeWithTheReadersLocale:
                 [node, str(script)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=60,
                 check=False,
             )
@@ -5510,27 +5517,35 @@ class TestSpaSearchFoldsLikeTheServer:
         assert matched is not None, "the match set is no longer a memo"
         body = matched.group(0)
         assert "foldCellName(name)" in body, "the set holds a RAW name the cell never compares"
-        assert "foldCellName(va)" in body, "the bare-VA arm is added unfolded"
+        assert "matched.add(String(va))" in body, (
+            "the VA is folded per hit instead of added as its own digits"
+        )
         assert "new Set<string>(matchedNames)" not in body, (
             "the set is seeded from the raw index keys rather than folded"
         )
 
-        # Every membership test against a cell's name folds the cell's side.
+        # Every membership test against a cell's name folds the cell's side,
+        # once per section rather than once per keystroke.
         assert "matchedFns.has(String(cell.functions" not in app, (
             "a membership test compares the raw cell name against the folded set"
         )
-        assert app.count("foldCellName(cell.functions?.[0])") == 2, (
-            "the section match count and Enter's jump do not both fold the cell name"
+        assert "cells.map((cell) => foldCellName(cell.functions?.[0]))" in app, (
+            "the section's cell names are not folded ahead of the keystroke"
         )
+        assert "foldCellName(cell.functions?.[0])" not in app.replace(
+            "cells.map((cell) => foldCellName(cell.functions?.[0]))", ""
+        ), "a keystroke still folds a cell name instead of reading the column"
 
         # The paint loop cannot fold per cell per frame, so it folds once per
-        # pack, and the loop reads that.
+        # pack into a byte column, and the loop reads that. A Set of freshly
+        # built strings there allocated one string per part per pass per slot.
         map_source = _web("components/CoverageMap.tsx")
         assert 'matchedFns.has(fns[index] ?? "")' not in map_source, (
             "the dim compares a raw packed name against the folded set"
         )
         assert "foldCellName(name)" in map_source, "the packed names are not folded for the dim"
-        assert "isMatched" in map_source, "the dim has no pre-folded lookup to read"
+        assert "new Uint8Array(pack.n)" in map_source, "the dim has no pre-folded column to read"
+        assert "String(index)" not in map_source, "the paint builds a string key per placement"
 
 
 class TestSpaLayoutAndFeedback:
@@ -5778,7 +5793,7 @@ class TestSpaJumpAndSearch:
         # unchanged in what it matches.
         assert "const matched = new Set<string>();" in app
         assert "matched.add(foldCellName(name))" in app
-        assert "matched.add(foldCellName(va))" in app
+        assert "matched.add(String(va))" in app
         assert "coverage.searchIndex[name]?.va" in app
 
     def test_enter_jumps_to_a_matched_block_in_the_section_on_screen(self) -> None:
@@ -5787,8 +5802,8 @@ class TestSpaJumpAndSearch:
         # whatever order the index arrived in, and taking its first entry put
         # the jump in a sibling, switching tabs away from the map the reader
         # was looking at.
-        assert "active?.cells?.findIndex(" in app
-        assert "matchedFns?.has(foldCellName(cell.functions?.[0]))" in app
+        assert "foldedCellNames" in app
+        assert "matchedFns.has(name)" in app
         assert "setSelectedIndex(local);" in app
 
     def test_enter_outside_the_section_lands_on_the_lowest_matched_address(self) -> None:
@@ -6627,7 +6642,7 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
 
         driver = (
             "import { sameOriginPath } from "
-            + json.dumps(str(self._module_path()))
+            + json.dumps((self._module_path()).resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map(([v, f]) => sameOriginPath(v, f))));\n"
@@ -6717,10 +6732,10 @@ class TestSpaDocumentPathsArePercentEncoded:
 
         driver = (
             "import { sourceFileUrl } from "
-            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
             + ";\n"
             "import { originalDllPath } from "
-            + json.dumps(str(WEB_APP / "hooks" / "useOriginalBinary.ts"))
+            + json.dumps((WEB_APP / "hooks" / "useOriginalBinary.ts").resolve().as_uri())
             + ";\n"
             "const payload = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             "const BASE = 'http://dashboard.invalid/';\n"
@@ -6985,7 +7000,7 @@ class TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8:
 
         driver = (
             "import { encodeUrlValue } from "
-            + json.dumps(str(self._module_path()))
+            + json.dumps((self._module_path()).resolve().as_uri())
             + ";\n"
             + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             + "console.log(JSON.stringify(cases.map((v) => encodeUrlValue(v))));\n"

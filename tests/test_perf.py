@@ -221,3 +221,36 @@ def test_resolve_targets_memo_skips_the_coverage_reader():
         _server.clear_target_cache()
     assert second == first
     assert calls == 0, f"target memo miss: coverage reader called {calls}x on a hit"
+
+
+def test_function_detail_memo_skips_the_rebuild():
+    """A repeat click of one cell must not rebuild its detail body.
+
+    The body is `function_json` plus the verify record and the documentation
+    attachment, then `json.dumps`. The ETag saves the browser that already
+    holds it; this memo saves the next request, which arrives without the
+    validator (a second dashboard, a prefetch, a client that dropped the tag).
+    """
+    _api._clear_function_cache()
+    calls = 0
+    orig = _server.function_json
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return orig(*a, **k)
+
+    path = "/api/targets/FAKEDLL/functions/0x10001000"
+    _server.function_json = counting  # type: ignore[method-assign]
+    try:
+        status, _headers, first = wsgi_get(path)
+        assert status.startswith("200"), status
+        assert calls == 1, f"the probe never saw a cold build ({calls} calls)"
+        calls = 0
+        status, _headers, second = wsgi_get(path)
+    finally:
+        _server.function_json = orig
+        _api._clear_function_cache()
+    assert status.startswith("200"), status
+    assert second == first
+    assert calls == 0, f"function-detail memo miss: body rebuilt {calls}x on a hit"

@@ -27,8 +27,8 @@ code: 2026-09-29.
 ### Acceptance Criteria
 - `recoverage serve` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
-- Server resolves the coverage directory from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/`. A directory holding no `coverage-<target>.toml` is not a refusal: `serve` warns that the dashboard will list no targets until `rebrew build-db` writes one, and every figure then reads as a healthy zero. A path that is not a directory is refused at startup
-- `--regen` flag runs rebrew's catalog analysis and coverage-document writer in-process before starting (`rebrew.catalog.cli.run_catalog`, then `rebrew.coverage_toml.write_coverage_toml`); there is no separate `rebrew catalog` step to run first
+- Server resolves the coverage directory from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/`. A directory holding no `coverage-<target>.toml` is not a refusal: `serve` warns that the dashboard will list no targets until `rebrew coverage build` writes one, and every figure then reads as a healthy zero. A path that is not a directory is refused at startup
+- `--regen` flag runs rebrew's catalog analysis and coverage-document writer in-process before starting (`rebrew.catalog.cli.run_catalog`, then `rebrew.coverage_toml.write_coverage_toml`); there is no separate `rebrew coverage catalog` step to run first
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
@@ -36,7 +36,7 @@ graph TD
     A["Project directory<br/>with rebrew-project.toml"] --> B{"coverage-*.toml<br/>present?"}
     B -->|Yes| C["recoverage serve --port 8001"]
     B -->|No| D["recoverage serve --regen"]
-    D --> E["rebrew build-db<br/>(catalog analysis runs in-process)"]
+    D --> E["rebrew coverage build<br/>(catalog analysis runs in-process)"]
     E --> F["db/coverage-*.toml written<br/>atomically"]
     F --> C
     C --> H["Dashboard opens at<br/>http://localhost:8001"]
@@ -578,7 +578,7 @@ Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](
 ```mermaid
 graph LR
     subgraph "Phase 1: Data Generation"
-        A["rebrew build-db"] --> B["catalog analysis, then<br/>one document per target"]
+        A["rebrew coverage build"] --> B["catalog analysis, then<br/>one document per target"]
         B --> C["db/coverage-*.toml"]
     end
 

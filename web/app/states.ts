@@ -140,18 +140,23 @@ export function survivesFilter(slot: number, ground: number, active: ReadonlySet
  *
  * A block both rules dim is one the reader excluded twice; there is nothing for
  * the answer to disambiguate, which is why this is a boolean and `dimSummary`
- * names the armed rules from the two inputs instead of from this one. */
+ * names the armed rules from the two inputs instead of from this one.
+ *
+ * The search answer arrives already resolved (`searchHit`), not as a name to
+ * look up: the paint walks every placement twice per palette slot, and a
+ * `Set.has` of a freshly built string there allocated one string per part per
+ * pass per slot. The caller builds the column once. */
 export function isDimmed(
   slot: number,
   ground: number,
-  fn: string | number,
+  searchHit: boolean,
   filters: ReadonlySet<string>,
-  matchedFns: ReadonlySet<string | number> | null,
+  searching: boolean,
 ): boolean {
   if (filters.size > 0 && !survivesFilter(slot, ground, filters)) {
     return true;
   }
-  return matchedFns !== null && !matchedFns.has(fn);
+  return searching && !searchHit;
 }
 
 /** What `dimSummary` says about each combination of the two armed rules: the

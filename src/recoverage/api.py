@@ -126,6 +126,7 @@ def _clear_derived_caches() -> None:
     _clear_data_cache()
     _clear_stats_cache()
     _clear_list_total_cache()
+    _clear_function_cache()
     for invalidate in _EXTRA_INVALIDATORS:
         invalidate()
     # Disassembly/DLL bytes reflect the original binary and section layout,
@@ -154,7 +155,7 @@ def _clear_derived_caches_logged(where: str) -> None:
 
 
 # Server-side regen cooldown (seconds): the UI throttles Regenerate clicks, but
-# direct API calls must not be able to trigger repeated rebrew catalog runs.
+# direct API calls must not be able to trigger repeated catalog analysis runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 # clock.monotonic() of the last accepted regen POST, or None before the first
 # one.  None, never 0.0: on Linux the monotonic clock counts from boot, so a
@@ -165,7 +166,7 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 
 # Idempotency-Key ledger for POST /api/regen.  A regen is a whole-pipeline
 # rebuild, so a duplicate that arrives after the first one finished answers
-# from the ledger instead of running catalog+build-db a second time: a client
+# from the ledger instead of running catalog-and-coverage a second time: a client
 # retry (proxy replay, a lost response, a double-clicked Reload) re-sends the
 # request it never saw answered, and re-running it is minutes of duplicated
 # work plus a second write of the coverage documents for an identical result.
@@ -418,6 +419,7 @@ def _data_cache_checkout(
         # ever served.
         if entry is not None:
             _metrics.CACHES.hit(_metrics.DATA_PAYLOAD_CACHE)
+            _server._touch(_DATA_CACHE, key)
             return entry, None
         _metrics.CACHES.miss(_metrics.DATA_PAYLOAD_CACHE)
         claim = _DATA_CACHE_BUILDING.get(key)
@@ -559,6 +561,41 @@ _LIST_TOTAL_CACHE_LOCK = threading.Lock()
 _LIST_TOTAL_CACHE_MAX = 64
 
 
+# The function-detail body, keyed by the snapshot and the requested spelling.
+# A cell click encodes `function_json` plus the verify record and the
+# documentation attachment, then `json.dumps` it; clicking back to a cell
+# already open did that again. The ETag answers a repeat from the SAME browser
+# with 304, and this answers a repeat from any client. Bounded, and dropped
+# with the other snapshot-derived memos.
+_FUNCTION_CACHE: dict[tuple[tuple[int, int] | None, str, str], bytes] = {}
+_FUNCTION_CACHE_LOCK = threading.Lock()
+_FUNCTION_CACHE_MAX = 64
+
+
+def _clear_function_cache() -> None:
+    with _FUNCTION_CACHE_LOCK:
+        _FUNCTION_CACHE.clear()
+
+
+def _store_function_body(
+    key: tuple[tuple[int, int] | None, str, str],
+    body: bytes,
+) -> bytes:
+    """Store *body* under *key* and return the body a caller should serve.
+
+    A rebuild can clear the cache between the build and this store, and the
+    store would then put the pre-rebuild bytes back under the old snapshot
+    for the refetch the broadcast just woke. The data memo drops that write
+    (`_cache_data_insert`); this one does too. A body built for the snapshot
+    the documents still name is stored, and a concurrent store of the same
+    key keeps the first one."""
+    if key[0] is not None and _snapshot_db_mtime() != key[0]:
+        return body
+    with _FUNCTION_CACHE_LOCK:
+        _server._evict_oldest(_FUNCTION_CACHE, _FUNCTION_CACHE_MAX)
+        return _FUNCTION_CACHE.setdefault(key, body)
+
+
 def _clear_list_total_cache() -> None:
     """Drop memoized function-list totals (called on DB rebuild)."""
     with _LIST_TOTAL_CACHE_LOCK:
@@ -591,6 +628,8 @@ def _function_total(
     if key is not None:
         with _LIST_TOTAL_CACHE_LOCK:
             cached = _LIST_TOTAL_CACHE.get(key)
+            if cached is not None:
+                _server._touch(_LIST_TOTAL_CACHE, key)
         if cached is not None:
             return cached
     total = len(rows)
@@ -882,7 +921,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """Push a db-updated SSE frame to every connected client queue.
 
     Also invalidates every derived cache (see :func:`_clear_derived_caches`)
-    — an external ``rebrew build-db`` (the documented workflow) must refresh
+    — an external ``rebrew coverage build`` (the documented workflow) must refresh
     the target dropdown, any cached data, and the disassembly derived from
     the original binary, not just the in-app /api/regen path.
     """
@@ -1574,6 +1613,8 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
     if snap is not None:
         with _STATS_CACHE_LOCK:
             stats = _STATS_CACHE.get(key)
+            if stats is not None:
+                _server._touch(_STATS_CACHE, key)
     # Counted here, at the one place the memo is read, so the numbers in
     # /api/health's `caches` are the ones this endpoint actually served from.
     if stats is not None:
@@ -2354,6 +2395,12 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
                 record = verify_rows.get(fn.va)
                 if record is not None:
                     payload["last_verify"] = _server.verify_payload(record)
+                _server._attach_row_documentation(
+                    payload,
+                    target=target,
+                    paths=coverage.paths,
+                    project_dir=_server._project_dir(),
+                )
                 results.append(payload)
                 continue
             # The globals arm is indexed on its first miss: a batch of function
@@ -2396,21 +2443,39 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
         # same way the name is spelled in the document.
 
         # Functions win over globals (parity with the batch endpoint).
+        key = (snap, target, value)
         found_fn = _server.lookup_function(coverage, value)
         if isinstance(found_fn, Function):
-            fn_json = _server.function_json(found_fn)
-            # Attach the last `rebrew verify -o` record for this function.
-            record = _server.verify_by_va(coverage).get(found_fn.va)
-            if record is not None:
-                fn_json["last_verify"] = _server.verify_payload(record)
-            return _json_ok(json.dumps(fn_json).encode("utf-8"), **headers)
+            with _FUNCTION_CACHE_LOCK:
+                cached = _FUNCTION_CACHE.get(key)
+                if cached is not None:
+                    _server._touch(_FUNCTION_CACHE, key)
+            if cached is None:
+                fn_json = _server.function_json(found_fn)
+                # Attach the last `rebrew verify -o` record for this function.
+                record = _server.verify_by_va(coverage).get(found_fn.va)
+                if record is not None:
+                    fn_json["last_verify"] = _server.verify_payload(record)
+                _server._attach_row_documentation(
+                    fn_json,
+                    target=target,
+                    paths=coverage.paths,
+                    project_dir=_server._project_dir(),
+                )
+                cached = _store_function_body(key, json.dumps(fn_json).encode("utf-8"))
+            return _json_ok(cached, **headers)
 
         found_gl = _server.lookup_global(coverage, value)
         if found_gl is not None:
-            return _json_ok(
-                json.dumps(_server.global_json(found_gl)).encode("utf-8"),
-                **headers,
-            )
+            with _FUNCTION_CACHE_LOCK:
+                cached = _FUNCTION_CACHE.get(key)
+                if cached is not None:
+                    _server._touch(_FUNCTION_CACHE, key)
+            if cached is None:
+                cached = _store_function_body(
+                    key, json.dumps(_server.global_json(found_gl)).encode("utf-8")
+                )
+            return _json_ok(cached, **headers)
 
         return _json_err(
             404,
@@ -2718,7 +2783,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | HTTPResponse:
-    """Re-run rebrew catalog + build-db for the project workspace.
+    """Re-run catalog analysis and coverage writing for the project workspace.
 
     Duplicate execution: a rebuild is convergent, so a second run ends in the
     same state as the first, but it is minutes of work and a second write of
@@ -2818,7 +2883,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
-    # check and run catalog/build-db in parallel, tearing the data_*.json /
+    # check and run coverage regeneration in parallel, tearing the data_*.json /
     # documents (TOCTOU).  Non-blocking acquire: a second POST while a regen
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
@@ -2837,7 +2902,7 @@ def handle_regen() -> bytes | HTTPResponse:
             429,
             {
                 "error": "Rate limited: regeneration already running",
-                "detail": "a catalog/build-db run is in progress",
+                "detail": "a coverage regeneration is in progress",
                 # An int, the type the cooldown arm below and every other 429
                 # in the package send, so a client reads one JSON type out of
                 # `retry_after` whichever limit it hit.
@@ -2910,7 +2975,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
 
 def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
-    """Run catalog + build-db in-process. Caller holds _REGEN_LOCK.
+    """Run catalog analysis and coverage writing in-process. Caller holds _REGEN_LOCK.
 
     *key* is the request's ``Idempotency-Key`` (empty when the client sent
     none).  A run that COMPLETED is recorded under it HERE rather than by the

@@ -6,7 +6,7 @@ import { MSG } from "@/lib/format";
 /** Live reload and the Reload button.
  *
  * The stream is `/api/events`: a `db-updated` event (the coverage documents
- * rewritten by `rebrew build-db`) refreshes the map, and EventSource reconnects
+ * rewritten by `rebrew coverage build`) refreshes the map, and EventSource reconnects
  * on its own, so a dropped stream self-heals. Reload regenerates first, which
  * is rate-limited server-side and cooldown-limited here so a double click is
  * not reported as a failure. */

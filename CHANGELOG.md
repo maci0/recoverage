@@ -5,6 +5,44 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The function panel in the dashboard and in Potato Mode shows the note and
+  blocker stored on the function's `MODULE.0xVA` row in
+  `rebrew-functions.toml` when the C file carries no `// NOTE:` or
+  `// BLOCKER:` comment. A comment in the file still wins.
+
+### Breaking
+
+- rebrew 2.23.0 is the minimum version (was 2.16.0). See
+  [UPGRADING.md](docs/UPGRADING.md).
+
+### Changed
+
+- Rebuild hints and documentation name `rebrew coverage build` and
+  `rebrew coverage catalog`, rebrew's current spelling of `build-db` and
+  `catalog`. Regeneration still calls rebrew in process, and the coverage
+  document format is unchanged.
+- Repeat requests for one function or global detail are served from a bounded
+  per-snapshot memo, and the server's caches keep recently read entries
+  instead of evicting them in insertion order.
+- Typing in the search box no longer re-folds every cell name, re-highlights
+  the open code panes, or resolves a section for every hit beyond the rows the
+  list shows; the map reads one precomputed byte per cell for dimming.
+
+### Fixed
+- Browser panel-close verification focuses the coverage map by its role,
+  avoiding an ambiguous match with the details metadata grid.
+- Global detail panels distinguish storage owners, users and declaration sites
+  in the SPA and Potato Mode. Library objects, linker imports, backing views,
+  compiler literals and layout spans retain their provenance; legacy source
+  lists are never assumed to be owners.
+- Missing source paths retain their supplied spelling on Windows; invalid binary
+  paths cannot crash Potato Mode. Browser SBOM dates support the full documented
+  calendar range on Windows. CI probes filesystem capabilities and imports the
+  locale test module through a portable file URL.
+
+
 ## [4.3.0] - 2026-10-02
 
 ### Added
