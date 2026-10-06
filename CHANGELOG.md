@@ -19,6 +19,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Repeat requests for one function or global detail are served from a bounded
   per-snapshot memo, and the server's caches keep recently read entries
   instead of evicting them in insertion order.
+- Typing in the search box no longer re-folds every cell name, re-highlights
+  the open code panes, or resolves a section for every hit beyond the rows the
+  list shows; the map reads one precomputed byte per cell for dimming.
 
 ### Fixed
 - Global detail panels distinguish storage owners, users and declaration sites

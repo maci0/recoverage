@@ -1510,9 +1510,11 @@ class TestSpaDimmedMapSaysSo:
             "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source
         ), "the caption is not the survivor count it claims to be"
         assert "const visible = useMemo(" in map_source
-        # It counts the SAME columns the paint walks, over the whole section.
+        # It counts the SAME column the paint reads. `isDimmed` runs once per
+        # cell when the filter or the search changes; the paint reads the byte.
         assert "isDimmed(pack.states[i] ?? 0" in map_source
-        assert "for (let i = 0; i < pack.n; i += 1)" in map_source
+        assert "dimmed[index] === 1" in map_source
+        assert "for (const byte of dimmed)" in map_source
 
     def test_the_caption_is_hidden_when_nothing_is_dimmed(self) -> None:
         """The ordinary read of a full map is unchanged: the caption is a
@@ -5515,27 +5517,35 @@ class TestSpaSearchFoldsLikeTheServer:
         assert matched is not None, "the match set is no longer a memo"
         body = matched.group(0)
         assert "foldCellName(name)" in body, "the set holds a RAW name the cell never compares"
-        assert "foldCellName(va)" in body, "the bare-VA arm is added unfolded"
+        assert "matched.add(String(va))" in body, (
+            "the VA is folded per hit instead of added as its own digits"
+        )
         assert "new Set<string>(matchedNames)" not in body, (
             "the set is seeded from the raw index keys rather than folded"
         )
 
-        # Every membership test against a cell's name folds the cell's side.
+        # Every membership test against a cell's name folds the cell's side,
+        # once per section rather than once per keystroke.
         assert "matchedFns.has(String(cell.functions" not in app, (
             "a membership test compares the raw cell name against the folded set"
         )
-        assert app.count("foldCellName(cell.functions?.[0])") == 2, (
-            "the section match count and Enter's jump do not both fold the cell name"
+        assert "cells.map((cell) => foldCellName(cell.functions?.[0]))" in app, (
+            "the section's cell names are not folded ahead of the keystroke"
         )
+        assert "foldCellName(cell.functions?.[0])" not in app.replace(
+            "cells.map((cell) => foldCellName(cell.functions?.[0]))", ""
+        ), "a keystroke still folds a cell name instead of reading the column"
 
         # The paint loop cannot fold per cell per frame, so it folds once per
-        # pack, and the loop reads that.
+        # pack into a byte column, and the loop reads that. A Set of freshly
+        # built strings there allocated one string per part per pass per slot.
         map_source = _web("components/CoverageMap.tsx")
         assert 'matchedFns.has(fns[index] ?? "")' not in map_source, (
             "the dim compares a raw packed name against the folded set"
         )
         assert "foldCellName(name)" in map_source, "the packed names are not folded for the dim"
-        assert "isMatched" in map_source, "the dim has no pre-folded lookup to read"
+        assert "new Uint8Array(pack.n)" in map_source, "the dim has no pre-folded column to read"
+        assert "String(index)" not in map_source, "the paint builds a string key per placement"
 
 
 class TestSpaLayoutAndFeedback:
@@ -5783,7 +5793,7 @@ class TestSpaJumpAndSearch:
         # unchanged in what it matches.
         assert "const matched = new Set<string>();" in app
         assert "matched.add(foldCellName(name))" in app
-        assert "matched.add(foldCellName(va))" in app
+        assert "matched.add(String(va))" in app
         assert "coverage.searchIndex[name]?.va" in app
 
     def test_enter_jumps_to_a_matched_block_in_the_section_on_screen(self) -> None:
@@ -5792,8 +5802,8 @@ class TestSpaJumpAndSearch:
         # whatever order the index arrived in, and taking its first entry put
         # the jump in a sibling, switching tabs away from the map the reader
         # was looking at.
-        assert "active?.cells?.findIndex(" in app
-        assert "matchedFns?.has(foldCellName(cell.functions?.[0]))" in app
+        assert "foldedCellNames" in app
+        assert "matchedFns.has(name)" in app
         assert "setSelectedIndex(local);" in app
 
     def test_enter_outside_the_section_lands_on_the_lowest_matched_address(self) -> None:
