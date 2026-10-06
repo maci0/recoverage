@@ -5,6 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- rebrew 2.23.0 is the minimum version (was 2.16.0). See
+  [UPGRADING.md](docs/UPGRADING.md).
+
+### Changed
+
+- Rebuild hints and documentation name `rebrew coverage build` and
+  `rebrew coverage catalog`, rebrew's current spelling of `build-db` and
+  `catalog`. Regeneration still calls rebrew in process, and the coverage
+  document format is unchanged.
+
 ### Fixed
 - Global detail panels distinguish storage owners, users and declaration sites
   in the SPA and Potato Mode. Library objects, linker imports, backing views,

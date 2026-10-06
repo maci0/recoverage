@@ -154,7 +154,7 @@ def _clear_derived_caches_logged(where: str) -> None:
 
 
 # Server-side regen cooldown (seconds): the UI throttles Regenerate clicks, but
-# direct API calls must not be able to trigger repeated rebrew catalog runs.
+# direct API calls must not be able to trigger repeated catalog analysis runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 # clock.monotonic() of the last accepted regen POST, or None before the first
 # one.  None, never 0.0: on Linux the monotonic clock counts from boot, so a
@@ -165,7 +165,7 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 
 # Idempotency-Key ledger for POST /api/regen.  A regen is a whole-pipeline
 # rebuild, so a duplicate that arrives after the first one finished answers
-# from the ledger instead of running catalog+build-db a second time: a client
+# from the ledger instead of running catalog-and-coverage a second time: a client
 # retry (proxy replay, a lost response, a double-clicked Reload) re-sends the
 # request it never saw answered, and re-running it is minutes of duplicated
 # work plus a second write of the coverage documents for an identical result.
@@ -882,7 +882,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """Push a db-updated SSE frame to every connected client queue.
 
     Also invalidates every derived cache (see :func:`_clear_derived_caches`)
-    — an external ``rebrew build-db`` (the documented workflow) must refresh
+    — an external ``rebrew coverage build`` (the documented workflow) must refresh
     the target dropdown, any cached data, and the disassembly derived from
     the original binary, not just the in-app /api/regen path.
     """
@@ -2718,7 +2718,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | HTTPResponse:
-    """Re-run rebrew catalog + build-db for the project workspace.
+    """Re-run catalog analysis and coverage writing for the project workspace.
 
     Duplicate execution: a rebuild is convergent, so a second run ends in the
     same state as the first, but it is minutes of work and a second write of
@@ -2818,7 +2818,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
-    # check and run catalog/build-db in parallel, tearing the data_*.json /
+    # check and run coverage regeneration in parallel, tearing the data_*.json /
     # documents (TOCTOU).  Non-blocking acquire: a second POST while a regen
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
@@ -2837,7 +2837,7 @@ def handle_regen() -> bytes | HTTPResponse:
             429,
             {
                 "error": "Rate limited: regeneration already running",
-                "detail": "a catalog/build-db run is in progress",
+                "detail": "a coverage regeneration is in progress",
                 # An int, the type the cooldown arm below and every other 429
                 # in the package send, so a client reads one JSON type out of
                 # `retry_after` whichever limit it hit.
@@ -2910,7 +2910,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
 
 def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
-    """Run catalog + build-db in-process. Caller holds _REGEN_LOCK.
+    """Run catalog analysis and coverage writing in-process. Caller holds _REGEN_LOCK.
 
     *key* is the request's ``Idempotency-Key`` (empty when the client sent
     none).  A run that COMPLETED is recorded under it HERE rather than by the

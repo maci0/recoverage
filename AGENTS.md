@@ -516,16 +516,16 @@ simpler and strictly wider.
 
 ## Data Pipeline
 
-1. `rebrew build-db` → writes `db/coverage-<target>.toml` (via
+1. `rebrew coverage build` → writes `db/coverage-<target>.toml` (via
    `rebrew.coverage_toml.write_coverage_toml`). It runs the catalog analysis
    in-process per target (`rebrew.catalog.pipeline.build_catalog_data`), so
    there is no snapshot file between the analysis and the document and a
    document cannot describe an older tree than the one that produced it.
    `recoverage --regen` and `POST /api/regen` call the same function; there is
-   no separate `rebrew catalog` step to run first.
+   no separate `rebrew coverage catalog` step to run first.
    - Absorbs jump table / switch data bytes into parent function sizes
    - Links data and thunk cells to their parent function via `parent_function` field
-   - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
+   - `rebrew coverage catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
    - The document stores FACTS only: the sections with their cells, the
      functions, the globals, the verify results and the history. Every aggregate
      the SQLite schema used to materialize (`section_cell_stats`,
@@ -635,8 +635,8 @@ Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=2.16.0` (sibling path dep pinned in `[tool.uv.sources]`; the first
-  release that ships `rebrew.coverage_toml`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
+- `rebrew>=2.23.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
+  release, which ships `rebrew coverage build` and `rebrew.split.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)
@@ -1491,7 +1491,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `coverage-*.toml` glob can match, and the dashboard then serves an empty
   target list that reads as a healthy zero rather than as a wrong path. A value
   that does not exist is allowed, because a service may start before its first
-  `rebrew build-db`; only a non-directory is a misconfiguration. `serve` and
+  `rebrew coverage build`; only a non-directory is a misconfiguration. `serve` and
   `recoverage config` reach it through `_resolve_serve_config`, the sibling
   commands through `_check_env_or_exit`.
 - The frontend is linted with oxlint under the `@rikalabs/oxlint-standards`

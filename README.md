@@ -67,9 +67,9 @@ glance without loading the full SPA.
 ## Installation
 
 > [!IMPORTANT]
-> The wheel declares `rebrew>=2.16.0` as a hard runtime dependency, and rebrew
+> The wheel declares `rebrew>=2.23.0` as a hard runtime dependency, and rebrew
 > is not on the package index yet, so `pip install recoverage` stops at
-> resolution with "No matching distribution found for rebrew>=2.16.0". The
+> resolution with "No matching distribution found for rebrew>=2.23.0". The
 > commands below are the install that works today: recoverage resolves rebrew
 > from a sibling checkout, so the tree must sit beside one. `git clone`
 > recoverage on its own, or any git worktree of it, leaves `uv sync` failing
@@ -122,7 +122,7 @@ is the full record.
 
 ```bash
 # 1. Generate the coverage documents (from your project directory)
-uv run rebrew build-db
+uv run rebrew coverage build
 # Analyzes the target binary and your annotations, then writes one clear-text
 # coverage document per target (db/coverage-<target>.toml) for the dashboard.
 # The catalog analysis runs inside this command, so there is nothing to run
@@ -752,12 +752,12 @@ the `retry_after` body key.
 **recoverage** is designed as a standalone **consumer** of the data that [rebrew](https://github.com/maci0/rebrew) produces. The two packages are intentionally decoupled.
 
 ```text
-rebrew build-db (catalog in-process)  recoverage (Bottle)
+rebrew coverage build (catalog in-process)  recoverage (Bottle)
               │                             │
   db/coverage-<target>.toml  ─────────────▶  Preact dashboard
 ```
 
-1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [COVERAGE_DOCUMENT.md](https://github.com/maci0/rebrew/blob/main/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
+1. **`rebrew coverage build`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [COVERAGE_DOCUMENT.md](https://github.com/maci0/rebrew/blob/main/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew coverage catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
 2. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a **Preact** + Tailwind Single Page Application built from `web/` by `make web-build` (Vite, TypeScript, Tailwind CSS 4) into `assets/app.js` and `assets/style.css`, which the server inlines into the `/` shell, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.

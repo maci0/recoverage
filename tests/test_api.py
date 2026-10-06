@@ -892,7 +892,7 @@ class TestApiFunctions:
         """`total` and the page it paginates must come from ONE snapshot.
 
         They are two passes over the function list, and the documents are
-        re-read per request: a `rebrew build-db` committing between them served
+        re-read per request: a `rebrew coverage build` committing between them served
         a count from one build beside rows from the next (the SPA then
         paginates against a total the rows do not match).  The handler holds one
         frozen CoverageSnapshot; this makes the reader answer with a DIFFERENT
@@ -7190,7 +7190,7 @@ class TestLookupSnapshotsArePinned:
     ``/functions/<va>`` resolves the VA, the exact name and the folded name for
     functions, then the same three for globals, then reads ``verify_results``
     for the winner; the batch POST resolves VAs across functions and globals.
-    A ``rebrew build-db`` committing between those reads used to pair one
+    A ``rebrew coverage build`` committing between those reads used to pair one
     build's function row with the next build's ``last_verify``, which reports a
     size and a diff for a payload that no longer carries them. The pin is the
     snapshot object, so these tests make the reader hand back a DIFFERENT

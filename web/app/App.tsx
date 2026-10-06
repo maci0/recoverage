@@ -1303,7 +1303,7 @@ function MapArea({
       <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">No coverage database</p>
         <p className="m-0 max-w-prose">
-          Run <code className="font-mono text-micro text-text">rebrew build-db</code> to write{" "}
+          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> to write{" "}
           <code className="font-mono text-micro text-text">db/coverage-*.toml</code>, then press Regenerate.
         </p>
       </div>
@@ -1320,7 +1320,7 @@ function MapArea({
           No coverage data for <span className="font-mono">{target}</span>
         </p>
         <p className="m-0 max-w-prose">
-          Run <code className="font-mono text-micro text-text">rebrew build-db</code> to write{" "}
+          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> to write{" "}
           <code className="font-mono text-micro text-text">db/coverage-{target}.toml</code>, then press Regenerate.
         </p>
       </div>

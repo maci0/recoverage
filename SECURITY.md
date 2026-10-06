@@ -59,7 +59,7 @@ every system that saw the request.
 project (`../backups/` by default, or `$RECOVERAGE_BACKUP_DIR`). Since 4.3 the
 coverage documents are the only durable state in the package — `history` and
 `verify_results` are carried forward from the previous document and
-`rebrew build-db` cannot reproduce them — so that archive is the only copy of
+`rebrew coverage build` cannot reproduce them — so that archive is the only copy of
 them that outlives the tree, and losing it is not something a regen repairs.
 
 Members are written `0o600` and every member's size and sha256 are recorded in

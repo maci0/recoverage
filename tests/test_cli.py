@@ -250,7 +250,7 @@ class TestHelpOptionNames:
 class TestRebuildAdvice:
     """Every place the CLI tells a user how to build the documents.
 
-    `rebrew build-db` runs the catalog analysis in process, so an advice
+    `rebrew coverage build` runs the catalog analysis in process, so an advice
     string naming a separate `rebrew catalog` step sends a user looking for
     a command they do not have to run. Both spellings are pinned here, since
     they are separate strings in the source and one can drift alone.
@@ -260,12 +260,12 @@ class TestRebuildAdvice:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         prerequisites = result.output.split("Prerequisites:")[1]
-        assert "rebrew build-db" in prerequisites
+        assert "rebrew coverage build" in prerequisites
         assert "rebrew catalog" not in prerequisites
 
     def test_the_database_error_hint_names_only_build_db(self) -> None:
         assert "rebrew catalog" not in cli._REBUILD_HINT
-        assert "rebrew build-db" in cli._REBUILD_HINT
+        assert "rebrew coverage build" in cli._REBUILD_HINT
 
 
 class TestBareInvocationServes:
@@ -734,7 +734,7 @@ class TestRegenCommand:
         assert result.exit_code == 0
         assert result.stdout_bytes == b""
         err = result.stderr_bytes.decode()
-        assert "Running rebrew catalog" in err
+        assert "Regenerating coverage documents" in err
         assert "Done" in err
 
 

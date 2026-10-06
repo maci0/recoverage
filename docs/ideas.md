@@ -13,7 +13,7 @@ Lightweight summary endpoint returning only coverage stats (percentages, byte co
 Paginated function listing with optional filters (`?status=&search=&sort=&limit=&offset=`).
 
 ### `GET /api/targets/<target>/diff/<va>`
-Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
+Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew diff` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### `GET /api/targets/<target>/xrefs/<va>`
 Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
@@ -67,7 +67,7 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
 ### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run rebrew's catalog analysis and coverage-document writer from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`; there is no separate `rebrew catalog` step to run first).
+Re-run rebrew's catalog analysis and coverage-document writer from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`; there is no separate `rebrew coverage catalog` step to run first).
 
 ---
 

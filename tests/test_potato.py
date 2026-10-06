@@ -4260,7 +4260,7 @@ class TestRenderIsPinnedToOneSnapshot:
     ``render_potato`` loads the snapshot once and hands it to every reader —
     sections, cells, functions, globals and (for the detail panels)
     verify_results — and the grid is the most expensive render in the package,
-    so a ``rebrew build-db`` committing midway is a real window.  The
+    so a ``rebrew coverage build`` committing midway is a real window.  The
     snapshot's immutability is what the SQLite read transaction used to buy:
     the page cannot pair one build's section rows with the next build's cells,
     which would be a grid whose coverage legend disagrees with its own bytes.
@@ -4342,7 +4342,7 @@ class TestRenderIsPinnedToOneSnapshot:
         target = require_target()
 
         # Call 1: the render's token, before it loads the snapshot.  Every call
-        # after it sees a `rebrew build-db` that committed mid-render.
+        # after it sees a `rebrew coverage build` that committed mid-render.
         tokens = iter([(1, 64), *[(2, 64)] * 64])
         monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(tokens))
 

@@ -572,7 +572,7 @@ def check_db_override() -> None:
     """Refuse a coverage-directory override that cannot hold documents.
 
     A path that does not exist is left alone: a service may be started before
-    the first ``rebrew build-db``, and the resolved directory is a default for
+    the first ``rebrew coverage build``, and the resolved directory is a default for
     the next run.  A path that exists and is NOT a directory has no such
     reading.  The likeliest spelling is the one the SQLite era taught:
     ``RECOVERAGE_DB=/srv/coverage.db`` pointing at the old database FILE after

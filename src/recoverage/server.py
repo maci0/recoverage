@@ -978,7 +978,7 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     snapshots = load_all(_db_path())
     if not snapshots:
         raise CoverageTomlError(
-            f"{_db_path()}: no coverage-*.toml document — run 'rebrew build-db'"
+            f"{_db_path()}: no coverage-*.toml document — run 'rebrew coverage build'"
         )
     return snapshots
 
@@ -3735,7 +3735,7 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         {
             "error": "Database unavailable",
             "detail": f"{type(exc).__name__} — "
-            "run 'rebrew build-db' to create or rebuild it; "
+            "run 'rebrew coverage build' to create or rebuild it; "
             "the server log has the full cause",
         },
     )

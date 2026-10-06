@@ -1323,7 +1323,7 @@ def _db_unavailable_page() -> HTTPResponse:
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>recoverage · database unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
             "<body><main><h1>Database unavailable</h1>"
-            "<p>Run 'rebrew build-db' to create or rebuild it, then "
+            "<p>Run 'rebrew coverage build' to create or rebuild it, then "
             '<a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</p></main></body></html>'
         ),
@@ -1454,7 +1454,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     # ONE frozen snapshot for the whole render.  A Potato page reads metadata,
     # sections, cells, functions, globals and (for the detail panels)
     # verify_results, and takes long enough doing it — the grid is the most
-    # expensive render in the package — that a `rebrew build-db` committing
+    # expensive render in the package — that a `rebrew coverage build` committing
     # midway is a real window.  The snapshot's immutability is the pin the read
     # transaction used to provide: the page cannot pair one build's section rows
     # with the next build's cells.

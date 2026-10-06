@@ -132,7 +132,7 @@ class TestScalarParsing:
     def test_db_override_that_does_not_exist_is_allowed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """A service may start before the first ``rebrew build-db``."""
+        """A service may start before the first ``rebrew coverage build``."""
         override = tmp_path / "not-built-yet"
         monkeypatch.setenv("RECOVERAGE_DB", str(override))
         config.check_db_override()
@@ -1073,7 +1073,7 @@ class TestCoverageDirectoryWarnings:
         warnings = _db_warnings(tmp_path)
         assert len(warnings) == 1
         assert str(tmp_path) in warnings[0]
-        assert "rebrew build-db" in warnings[0]
+        assert "rebrew coverage build" in warnings[0]
 
     def test_a_missing_directory_warns_too(self, tmp_path: Path) -> None:
         """The service-started-in-the-wrong-directory case: the resolved

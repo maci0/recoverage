@@ -34,9 +34,25 @@ the next restart.
 
 ## [Unreleased]
 
-Two changes break a consumer, and one changes a field's presence on the wire
+Three changes break a consumer, and one changes a field's presence on the wire
 without changing what the dashboard does with it; everything else in this
 release of the changelog is additive or a fix.
+
+### rebrew 2.23.0 is the floor, and its coverage commands live under `coverage`
+
+Before: recoverage ran against rebrew 2.16.0 or later, and its hints named
+`rebrew build-db`.
+
+After: it needs rebrew 2.23.0. The function-detail panels read a row's note
+and blocker from `rebrew-functions.toml` through an API 2.22.0 added, and
+every rebuild hint names `rebrew coverage build`, the command that replaced
+`rebrew build-db` in 2.22.0.
+
+Do: update the sibling rebrew checkout (`make clone-rebrew`). Change scripts
+that run `rebrew build-db` to `rebrew coverage build`, and `rebrew catalog`
+to `rebrew coverage catalog`. `recoverage regen` and `POST /api/regen` call
+rebrew's generator in process and need no change. Existing coverage documents
+need no migration, and recoverage's CLI and dashboard URLs stay the same.
 
 ### `/data`'s `search_index` omits a redundant `symbol`
 
@@ -217,14 +233,14 @@ Before: the dashboard read a SQLite database at `db/coverage.db`, and
 `RECOVERAGE_DB` named that file.
 
 After: it reads `db/coverage-<target>.toml`, and `RECOVERAGE_DB` names the
-*directory* holding those documents. Run `rebrew build-db` to write them; the
+*directory* holding those documents. Run `rebrew coverage build` to write them; the
 catalog analysis runs inside that command, so there is no step before it. A
 directory holding no `coverage-*.toml` is not an error: `serve` warns that the
 dashboard will list no targets and every figure reads as a healthy zero, which
 is the empty table set the SQLite reader answered from. The 503
 `db_unavailable` is reserved for a document that exists and does not parse.
 
-Do: run `rebrew build-db` once after upgrading, then point `RECOVERAGE_DB` at
+Do: run `rebrew coverage build` once after upgrading, then point `RECOVERAGE_DB` at
 the directory. A value that exists and is not a directory used to resolve to a
 path no `coverage-*.toml` glob could match, serving an empty target list that
 reads as a healthy zero; the next major makes that a startup error instead.
