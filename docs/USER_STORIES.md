@@ -158,9 +158,11 @@ graph TD
 - Search matches against function name, VA (hex), and symbol (case-insensitive)
 - Matching is derived on each render from the payload's `search_index`, so a keystroke updates the map without a round trip
 - Non-matching cells are dimmed, matching cells highlighted
-- The search row reports the live match count, names the query, and says what
-  to do when nothing matched; a Clear button empties the input, and `Escape`
-  does the same from inside the box
+- The field shows the live match count at its end, and the match list opens
+  with a line that names the query and says what to do when nothing matched;
+  neither grows the topbar. A Clear button inside the field empties it, and
+  `Escape` does the same from inside the box. A screen reader hears the same
+  line through a live region
 - The matches are listed under the box in address order, capped at 20 with a
   count of the rest, and a row jumps to its block, so a term matching
   hundreds of names is reachable without narrowing it to one guess at a time

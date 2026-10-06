@@ -26,6 +26,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Repeat requests for one function or global detail are served from a bounded
   per-snapshot memo, and the server's caches keep recently read entries
   instead of evicting them in insertion order.
+- Typing a search no longer grows the topbar and pushes the map down. The match
+  count sits at the end of the field beside Clear, and the guidance line heads
+  the match list, which also opens to say when nothing matched. The list is
+  wider from `lg`, so names and symbols are no longer cut to a few letters,
+  and phones list the name without the repeated symbol.
 - Typing in the search box no longer re-folds every cell name, re-highlights
   the open code panes, or resolves a section for every hit beyond the rows the
   list shows; the map reads one precomputed byte per cell for dimming.
