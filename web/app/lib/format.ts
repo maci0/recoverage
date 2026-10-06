@@ -462,10 +462,22 @@ export function toVa(raw: string | number): number {
   return typeof raw === "string" ? Number.parseInt(raw, 16) : raw;
 }
 
-/** The annotation comments a decompiled C file carries, in the order they
- * appear: what the analyst recorded about the function. `null` when the source
- * is a pane message rather than source. */
-export function extractDocs(source: string): string | null {
+/** Note and blocker from the function's `MODULE.0xVA` row, when the `.c` has no such comment.
+ * An absent detail field is `undefined`, which `exactOptionalPropertyTypes` keeps
+ * distinct from a missing key, so the property accepts that too. */
+export type StoredDocumentation = {
+  note?: string | null | undefined;
+  blocker?: string | null | undefined;
+};
+
+/** Annotation comments from the C file, then a row's note and blocker when those
+ * comments are absent. `// SOURCE:` stays a file comment. A comment already in
+ * the file wins over the row. `null` when the source is a pane message, or when
+ * neither the file nor the row recorded anything. */
+export function extractDocs(
+  source: string,
+  stored?: StoredDocumentation | null,
+): string | null {
   if (source === "" || source.startsWith("(no C") || source.startsWith("(failed")) {
     return null;
   }
@@ -478,11 +490,21 @@ export function extractDocs(source: string): string | null {
     "// SIZE:",
     "// CFLAGS:",
     "// SYMBOL:",
+    "// SOURCE:",
   ];
   const docs = source
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => prefixes.some((prefix) => line.startsWith(prefix)));
+  const has = (prefix: string): boolean => docs.some((line) => line.startsWith(prefix));
+  const note = stored?.note?.trim() ?? "";
+  const blocker = stored?.blocker?.trim() ?? "";
+  if (note !== "" && !has("// NOTE:")) {
+    docs.push(`// NOTE: ${note}`);
+  }
+  if (blocker !== "" && !has("// BLOCKER:")) {
+    docs.push(`// BLOCKER: ${blocker}`);
+  }
   return docs.length > 0 ? docs.join("\n") : null;
 }
 

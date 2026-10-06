@@ -562,8 +562,8 @@ _LIST_TOTAL_CACHE_MAX = 64
 
 
 # The function-detail body, keyed by the snapshot and the requested spelling.
-# A cell click encodes `function_json` plus the verify record, then
-# `json.dumps` it; clicking back to a cell
+# A cell click encodes `function_json` plus the verify record and the
+# documentation attachment, then `json.dumps` it; clicking back to a cell
 # already open did that again. The ETag answers a repeat from the SAME browser
 # with 304, and this answers a repeat from any client. Bounded, and dropped
 # with the other snapshot-derived memos.
@@ -2395,6 +2395,12 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
                 record = verify_rows.get(fn.va)
                 if record is not None:
                     payload["last_verify"] = _server.verify_payload(record)
+                _server._attach_row_documentation(
+                    payload,
+                    target=target,
+                    paths=coverage.paths,
+                    project_dir=_server._project_dir(),
+                )
                 results.append(payload)
                 continue
             # The globals arm is indexed on its first miss: a batch of function
@@ -2450,6 +2456,12 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
                 record = _server.verify_by_va(coverage).get(found_fn.va)
                 if record is not None:
                     fn_json["last_verify"] = _server.verify_payload(record)
+                _server._attach_row_documentation(
+                    fn_json,
+                    target=target,
+                    paths=coverage.paths,
+                    project_dir=_server._project_dir(),
+                )
                 cached = _store_function_body(key, json.dumps(fn_json).encode("utf-8"))
             return _json_ok(cached, **headers)
 

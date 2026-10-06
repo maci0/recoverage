@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The function panel in the dashboard and in Potato Mode shows the note and
+  blocker stored on the function's `MODULE.0xVA` row in
+  `rebrew-functions.toml` when the C file carries no `// NOTE:` or
+  `// BLOCKER:` comment. A comment in the file still wins.
+
 ### Breaking
 
 - rebrew 2.23.0 is the minimum version (was 2.16.0). See

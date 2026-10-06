@@ -124,7 +124,7 @@ it is mounted from.
   * **Copy** button to copy content to clipboard
   * **Open** button to launch a centered modal for expanded viewing
 * **Data Inspector**: When viewing `.rdata`, `.data`, or `.bss` sections, the Assembly view is replaced by a Data Inspector that instantly interprets the raw bytes as `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `float32`, `float64`, and `string (ascii)`.
-* **Documentation**: Extracts annotation comments from C source (`// FUNCTION:`, `// STATUS:`, `// NOTE:`, `// BLOCKER:`, etc.) and displays them in the metadata grid.
+* **Documentation**: For a function whose `.c` has no `// NOTE:` or `// BLOCKER:` comment, shows the note and blocker stored on its `MODULE.0xVA` row. An unmigrated file still shows those comments, and a file-level `// SOURCE:` comment is still read from the file.
 
 ### 4. Modal (`modal`, mounted by `components/CodeModal.tsx`)
 * Rendered through `createPortal` into `document.body`, not into the panel: the modal makes the page behind it `inert`, and a dialog inside an inert region could not be focused
@@ -251,9 +251,9 @@ On function/global selection:
 3. Slice the relevant bytes and format as hex dump
 
 ### Documentation Extraction
-`extractDocs()` parses C source for annotation comments:
+`extractDocs()` shows the note and blocker from the function's `MODULE.0xVA` row when the source has no `// NOTE:` or `// BLOCKER:` comment. An unmigrated file still returns those comments, and a file-level `// SOURCE:` comment is still read from the file. Comment prefixes the extractor still recognizes:
 ```javascript
-// NOTE:, // BLOCKER:, // FUNCTION:, // STATUS:, // ORIGIN:, // SIZE:, // CFLAGS:, // SYMBOL:
+// NOTE:, // BLOCKER:, // FUNCTION:, // STATUS:, // ORIGIN:, // SIZE:, // CFLAGS:, // SYMBOL:, // SOURCE:
 ```
 
 ### Search & Filtering
@@ -332,7 +332,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Hex Dump** view for original bytes
 - **Assembly View** via Capstone for `.text` cells
 - **Global Variables** support
-- **Annotation Extraction** (`// NOTE:`, `// BLOCKER:`, etc.)
+- **Annotation Extraction**: note and blocker from the `MODULE.0xVA` row when the source has no comment, and from `// NOTE:` / `// BLOCKER:` (plus a file-level `// SOURCE:`) when it does
 - **W3C Nu HTML Validator** compliant
 
 ## URL Parameters

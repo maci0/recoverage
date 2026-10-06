@@ -226,8 +226,8 @@ def test_resolve_targets_memo_skips_the_coverage_reader():
 def test_function_detail_memo_skips_the_rebuild():
     """A repeat click of one cell must not rebuild its detail body.
 
-    The body is `function_json` plus the verify record, then `json.dumps`.
-    The ETag saves the browser that already
+    The body is `function_json` plus the verify record and the documentation
+    attachment, then `json.dumps`. The ETag saves the browser that already
     holds it; this memo saves the next request, which arrives without the
     validator (a second dashboard, a prefetch, a client that dropped the tag).
     """

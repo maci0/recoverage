@@ -204,6 +204,8 @@ export type FunctionDetail = {
   cflags?: string | null;
   markerType?: string | null;
   blocker?: string | null;
+  /** Set from the `MODULE.0xVA` row when the coverage document has no note column. */
+  note?: string | null;
   blockerDelta?: number | null;
   ghidra_name?: string | null;
   list_name?: string | null;
