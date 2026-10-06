@@ -34,6 +34,8 @@ the next restart.
 
 ## [Unreleased]
 
+## [5.0.0]
+
 Three changes break a consumer, and one changes a field's presence on the wire
 without changing what the dashboard does with it; everything else in this
 release of the changelog is additive or a fix.

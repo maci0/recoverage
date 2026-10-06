@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-06
+
 ### Added
 
 - The function panel in the dashboard and in Potato Mode shows the note and
