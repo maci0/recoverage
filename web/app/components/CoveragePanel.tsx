@@ -12,7 +12,17 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
 import { cn } from "@/lib/cn";
-import { MSG, count, dateTime, hex, isolate, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
+import {
+  MSG,
+  byteCount,
+  count,
+  dateTime,
+  hex,
+  isolate,
+  similarityPct,
+  sourceFileUrl,
+  toVa,
+} from "@/lib/format";
 import { STATE_LABEL, stateSlot } from "@/states";
 import { Icon } from "@/system/icons/Icon";
 import type { IconName } from "@/system/icons/paths";
@@ -257,7 +267,7 @@ function FunctionMeta({
           {addressHex}
         </a>
       </MetaItem>
-      <MetaItem label="Size">{`${count(fn.size ?? 0)} bytes`}</MetaItem>
+      <MetaItem label="Size">{byteCount(fn.size ?? 0)}</MetaItem>
       <MetaItem label="Offset">{hex(fn.fileOffset ?? 0, 1)}</MetaItem>
       <MetaItem label="Symbol">{fn.symbol ?? MSG.NA}</MetaItem>
       <MetaItem label="Status">
@@ -280,7 +290,7 @@ function FunctionMeta({
       )}
       {fn.blockerDelta == null ? null : (
         <MetaItem label="Delta">
-          <span className="meta-value">{`${count(fn.blockerDelta)} bytes`}</span>
+          <span className="meta-value">{byteCount(fn.blockerDelta)}</span>
         </MetaItem>
       )}
       {fn.ghidra_name != null && fn.ghidra_name !== fn.name ? (
@@ -377,7 +387,10 @@ function PanelMeta({
       <MetaItem label="Range">
         {hex((section?.va ?? 0) + cell.start, 8)}..{hex((section?.va ?? 0) + cell.end, 8)}
       </MetaItem>
-      <MetaItem label="Size">{`${count(cell.span)} bytes`}</MetaItem>
+      {/* `span` is the cell's width in lattice units, not its length: the
+          bytes are `end - start`, the range the row above prints and the
+          Original Bytes pane dumps (Potato's block panel reads the same). */}
+      <MetaItem label="Size">{byteCount(cell.end - cell.start)}</MetaItem>
       {/* A data or thunk cell carries no function of its own: `parent_function`
        * is the link to the function that owns it, and `label` the name rebrew
        * gave it. Both are on the cell the server sends and on the Potato panel

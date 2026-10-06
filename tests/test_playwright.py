@@ -277,6 +277,25 @@ def test_a_selected_block_can_be_closed(page: Any):
     expect(page.locator("#panel")).to_contain_text("Select a block on the map", timeout=15000)
 
 
+def test_a_block_panel_states_its_length_in_bytes(page: Any):
+    """The block panel's Size is the block's byte length, `end - start`.
+
+    It printed `span`, the cell's width in lattice units, so a 16-byte block
+    read "1 bytes" beside a range and a byte dump that both said 16. The
+    sample's fourth `.text` block is 16 bytes of padding with no function.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    page.locator(".grid[role=application]").focus()
+    for _ in range(3):
+        page.keyboard.press("ArrowRight")
+    page.keyboard.press("Enter")
+    panel = page.locator("#panel")
+    expect(panel).to_contain_text("Block 3", timeout=15000)
+    expect(panel).to_contain_text("16 bytes")
+    expect(panel).not_to_contain_text("1 bytes")
+
+
 def test_code_modal_names_one_scroll_region(page: Any):
     """The modal's body is the pane's scroll container, so it carries the
     focusable region and its name. The <pre> inside used to declare a second
