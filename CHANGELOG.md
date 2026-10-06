@@ -31,6 +31,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   list shows; the map reads one precomputed byte per cell for dimming.
 
 ### Fixed
+- Browser panel-close verification focuses the coverage map by its role,
+  avoiding an ambiguous match with the details metadata grid.
 - Global detail panels distinguish storage owners, users and declaration sites
   in the SPA and Potato Mode. Library objects, linker imports, backing views,
   compiler literals and layout spans retain their provenance; legacy source

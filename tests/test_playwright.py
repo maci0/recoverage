@@ -272,7 +272,7 @@ def test_a_selected_block_can_be_closed(page: Any):
     # leaves.
     canvas.click(position=corner)
     assert panel_is_open()
-    page.locator(".grid").focus()
+    page.locator(".grid[role=application]").focus()
     page.keyboard.press("Escape")
     expect(page.locator("#panel")).to_contain_text("Select a block on the map", timeout=15000)
 
