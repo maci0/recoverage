@@ -16,6 +16,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `rebrew coverage catalog`, rebrew's current spelling of `build-db` and
   `catalog`. Regeneration still calls rebrew in process, and the coverage
   document format is unchanged.
+- Repeat requests for one function or global detail are served from a bounded
+  per-snapshot memo, and the server's caches keep recently read entries
+  instead of evicting them in insertion order.
 
 ### Fixed
 - Global detail panels distinguish storage owners, users and declaration sites

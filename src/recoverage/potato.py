@@ -46,6 +46,7 @@ from recoverage.server import (
     _log_safe,
     _newest_mtime_ns,
     _snapshot_db_mtime,
+    _touch,
     app,
     binary_stamp,
     coverage_for,
@@ -1599,6 +1600,8 @@ def _load_section_data(
     if key is not None:
         with _SECTION_DATA_CACHE_LOCK:
             cached = _SECTION_DATA_CACHE.get(key)
+            if cached is not None:
+                _touch(_SECTION_DATA_CACHE, key)
         if cached is not None:
             return cached
 
@@ -1766,6 +1769,8 @@ def _load_grid_cells(
     if key is not None:
         with _GRID_CACHE_LOCK:
             cached = _GRID_CACHE.get(key)
+            if cached is not None:
+                _touch(_GRID_CACHE, key)
         if cached is not None:
             return cached[0], cached[1], cached[2]
 
@@ -1807,6 +1812,8 @@ def _parent_index(key: _GridKey | None, cells: list[dict[str, Any]]) -> dict[str
     if key is not None:
         with _PARENT_INDEX_LOCK:
             cached = _PARENT_INDEX.get(key)
+            if cached is not None:
+                _touch(_PARENT_INDEX, key)
         if cached is not None:
             return cached
     index: dict[str, int] = {}
@@ -1848,6 +1855,8 @@ def _section_stats_cached(
     if key is not None:
         with _POTATO_STATS_CACHE_LOCK:
             cached = _POTATO_STATS_CACHE.get(key)
+            if cached is not None:
+                _touch(_POTATO_STATS_CACHE, key)
         if cached is not None:
             return cached
     stats = _compute_section_stats(coverage, sections, data)

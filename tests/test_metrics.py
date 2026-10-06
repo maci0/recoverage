@@ -910,6 +910,9 @@ class TestProcessGrowthIsBounded:
         "recoverage.api._STATS_CACHE": ("_STATS_CACHE_MAX", "count"),
         # The total-count memo behind a paginated function list.
         "recoverage.api._LIST_TOTAL_CACHE": ("_LIST_TOTAL_CACHE_MAX", "count"),
+        # Function and global detail bodies, keyed on snapshot, target and the
+        # requested spelling.
+        "recoverage.api._FUNCTION_CACHE": ("_FUNCTION_CACHE_MAX", "count"),
         # The idempotency ledger for POST /api/regen, and the in-flight marker
         # beside it, both keyed on the client's own key.
         "recoverage.api._REGEN_COMPLETED_KEYS": ("_REGEN_LEDGER_MAX_ENTRIES", "count"),

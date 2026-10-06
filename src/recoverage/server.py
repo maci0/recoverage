@@ -2802,9 +2802,17 @@ def _snapshot_index[IndexT](
     with _SNAPSHOT_INDEX_LOCK:
         hit = _SNAPSHOT_INDEX.get(key)
     if hit is not None:
+        with _SNAPSHOT_INDEX_LOCK:
+            _touch(_SNAPSHOT_INDEX, key)
         return cast(IndexT, hit[1])
     index = build()
+    # Two requests can miss together and each fold every row. The first build
+    # to store wins; the second's index is dropped, so the memo holds one
+    # table per kind instead of whichever build finished last.
     with _SNAPSHOT_INDEX_LOCK:
+        hit = _SNAPSHOT_INDEX.get(key)
+        if hit is not None:
+            return cast(IndexT, hit[1])
         _evict_oldest(_SNAPSHOT_INDEX, _SNAPSHOT_INDEX_MAX)
         _SNAPSHOT_INDEX[key] = (snap, index)
     return index
@@ -3019,6 +3027,21 @@ def load_metadata(snap: CoverageSnapshot) -> dict[str, Any]:
 
 
 # ── Shared caches ──────────────────────────────────────────────────
+
+
+def _touch(cache: dict[Any, Any], key: Any) -> None:
+    """Move *key* to the newest end of *cache*, if it is present.
+
+    Eviction reads insertion order, and a hit that does not move the key
+    leaves the entry a reader keeps asking for as the oldest one. The cap
+    then drops that entry and the next request rebuilds it. Caller holds
+    the cache's own lock.
+    """
+    try:
+        value = cache.pop(key)
+    except KeyError:
+        return
+    cache[key] = value
 
 
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
