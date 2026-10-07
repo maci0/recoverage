@@ -150,7 +150,7 @@ def _clear_derived_caches_logged(where: str) -> None:
         _clear_derived_caches()
     except Exception:
         _log.warning(
-            "Cache invalidation %s failed — derived data may be stale", where, exc_info=True
+            "Cache invalidation %s failed; derived data may be stale", where, exc_info=True
         )
 
 
@@ -260,7 +260,7 @@ def _regen_replay_response(key: str) -> bytes:
     taken, and a duplicate that reached the second read (below) must get the
     same body and the same log line as one that reached the first.
     """
-    _log.info("Regen %s already completed — answering the retry without re-running", key)
+    _log.info("Regen %s already completed; answering the retry without re-running", key)
     return _json_ok({"ok": True}, Idempotent_Replay="true")
 
 
@@ -273,7 +273,7 @@ def _regen_in_progress_response(key: str) -> HTTPResponse:
     for that key holds the lock, so the 202 cannot be a lie about work that is
     not under way.
     """
-    _log.info("Regen %s is still running — answering the retry as in progress", key)
+    _log.info("Regen %s is still running; answering the retry as in progress", key)
     return _server._json_accepted(
         {"ok": True, "in_progress": True},
         Idempotent_Replay="in-progress",
@@ -877,7 +877,7 @@ def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]
             422,
             {
                 "error": "section has no file backing",
-                "detail": f"section {section!r} has no va/size/fileOffset — "
+                "detail": f"section {section!r} has no va/size/fileOffset; "
                 "raw bytes are only served for file-backed sections",
             },
         )
@@ -970,7 +970,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
             # is on it because without it N wedged streams produce N identical
             # lines and no way to tell which dashboard to go reload.
             _log.warning(
-                "SSE client %s queue full (%d frames) — dropping db-updated event; "
+                "SSE client %s queue full (%d frames); dropping db-updated event; "
                 "that dashboard will not refresh until it is reloaded",
                 peer,
                 _SSE_QUEUE_MAX,
@@ -1013,10 +1013,10 @@ def _db_watcher_loop(stop: threading.Event) -> None:
                     _broadcast_db_updated(snapshot)
                     last = snapshot
             except Exception:
-                _log.exception("DB watcher iteration failed — continuing to poll")
+                _log.exception("DB watcher iteration failed; continuing to poll")
     except BaseException:
         _log.exception(
-            "DB watcher stopped after an unhandled error — live reload is off "
+            "DB watcher stopped after an unhandled error; live reload is off "
             "until the server restarts"
         )
         raise
@@ -1077,7 +1077,7 @@ def _stop_db_watcher() -> None:
             _DB_WATCHER_THREAD.join(timeout=_DB_WATCHER_JOIN_TIMEOUT)
             if _DB_WATCHER_THREAD.is_alive():
                 _log.warning(
-                    "DB watcher did not stop within %.1fs — leaving it referenced "
+                    "DB watcher did not stop within %.1fs; leaving it referenced "
                     "so no second poller starts alongside it",
                     _DB_WATCHER_JOIN_TIMEOUT,
                 )
@@ -3062,7 +3062,7 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
             500,
             {
                 "error": "Regen failed",
-                "detail": f"{type(e).__name__} — the server log has the full cause",
+                "detail": f"{type(e).__name__}; the server log has the full cause",
             },
         )
     except BaseException as e:

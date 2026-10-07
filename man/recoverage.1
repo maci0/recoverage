@@ -20,7 +20,7 @@ sections of a decompilation target, reading rebrew's clear-text coverage
 documents
 .RI ( db/coverage\-<target>.toml ).
 The documents are written by
-.BR "rebrew build\-db" ,
+.BR "rebrew coverage build" ,
 which
 .B recoverage regen
 and
@@ -51,6 +51,9 @@ Start the recoverage dashboard server.
 .B stats
 Print coverage stats as a table, or as JSON with
 .BR \-\-json .
+The table heads its verdict columns EXACT, RELOC, NEAR and STUB, the words
+the dashboard uses, and lists the sections in the order the coverage document
+does, which is the load order rebrew writes.
 .TP
 .B export
 Export coverage data to stdout as JSON, CSV or Markdown.
@@ -59,7 +62,9 @@ Export coverage data to stdout as JSON, CSV or Markdown.
 Check coverage against a threshold (CI gate).
 .TP
 .B regen
-Re-run rebrew catalog + build\-db to regenerate the coverage documents.
+Rebuild the coverage documents in process, as
+.B "rebrew coverage build"
+does.
 Writes nothing to stdout: the progress line, the completion line and every
 error are status and go to stderr, so a script reads the outcome from the exit
 code.
@@ -251,7 +256,7 @@ printed and not something this command can know.
 .B export
 output format: json, csv or md (default: json).
 .TP
-.BI \-\-min\-coverage " MIN_COVERAGE" "\fR, \fP" \-m " MIN_COVERAGE"
+.BI \-\-min\-coverage " PERCENT" "\fR, \fP" \-m " PERCENT"
 .B check
 threshold, 0-100. Required.
 .SH ENVIRONMENT
@@ -395,7 +400,7 @@ recoverage serve \-\-port 3000        # custom port
 recoverage stats \-\-json             # machine-readable statistics
 recoverage export \-\-format csv > coverage.csv
 recoverage check \-\-min\-coverage 50  # CI gate
-recoverage regen                     # re-run catalog + build-db
+recoverage regen                     # rebuild the coverage documents
 recoverage backup                    # verified archive of the documents
 recoverage backup \-\-to /srv/backups/nightly.tar
 recoverage restore /srv/backups/nightly.tar

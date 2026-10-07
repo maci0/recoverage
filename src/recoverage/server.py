@@ -1146,7 +1146,7 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     snapshots = load_all(_db_path())
     if not snapshots:
         raise CoverageTomlError(
-            f"{_db_path()}: no coverage-*.toml document — run 'rebrew coverage build'"
+            f"{_db_path()}: no coverage-*.toml document; run 'rebrew coverage build'"
         )
     return snapshots
 
@@ -2132,7 +2132,7 @@ def _load_dll(target: str) -> bytes | None:
             target,
             config_fp,
             stamp,
-            "No [targets.%s].binary configured — cannot load DLL for target %s",
+            "No [targets.%s].binary configured; cannot load DLL for target %s",
             target,
             target,
         )
@@ -3475,7 +3475,7 @@ def set_auth_cookie() -> None:
         )
     except Exception:
         _log.warning(
-            "Set-Cookie rejected for %s %s — the share link will 401 on every "
+            "Set-Cookie rejected for %s %s: the share link will 401 on every "
             "follow-on request (the page itself still renders)",
             _log_safe(request.method),
             _log_safe(request.path),
@@ -3925,9 +3925,8 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         503,
         {
             "error": "Database unavailable",
-            "detail": f"{type(exc).__name__} — "
-            "run 'rebrew coverage build' to create or rebuild it; "
-            "the server log has the full cause",
+            "detail": f"{type(exc).__name__}: run 'rebrew coverage build' to create or "
+            "rebuild the coverage documents; the server log names the file and the cause",
         },
     )
 

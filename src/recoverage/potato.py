@@ -3668,9 +3668,9 @@ def _render_panel(
             elif gl_data["backing"]:
                 owner_label = f"View of {gl_data['backing']}"
             gl_data["owner"] = ", ".join(getattr(found_gl, "owners", ())) or owner_label
-            gl_data["users"] = ", ".join(getattr(found_gl, "referenced_in", ())) or "—"
+            gl_data["users"] = ", ".join(getattr(found_gl, "referenced_in", ())) or "(n/a)"
             gl_data["declarations"] = (
-                ", ".join(getattr(found_gl, "declared_in", found_gl.files)) or "—"
+                ", ".join(getattr(found_gl, "declared_in", found_gl.files)) or "(n/a)"
             )
             ctx["gl_detail_rows"] = _detail_rows(
                 gl_data,

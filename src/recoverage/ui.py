@@ -133,7 +133,7 @@ def _build_index_payload() -> bytes:
         # install location and the OSError message quotes it, and both are
         # untrusted text as far as the line-safety guarantee goes.
         _log.warning(
-            "style.css unreadable at %s — dashboard SPA will render unstyled (%s: %s)",
+            "style.css unreadable at %s; dashboard SPA will render unstyled (%s: %s)",
             _server._log_safe(str(assets / "style.css")),
             type(exc).__name__,
             _server._log_safe(str(exc)),
@@ -148,7 +148,7 @@ def _build_index_payload() -> bytes:
         # one thing an operator needs before reinstalling is WHICH read failed
         # and WHY, and "app.js missing" is true of all three failure modes.
         _log.warning(
-            "app.js unreadable at %s — dashboard SPA will not function (%s: %s)",
+            "app.js unreadable at %s; dashboard SPA will not function (%s: %s)",
             _server._log_safe(str(assets / "app.js")),
             type(exc).__name__,
             _server._log_safe(str(exc)),
@@ -247,7 +247,7 @@ def warm_index_cache() -> None:
                 CACHED_INDEX_COMPRESSED.setdefault(key, variant)
     except Exception:
         _log.warning(
-            "SPA shell cache warm-up failed — first index request will build it instead",
+            "SPA shell cache warm-up failed; the first index request builds it instead",
             exc_info=True,
         )
 

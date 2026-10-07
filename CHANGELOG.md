@@ -19,6 +19,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   picker without a page reload.
 - The detail panel shows its title and copy buttons once a block is selected.
   Copy Symbol appears only for a function that has a symbol, like Copy SHA.
+- `recoverage stats` heads its verdict columns `EXACT`, `RELOC`, `NEAR` and
+  `STUB` (it called `NEAR` "Match"), groups every count with thousands
+  separators, prints `STUB` dim rather than in the red `check` uses for a
+  failure, and reads "Functions: 316 of 576 matched". The Markdown export
+  takes the same headers and right-aligns its figures.
+- `stats`, `export` and `check` list sections in the order the coverage
+  document does (rebrew writes load order, `.text` first, as the dashboard's
+  tabs do) instead of alphabetically.
+- The `serve` banner prints the listener address only when it differs from
+  the dashboard URL, and labels the coverage directory "Coverage:" instead of
+  "DB:".
+- A command run where there is no coverage document names the fix: run
+  `rebrew coverage build`, or set `RECOVERAGE_DB`.
+- `check` reasons and errors, the regen and backup completion lines, the
+  server's 503 and regen 500 details and the log lines use a colon or a
+  semicolon where they used a dash, so `check --json` now reports, for
+  example, "no tracked cells; coverage is not recorded".
+- Help names its placeholders `PATH`, `ARCHIVE` and `PERCENT` instead of
+  `<str>` and `MIN_COVERAGE`, `--regen` says it rebuilds the coverage
+  documents, and the man page names `rebrew coverage build` instead of the
+  retired `rebrew build-db`.
 
 ### Fixed
 

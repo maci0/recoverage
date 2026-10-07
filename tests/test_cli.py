@@ -698,9 +698,39 @@ class TestStatsCommand:
         assert result.exit_code == 0
         out = result.output
         assert "FAKEDLL" in out
-        assert "Functions: 2/3 matched" in out
+        assert "Functions: 2 of 3 matched" in out
         assert ".text" in out and ".data" in out
         assert "87.5%" in out
+
+    def test_stats_speaks_the_dashboards_vocabulary(self) -> None:
+        """The verdict tokens head their columns and the sections keep load order.
+
+        The table called NEAR "Match", a word no other surface uses, and listed
+        the sections alphabetically, `.bss` first and `.text` last, while the
+        dashboard's tabs and the document itself lead with `.text`.
+        """
+        out = runner.invoke(app, ["stats"]).output
+        header = next(line for line in out.splitlines() if "Section" in line)
+        assert header.split() == [
+            "Section",
+            "Size",
+            "Cells",
+            "EXACT",
+            "RELOC",
+            "NEAR",
+            "STUB",
+            "Coverage",
+        ]
+        assert out.index(".text") < out.index(".data")
+
+    def test_export_md_matches_the_table(self) -> None:
+        """The Markdown export heads and orders its rows like `stats` does,
+        and right-aligns the figures the way the table prints them."""
+        lines = runner.invoke(app, ["export", "--format", "md"]).output.splitlines()
+        assert "| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |" in lines
+        assert "|---------|-----:|------:|------:|------:|-----:|-----:|---------:|" in lines
+        rows = [line for line in lines if line.startswith("| .")]
+        assert [row.split("|")[1].strip() for row in rows] == [".text", ".data"]
 
     def test_stats_with_nonexistent_target(self) -> None:
         result = runner.invoke(app, ["stats", "--target", "NONEXISTENT_TARGET_XYZ"])
@@ -878,7 +908,7 @@ class TestCheckCommand:
         # The per-target SKIP note shares the stream with the JSON error object,
         # so the payload is the last line, not the whole output.
         payload = json.loads(lines[-1])
-        assert payload["error"] == "no sections matched — nothing was checked"
+        assert payload["error"] == "no sections matched; nothing was checked"
         assert "results" not in payload
 
     def test_check_skips_untracked_sections(
@@ -1304,6 +1334,9 @@ class TestCheckMissingDbExitCode:
         result = runner.invoke(app, ["check", "--min-coverage", "60"])
         assert result.exit_code == 2
         assert "coverage not found" in result.output
+        # The plain line names the two ways out: build, or point elsewhere.
+        assert "rebrew coverage build" in result.output
+        assert "RECOVERAGE_DB" in result.output
 
 
 class TestJsonErrorEnvelope:
@@ -1417,7 +1450,7 @@ class TestCheckExplicitUntrackedSectionVerdict:
                 "target": FIXTURE_TARGET,
                 "section": ".rdata",
                 "status": "FAIL",
-                "reason": "no tracked cells — coverage is not recorded for this section",
+                "reason": "no tracked cells; coverage is not recorded for this section",
             }
         ]
         assert "nothing was checked" not in result.output
@@ -1436,7 +1469,7 @@ class TestCheckExplicitUntrackedSectionVerdict:
         result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
         assert result.exit_code == 1
         payload = json.loads(result.output)
-        assert payload["error"] == "no tracked sections — nothing was checked"
+        assert payload["error"] == "no tracked sections; nothing was checked"
 
 
 class TestEphemeralPort:
@@ -1497,7 +1530,7 @@ class TestEphemeralPort:
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert ":0" not in out
-        bound = int(out.split("Listening on: http://127.0.0.1:")[1].split()[0])
+        bound = int(out.split("Serving coverage dashboard at http://127.0.0.1:")[1].split()[0])
         assert bound > 0
         # The config block is the other reader of the value (/api/health
         # serves it), and it has to be the same number.
@@ -2903,3 +2936,31 @@ class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
         pinned.write("db\udcff\n")
         pinned.flush()
         assert sink.getvalue().decode("utf-8").startswith("db")
+
+
+def test_the_banner_names_each_address_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On a loopback bind the dashboard URL and the listener are one address.
+
+    The banner printed it twice ("Serving coverage dashboard at X", then
+    "Listening on: X"), and labelled the coverage directory "DB", a SQLite
+    word for what are now TOML documents.
+    """
+
+    class _StubApp:
+        @staticmethod
+        def run(**_kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+    monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+    monkeypatch.setattr(sys, "argv", ["recoverage", "serve", "--port", "0", "--no-open"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    out = capsys.readouterr().out
+    assert out.count("http://127.0.0.1:") == 1
+    assert "Listening on" not in out
+    assert "  Coverage: " in out
+    assert "  DB: " not in out

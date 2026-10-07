@@ -51,14 +51,14 @@ app = typer.Typer(
         "  recoverage stats --json [dim]# machine-readable statistics[/dim]\n\n"
         "  recoverage export --format csv > coverage.csv [dim]# export as CSV[/dim]\n\n"
         "  recoverage check --min-coverage 50 [dim]# CI gate[/dim]\n\n"
-        "  recoverage regen [dim]# re-run catalog + build-db[/dim]\n\n"
+        "  recoverage regen [dim]# rebuild the coverage documents[/dim]\n\n"
         "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
         "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew coverage build[/dim] first to create "
         "db/coverage-*.toml.\n\n"
         f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "
-        f"for every command). Serves SPA at "
+        f"for every command). Serves the dashboard at "
         f"http://localhost:{config.DEFAULT_PORT}.[/dim]"
     ),
 )
@@ -568,7 +568,11 @@ def _load_coverage_or_exit(
     p = _db_path_or_exit(json_output=json_output)
     if not any(p.glob(COVERAGE_GLOB)):
         _fail(
-            f"Error: coverage not found at {p}",
+            # The fix, not only the fault: the two ways a directory comes to
+            # hold no document are an unbuilt project and a wrong directory.
+            f"Error: coverage not found at {p} (no coverage-*.toml there). Run "
+            "'rebrew coverage build' in the project, or set RECOVERAGE_DB to the "
+            "directory that holds the documents.",
             f"coverage not found at {p}",
             missing_exit_code,
             json_output,
@@ -879,7 +883,7 @@ def _open_when_listening(url: str) -> None:
                 break
         except OSError:
             if clock.monotonic() >= deadline:
-                _log.debug("no listener on %s:%d — not opening a browser", host, port)
+                _log.debug("no listener on %s:%d; not opening a browser", host, port)
                 return
             clock.sleep(_OPEN_LISTEN_POLL_SECONDS)
     open_browser(url)
@@ -930,7 +934,7 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
         proc.wait(timeout=_BROWSER_OPEN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _log.warning(
-            "Browser opener pid %s did not exit within %.1fs of SIGKILL — leaving it unreaped",
+            "Browser opener pid %s did not exit within %.1fs of SIGKILL; leaving it unreaped",
             proc.pid,
             float(_BROWSER_OPEN_TIMEOUT_SECONDS),
         )
@@ -974,7 +978,7 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
         # falling back — "no browser ever appeared" must be diagnosable from
         # the log alone instead of failing silently.
         _log.warning(
-            "Browser opener %s failed to start (%s: %s) — falling back to webbrowser",
+            "Browser opener %s failed to start (%s: %s); falling back to webbrowser",
             args[0],
             type(exc).__name__,
             exc,
@@ -989,7 +993,7 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
         _kill_and_reap(proc)
     except (OSError, subprocess.SubprocessError) as exc:
         _log.warning(
-            "Browser opener %s wait failed (%s: %s) — killing and reaping it",
+            "Browser opener %s wait failed (%s: %s); killing and reaping it",
             args[0],
             type(exc).__name__,
             exc,
@@ -1149,7 +1153,7 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
         )
     if requested and not cors:
         warnings.append(
-            "warning: --cors-origin has no effect without --cors — "
+            "warning: --cors-origin has no effect without --cors: "
             f"CORS processing is disabled, so {len(requested)} origin(s) were "
             "dropped. Pass --cors, or set RECOVERAGE_CORS=1, to enable it."
         )
@@ -1330,9 +1334,13 @@ def _echo_banner(
     directory still fails before the listener binds.
     """
     typer.echo(f"Serving coverage dashboard at {url}")
-    typer.echo(f"  Listening on: {listen_url}")
+    # The listener's own address only where it differs from the URL above (a
+    # wildcard bind, which the browser reaches through loopback): on the
+    # default bind the two lines printed one address twice.
+    if listen_url != url:
+        typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
-    typer.echo(f"  DB: {_db_path_or_exit()}")
+    typer.echo(f"  Coverage: {_db_path_or_exit()}")
     typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
     if cors:
         typer.echo("  CORS: enabled")
@@ -1373,8 +1381,10 @@ def serve(
         "API (including raw binary bytes) is exposed on the network "
         "(env: RECOVERAGE_ALLOW_REMOTE)",
     ),
-    no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
-    regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser automatically"),
+    regen: bool = typer.Option(
+        False, "--regen", help="Regenerate the coverage documents before starting"
+    ),
     cors: bool | None = typer.Option(
         None,
         "--cors/--no-cors",
@@ -1482,7 +1492,7 @@ def serve(
     is_remote = bind not in LOOPBACK_HOSTS
     if is_remote:
         _secho(
-            "warning: serving unauthenticated binary data on the network — "
+            "warning: serving unauthenticated binary data on the network; "
             "restrict access at the firewall.",
             fg=typer.colors.YELLOW,
             err=True,
@@ -1501,7 +1511,7 @@ def serve(
 
     if token:
         _secho(
-            f"token auth enabled — requests need Authorization: Bearer <token> "
+            f"token auth enabled: requests need Authorization: Bearer <token> "
             f"(SPA: open as http://{display_host}:{listen_port}/?token=<token>)",
             fg=typer.colors.GREEN,
         )
@@ -1664,8 +1674,12 @@ def serve(
 #: order they print them.  ONE list: `stats`, `export --format csv` and
 #: `export --format md` are the same table in three spellings, and a key added
 #: to one and forgotten in another renders a header and a body that disagree.
-#: The human labels stay at each call site (the table calls near_match
-#: "Match", the exports its JSON key).
+#: The table and the Markdown export head the verdict columns with the verdict
+#: tokens the dashboard prints (EXACT, RELOC, NEAR, STUB); the CSV keeps the
+#: JSON keys, which are what a script joins on. Every format lists the sections
+#: in the order the coverage document does, which is the load order rebrew
+#: writes and the order the dashboard's tabs follow, not alphabetical (which
+#: put .bss first and the section carrying the work last).
 _SECTION_COLUMNS: tuple[str, ...] = (
     "size_bytes",
     "total_cells",
@@ -1779,7 +1793,7 @@ def stats(
                 # of 2810 functions is 99.96%, and round() printed that line as
                 # "(100.0%)" with a function still unmatched beside it.
                 pct = floor_pct(matched_fn, total_fn, 1)
-                console.print(f"  Functions: {matched_fn}/{total_fn} matched ({pct}%)")
+                console.print(f"  Functions: {matched_fn:,} of {total_fn:,} matched ({pct}%)")
 
             # box.SIMPLE_HEAD, not Rich's stock HEAVY_HEAD: the rest of this
             # product draws a hairline and square corners (--radius-hair, the
@@ -1791,22 +1805,24 @@ def stats(
             table.add_column("Section", style="cyan")
             table.add_column("Size", justify="right")
             table.add_column("Cells", justify="right")
-            table.add_column("Exact", justify="right", style="green")
-            table.add_column("Reloc", justify="right", style="blue")
-            table.add_column("Match", justify="right", style="yellow")
-            table.add_column("Stub", justify="right", style="red")
+            # STUB is dim, not red: it is a stand-in, the dashboard paints it
+            # grey, and red is kept for failure there and in `check`.
+            table.add_column("EXACT", justify="right", style="green")
+            table.add_column("RELOC", justify="right", style="blue")
+            table.add_column("NEAR", justify="right", style="yellow")
+            table.add_column("STUB", justify="right", style="dim")
             table.add_column("Coverage", justify="right", style="bold")
 
-            for sec_name, sec in sorted(data["sections"].items()):
+            for sec_name, sec in data["sections"].items():
                 size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
                 table.add_row(
                     escape(sec_name),
                     f"{size:,} B",
-                    str(cells),
-                    str(exact),
-                    str(reloc),
-                    str(near_match),
-                    str(stub),
+                    f"{cells:,}",
+                    f"{exact:,}",
+                    f"{reloc:,}",
+                    f"{near_match:,}",
+                    f"{stub:,}",
                     f"{pct_1dp(coverage_pct):.1f}%",
                 )
 
@@ -1893,7 +1909,7 @@ def export(
             writer = csv.writer(stream, lineterminator=os.linesep)
             writer.writerow(["target", "section", *_SECTION_COLUMNS])
             for data in all_data:
-                for sec_name, sec in sorted(data["sections"].items()):
+                for sec_name, sec in data["sections"].items():
                     writer.writerow(
                         [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
                     )
@@ -1938,15 +1954,16 @@ def export(
                 # "## <target>" heading above already carries.  Header,
                 # separator, and body must agree on the count or the table
                 # renders ragged.
-                typer.echo("| Section | Size | Cells | Exact | Reloc | Near | Stub | Coverage |")
-                typer.echo("|---------|------|-------|-------|-------|------|------|----------|")
-                for sec_name, sec in sorted(data["sections"].items()):
+                # Figures right-aligned, the way the table prints them.
+                typer.echo("| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |")
+                typer.echo("|---------|-----:|------:|------:|------:|-----:|-----:|---------:|")
+                for sec_name, sec in data["sections"].items():
                     size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
                     typer.echo(
                         f"| {_md_safe(sec_name)}"
-                        f" | {size:,} B | {cells}"
-                        f" | {exact} | {reloc} | {near_match}"
-                        f" | {stub} | {pct_1dp(coverage_pct):.1f}% |"
+                        f" | {size:,} B | {cells:,}"
+                        f" | {exact:,} | {reloc:,} | {near_match:,}"
+                        f" | {stub:,} | {pct_1dp(coverage_pct):.1f}% |"
                     )
                     written += 1
         except BrokenPipeError:
@@ -1980,14 +1997,14 @@ def _section_verdict(
     if untracked and section_requested:
         return (
             "FAIL",
-            {"reason": "no tracked cells — coverage is not recorded for this section"},
-            "has no tracked cells — coverage is not recorded for this section",
+            {"reason": "no tracked cells; coverage is not recorded for this section"},
+            "has no tracked cells; coverage is not recorded for this section",
         )
     if untracked:
         return (
             "SKIP",
-            {"reason": "no tracked cells — coverage not recorded"},
-            "has no tracked cells — coverage not recorded",
+            {"reason": "no tracked cells; coverage is not recorded"},
+            "has no tracked cells; coverage is not recorded",
         )
     # Compare the unrounded ratio, print it floored to 2dp (see docstring).
     # The /100 denominator cancels the helper's own ×100: what matters is that
@@ -2046,7 +2063,7 @@ def check(
         ...,
         "--min-coverage",
         "-m",
-        metavar="MIN_COVERAGE",
+        metavar="PERCENT",
         help="Minimum coverage percentage (0-100)",
     ),
     target: str | None = typer.Option(
@@ -2061,7 +2078,7 @@ def check(
     """Check coverage against a threshold (CI gate).
 
     Exits 0 when every compared section meets the threshold, 1 when one does
-    not, and 2 for a bad --min-coverage or an unreadable database.  A section
+    not, and 2 for a bad --min-coverage or an unreadable coverage document.  A section
     the grid never records matches for is reported SKIP, unless --section
     named it, which FAILs.
     """
@@ -2102,7 +2119,7 @@ def check(
                     continue
                 sections_to_check = {section: sections_to_check[section]}
 
-            for sec_name, sec in sorted(sections_to_check.items()):
+            for sec_name, sec in sections_to_check.items():
                 checked += 1
                 covered = sec.get("covered_bytes") or 0
                 untracked = covered <= 0
@@ -2124,8 +2141,8 @@ def check(
 
     if checked == 0:
         _fail(
-            "Error: no sections matched — nothing was checked.",
-            "no sections matched — nothing was checked",
+            "Error: no sections matched; nothing was checked.",
+            "no sections matched; nothing was checked",
             1,
             json_output,
         )
@@ -2136,8 +2153,8 @@ def check(
         # verdict above; that verdict (and the JSON results array) must reach
         # the caller instead of being replaced by this generic error.
         _fail(
-            "Error: no tracked sections — nothing was checked.",
-            "no tracked sections — nothing was checked",
+            "Error: no tracked sections; nothing was checked.",
+            "no tracked sections; nothing was checked",
             1,
             json_output,
         )
@@ -2181,13 +2198,13 @@ def regen(no_color: bool = _no_color_option()) -> None:
     written = _run_regen(_project_dir())
     if written:
         _secho(
-            f"Done — {len(written)} coverage document(s) written to {written[0].parent}.",
+            f"Done: {len(written)} coverage document(s) written to {written[0].parent}.",
             fg=typer.colors.GREEN,
             err=True,
         )
     else:
         _secho(
-            "Done — rebrew wrote no coverage documents (no built targets).",
+            "Done: rebrew wrote no coverage documents (no built targets).",
             fg=typer.colors.GREEN,
             err=True,
         )
@@ -2198,6 +2215,7 @@ def backup(
     to: str | None = typer.Option(
         None,
         "--to",
+        metavar="PATH",
         help="Archive path, or a directory for the stamped default name. "
         "Defaults to $RECOVERAGE_BACKUP_DIR, else a backups/ beside the coverage directory.",
     ),
@@ -2215,9 +2233,9 @@ def backup(
     produces the current facts and nothing else. This command is the backup
     those documents had no other way to get.
 
-    Every archive is verified before this command reports success — each
-    member's bytes are read back and recomputed against the manifest — so a
-    green exit means a restore could read it, not that a write returned. An
+    Every archive is verified before this command reports success: each
+    member's bytes are read back and checked against the manifest, so a
+    green exit means a restore could read it, not only that a write returned. An
     archive is written through a temp file and fsynced before its name is
     published, so a crash mid-run leaves the previous backup rather than a
     truncated one.
@@ -2269,7 +2287,7 @@ def backup(
         table.add_row(escape(name), f"{size:,}", digest[:16])
     Console(no_color=True if _color_off() else None).print(table)
     _secho(
-        f"Verified backup: {info.path} — {len(info.members)} document(s), "
+        f"Verified backup: {info.path}, {len(info.members)} document(s), "
         f"{info.total_bytes:,} bytes, taken {info.created}.",
         fg=typer.colors.GREEN,
         err=True,
@@ -2278,7 +2296,9 @@ def backup(
 
 @app.command()
 def restore(
-    archive: str = typer.Argument(..., help="Backup archive written by 'recoverage backup' (.tar)"),
+    archive: str = typer.Argument(
+        ..., metavar="ARCHIVE", help="Backup archive written by 'recoverage backup' (.tar)"
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -2288,8 +2308,8 @@ def restore(
 ) -> None:
     """Put a verified backup's documents back into the coverage directory.
 
-    The archive is verified in full — every member read, its size and digest
-    checked against the manifest — before the first document is written, and
+    The archive is verified in full (every member read, its size and digest
+    checked against the manifest) before the first document is written, and
     each document then lands through an atomic replace. A restore therefore
     either completes or leaves the coverage directory exactly as it was; half a
     restore is a dashboard that reads healthy and shows half a project.
@@ -2297,8 +2317,8 @@ def restore(
     Refuses to overwrite a document that differs from the one in the archive
     unless --force is given: rolling a month-old archive over a tree that has
     been rebuilt since discards every status transition since, and 'recoverage
-    regen' cannot recover what a rollback drops. --force overrides exactly
-    that refusal — a corrupt archive, a member that is not a coverage document
+    regen' cannot recover what a rollback drops. --force overrides that
+    refusal only: a corrupt archive, a member that is not a coverage document
     and an unreadable file are refused either way.
 
     Run 'recoverage regen' (or restart the server) after a restore, so the
