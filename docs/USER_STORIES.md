@@ -123,7 +123,7 @@ sequenceDiagram
 > **As a Project Lead**, I want to filter the grid to show only specific match statuses so that I can focus on stubs that need work or celebrate exact matches.
 
 ### Acceptance Criteria
-- Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding), V (Proven), X (Problem)
+- Filter buttons: All, E (EXACT), R (RELOC), N (NEAR), S (STUB), P (Padding), V (PROVEN), X (Problem)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
 - Filtering is a second alpha pass over precomputed cell rects (no per-cell DOM, no CSS class toggling)
@@ -250,19 +250,19 @@ graph TD
 > **As a Project Lead**, I want the coverage figures and the per-status breakdown in one row above the map so that I can track decompilation progress without counting cells.
 
 ### Acceptance Criteria
-- The row above the map is a text strip, not a drawn bar: a target-level `<coverage %> covered · <matched>/<total> functions matched`, then the section on screen, one pill per cell state with its count, and that section's `<coverage %> covered`
+- The row above the map is a text strip, not a drawn bar: `<coverage %> of .text covered, <matched> of <total> functions matched`, then, on another section, that section's own figure, and one pill per cell state with its count
 - Every figure is the one `/stats` serves, so the strip cannot disagree with the map beside it; nothing in it is measured, clipped or laid out from JavaScript. Potato Mode prints the same two lines from the same payload
-- "Matched" counts exact + reloc functions only: a near-match is a miss and a stub is a stand-in. `PROVEN` is a semantic-equivalence promotion, so it counts as covered but not as byte-matched
+- "Matched" counts exact + reloc functions only: a NEAR is a miss and a stub is a stand-in. `PROVEN` is a semantic-equivalence promotion, so it counts as covered but not as byte-matched
 - Each per-state pill is the filter toggle for that state, reachable by keyboard and carrying `aria-pressed`. There is no bar segment and no second vocabulary
 - Coverage stats are derived at load from the stored cells and functions and served via API; while a rebuild is in flight the row says the numbers are on their way rather than vanishing
 
 ```mermaid
 graph LR
     subgraph "Coverage summary row"
-        E["Exact 42%"]
-        R["Reloc 18%"]
-        M["Near-match 15%"]
-        S["Stub 25%"]
+        E["EXACT 42%"]
+        R["RELOC 18%"]
+        M["NEAR 15%"]
+        S["STUB 25%"]
     end
 
     E -->|Click| FE["Toggle filter: exact"]

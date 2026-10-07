@@ -406,7 +406,7 @@ The status rows are `potato.COLORS`, one row per colour. A state `build_db` can 
 
 ### Layout Parity with Normal UI
 - **Stacked topbar**: Logo and section tabs share the first `<tr>`; search, target selector and the progress bar sit in a second `#controls` row (matches the normal UI's topbar, which wraps the same way).
-- **Progress bar stats below the bar**: Coverage stats (`bytes · matched · %`) sit in their own row under the bar image, as in the SPA's stats row, rather than overlaid on it.
+- **Progress bar stats below the bar**: Coverage stats (`<bytes> B · <matched>/<total> functions matched · <pct>% covered`, the byte figure grouped like the CLI's) sit in their own row under the bar image, as in the SPA's stats row, rather than overlaid on it.
 - **Topbar separator**: A 1px `#1c2a38` standalone table between topbar and layout, simulating `border-bottom: 1px solid var(--border)`.
 - **Card wrappers**: Map and Panel sections use `border="1" bordercolor="#1c2a38"` to simulate the normal UI's card containers with subtle cyan-tinted borders.
 - **Grid container**: The grid table is wrapped in an additional bordered table with `cellpadding="8"` and `bgcolor="#0f1216"`, simulating the `.map` card effect.

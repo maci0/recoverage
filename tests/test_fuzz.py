@@ -3955,7 +3955,7 @@ class TestCoverageDocumentContents:
         if code == 503 and html:
             # Potato Mode answers the same unreadable document with its own 503
             # page, and it is a rendered document like any other.
-            assert "database unavailable" in text, f"{path}: a 503 that is not the 503 page"
+            assert "coverage unavailable" in text, f"{path}: a 503 that is not the 503 page"
         elif code == 503:
             # The reader owns one answer for an unreadable document, and it is
             # this envelope on every JSON surface: a 503 that is not

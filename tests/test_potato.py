@@ -3822,7 +3822,7 @@ class TestDbUnavailableContract:
         with pytest.raises(bottle.HTTPResponse) as excinfo:
             render_potato_url("/potato")
         assert excinfo.value.status_code == 503
-        assert "Database unavailable" in excinfo.value.body
+        assert "Coverage unavailable" in excinfo.value.body
 
     def test_potato_route_returns_503_when_db_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3832,7 +3832,7 @@ class TestDbUnavailableContract:
         self._point_at_empty_dir(tmp_path, monkeypatch, "nope")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
-        assert b"Database unavailable" in body
+        assert b"Coverage unavailable" in body
 
     @pytest.mark.parametrize(
         "document",
@@ -3861,7 +3861,7 @@ class TestDbUnavailableContract:
         (directory / "coverage-BROKEN.toml").write_text(document, encoding="utf-8")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
-        assert b"Database unavailable" in body
+        assert b"Coverage unavailable" in body
 
     def test_the_coverage_read_warning_stays_one_log_line(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -4615,12 +4615,27 @@ class TestRenderedPageNamesAndStates:
         monkeypatch.setattr(potato_mod, "resolve_targets", lambda: [{"id": "T", "name": "a"}])
         return render_potato_url(f"/potato?target=T&section=.text{query}")
 
+    def test_states_use_the_dashboards_words(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The legend and the pills name a state the way the dashboard and the
+        CLI do: verdicts as their code tokens, and NEAR as N, never as the
+        "near-match" / M spelling no other surface used."""
+        html = self._render(tmp_path, monkeypatch, "")
+        legend = html[html.index('id="map"') :]
+        for token in ("EXACT", "RELOC", "NEAR", "STUB", "PROVEN"):
+            assert f">{token}&nbsp;&nbsp;<" in legend, token
+        assert "near-match" not in html
+        assert 'aria-label="NEAR, off"' in html
+        assert 'accesskey="n"' in html
+        assert "N:<font" in html and "M:<font" not in html
+
     def test_every_filter_link_names_its_filter_and_its_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         html = self._render(tmp_path, monkeypatch, "&filter=exact")
-        assert 'aria-label="Exact match, on"' in html
-        assert 'aria-label="Stub, off"' in html
+        assert 'aria-label="EXACT, on"' in html
+        assert 'aria-label="STUB, off"' in html
         # Exactly one pill is current: the one the query selected.
         assert html.count('aria-current="true"') == 1
 
@@ -4692,7 +4707,7 @@ class TestRenderedPageNamesAndStates:
         ("document", "heading"),
         [
             (_RENDER_ERROR_BODY, "Internal server error"),
-            (_db_unavailable_page().body, "Database unavailable"),
+            (_db_unavailable_page().body, "Coverage unavailable"),
         ],
     )
     def test_every_page_this_route_answers_carries_the_same_structure(

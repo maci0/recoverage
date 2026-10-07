@@ -36,6 +36,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server's 503 and regen 500 details and the log lines use a colon or a
   semicolon where they used a dash, so `check --json` now reports, for
   example, "no tracked cells; coverage is not recorded".
+- Potato Mode's legend and filter pills name states the way the dashboard and
+  the CLI do: `EXACT`, `RELOC`, `NEAR`, `STUB` and `PROVEN` instead of
+  "exact", "near-match" and "Proven (verified equivalent)". The `NEAR` pill
+  and its access key are `N` (were `M`), and the map header counts it as `N:`.
+- Potato Mode's progress line reads "141,382 B · 316/576 functions matched ·
+  72.2% covered" (was "141382b · 316/576 matched · 72.2%"), and its 503 page
+  is titled "Coverage unavailable", which also covers an empty coverage
+  directory, instead of "Database unavailable".
 - Help names its placeholders `PATH`, `ARCHIVE` and `PERCENT` instead of
   `<str>` and `MIN_COVERAGE`, `--regen` says it rebuilds the coverage
   documents, and the man page names `rebrew coverage build` instead of the

@@ -139,7 +139,7 @@ def test_filters_present(page: Any):
     # The SPA's pills print the verdict words, Potato Mode its one-letter keys,
     # one pill per state in both.
     og_text = " ".join(og_filters)
-    for word, letter in [("EXACT", "E"), ("RELOC", "R"), ("NEAR", "M"), ("STUB", "S")]:
+    for word, letter in [("EXACT", "E"), ("RELOC", "R"), ("NEAR", "N"), ("STUB", "S")]:
         assert word in og_text
         assert letter in pt_filters_text
 

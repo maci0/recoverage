@@ -449,11 +449,11 @@ MARK_ON_DARK_SVG = (
 # entry of their own.  COLORS, not this list, is what must cover every state.
 LEGEND_ITEMS = [
     ("none", "undocumented"),
-    ("exact", "exact"),
-    ("reloc", "reloc"),
-    ("near_match", "near-match"),
-    ("stub", "stub"),
-    ("proven", "proven"),
+    ("exact", "EXACT"),
+    ("reloc", "RELOC"),
+    ("near_match", "NEAR"),
+    ("stub", "STUB"),
+    ("proven", "PROVEN"),
     ("data", "data"),
     ("thunk", "thunk"),
     ("padding", "padding"),
@@ -1048,7 +1048,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
             <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
           </tr><tr>
-            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct_1dp']}}%</b></font></td>
+            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{"{:,}".format(progress['sec_size'])}}</b> B &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> functions matched &middot; <b>{{"%.1f" % progress['coverage_pct_1dp']}}%</b> covered</font></td>
           </tr></table>
         </td></tr>
         % end
@@ -1104,7 +1104,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title, fb_acc in filter_btn_data:
               <td valign="middle">
               <!-- Anchor wraps the whole pill: see the section-tab note above.
-                   These are the worst case — a single-letter label gave E/R/M/S/P
+                   These are the worst case: a single-letter label gave E/R/N/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
                 <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
@@ -1145,7 +1145,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     <td valign="top" width="100%">
       <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> M:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> N:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -1167,7 +1167,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%">
           <!-- Labels the grid for the "[Skip to grid]" target, which lands here.
                It deliberately does NOT repeat the panel header directly above
-               ("Coverage Map - {{section}} ({{block_count}} blocks)") — rendered
+               ("Coverage Map - {{section}} ({{block_count}} blocks)"): rendered
                back to back, the two read as the same heading printed twice. -->
           <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
           <tr><td>
@@ -1333,11 +1333,12 @@ def _db_unavailable_page() -> HTTPResponse:
         body=(
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>recoverage · database unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
-            "<body><main><h1>Database unavailable</h1>"
-            "<p>Run 'rebrew coverage build' to create or rebuild it, then "
+            f"<title>recoverage · coverage unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
+            "<body><main><h1>Coverage unavailable</h1>"
+            "<p>The coverage directory holds no document that could be read. Run "
+            "'rebrew coverage build' to write or rebuild them, then "
             '<a href="/potato">retry Potato Mode</a> or '
-            '<a href="/">open the SPA</a>.</p></main></body></html>'
+            '<a href="/">open the dashboard</a>.</p></main></body></html>'
         ),
         headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
     )
@@ -2135,18 +2136,21 @@ def _accesskey_attr(used: set[str], key: str) -> _AccessKey:
 #: which entry a row stands for.  The label letter is also the pill's
 #: accesskey, resolved through :func:`_accesskey_attr` so a letter another
 #: control already holds is dropped rather than duplicated.
+#: A pill's name is the word the dashboard's pill and legend print for the
+#: state (verdicts as their code tokens), and its letter is that word's initial
+#: unless another pill holds it: PROVEN takes V because padding holds P.
 FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
-    ("exact", "E", "Exact match"),
-    ("reloc", "R", "Reloc match"),
-    ("near_match", "M", "Near-match"),
-    ("stub", "S", "Stub"),
-    ("padding", "P", "Padding"),
+    ("exact", "E", "EXACT"),
+    ("reloc", "R", "RELOC"),
+    ("near_match", "N", "NEAR"),
+    ("stub", "S", "STUB"),
+    ("padding", "P", "padding"),
     # The two states the legend names that had no pill: a proven section
     # and a cell the build or the classifier failed on.  Both were
     # painted and both dimmed under every pill, so the operator looking
     # for the failures had no control to narrow the map with.
-    ("proven", "V", "Proven (verified equivalent)"),
-    ("problem", "X", "Problem (build or classification failure)"),
+    ("proven", "V", "PROVEN"),
+    ("problem", "X", "problem"),
 )
 
 
