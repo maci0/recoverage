@@ -260,6 +260,11 @@ function FunctionMeta({
   const fnSimilarity = similarityPct(fn.similarity);
   const lastVerifySimilarity = similarityPct(fn.last_verify?.similarity);
   const updatedBy = filled(fn.updated_by);
+  const symbol = filled(fn.symbol);
+  const ghidraName = filled(fn.ghidra_name);
+  const listName = filled(fn.list_name);
+  const sizeReason = filled(fn.size_reason);
+  const sha256 = filled(fn.sha256);
   const updatedAt = filled(fn.updated_at);
   return (
     <dl className={META_GRID}>
@@ -278,7 +283,7 @@ function FunctionMeta({
       </MetaItem>
       <MetaItem label="Size">{byteCount(fn.size ?? 0)}</MetaItem>
       <MetaItem label="Offset">{hex(fn.fileOffset ?? 0, 1)}</MetaItem>
-      <MetaItem label="Symbol">{fn.symbol ?? MSG.NA}</MetaItem>
+      <MetaItem label="Symbol">{symbol ?? MSG.NA}</MetaItem>
       <MetaItem label="Status">
         <span
           className={cn(
@@ -302,13 +307,13 @@ function FunctionMeta({
           <span className="meta-value">{byteCount(fn.blockerDelta)}</span>
         </MetaItem>
       )}
-      {fn.ghidra_name != null && fn.ghidra_name !== fn.name ? (
-        <MetaItem label="Ghidra">{fn.ghidra_name}</MetaItem>
+      {ghidraName !== null && ghidraName !== fn.name ? (
+        <MetaItem label="Ghidra">{ghidraName}</MetaItem>
       ) : null}
-      {fn.list_name != null && fn.list_name !== fn.name ? (
-        <MetaItem label="Function list">{fn.list_name}</MetaItem>
+      {listName !== null && listName !== fn.name ? (
+        <MetaItem label="Function list">{listName}</MetaItem>
       ) : null}
-      {fn.size_reason == null ? null : <MetaItem label="Size source">{fn.size_reason}</MetaItem>}
+      {sizeReason === null ? null : <MetaItem label="Size source">{sizeReason}</MetaItem>}
       {fn.last_verify == null ? null : (
         <MetaItem label="Verified">
           {`${fn.last_verify.verified_at == null ? "" : dateTime(fn.last_verify.verified_at)}${
@@ -336,14 +341,14 @@ function FunctionMeta({
       {fnSimilarity === null ? null : <MetaItem label="Similarity">{fnSimilarity}</MetaItem>}
       {fn.is_thunk === true ? <MetaItem label="Type">IAT thunk (not reversible)</MetaItem> : null}
       {fn.is_export === true ? <MetaItem label="Type">Exported function</MetaItem> : null}
-      {fn.sha256 == null ? null : (
+      {sha256 === null ? null : (
         // The row shows enough of the digest to recognise it beside another
         // report, and the rest is one hover away: a digest truncated with no
         // way to read or take the whole of it is a value the reader cannot
         // use, and the panel head's Copy button is how the rest of this panel
         // hands over a value verbatim.
         <MetaItem label="SHA256">
-          <span title={fn.sha256}>{`${fn.sha256.slice(0, 16)}…`}</span>
+          <span title={sha256}>{`${sha256.slice(0, 16)}…`}</span>
         </MetaItem>
       )}
       {sourceItem}
@@ -469,7 +474,8 @@ export function CoveragePanel({
   // function carries none. Shown beside the other two copy controls because a
   // digest the panel abbreviates is otherwise a value no reader can take
   // anywhere: it is the one row whose full text is longer than the row.
-  const copySha = fn?.sha256 ?? null;
+  const copySha = filled(fn?.sha256);
+  const copySymbol = filled(fn?.symbol);
   // The Data Inspector's readings as text, for the Copy and Open its pane
   // carries. Empty when the section is `.text` (no inspector) and when the
   // block has no file-backed bytes, which is the same empty message the pane
@@ -519,10 +525,10 @@ export function CoveragePanel({
               {/* Offered when there is a symbol to take, like Copy SHA: a
                   block with no function would otherwise carry a button that
                   can never do anything. */}
-              {fn?.symbol == null ? null : (
+              {copySymbol === null ? null : (
                 <CopyButton
                   label="Copy Symbol"
-                  value={fn.symbol}
+                  value={copySymbol}
                   ariaLabel="Copy Symbol"
                   title="Copy the function's symbol"
                 />

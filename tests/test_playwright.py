@@ -484,3 +484,22 @@ def test_the_panel_head_appears_with_a_selection(page: Any):
     page.keyboard.press("Enter")
     expect(panel.locator(".panel-head")).to_have_count(1, timeout=15000)
     expect(panel).to_have_attribute("aria-labelledby", "panel-title")
+
+
+def test_every_panel_row_has_a_value(page: Any):
+    """A row the panel draws says something.
+
+    rebrew writes an unset text column as "" rather than leaving it out, and
+    the panel treated "" as a value: a Ghidra and a Function list label over
+    nothing, "Size source" over nothing, a SHA256 of "…", and "Updated by ()".
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    page.fill("#search-input", "_func_a")
+    page.keyboard.press("Enter")
+    # The function's own grid, not the block facts drawn while it loads.
+    expect(page.locator("#panel dt", has_text="Status")).to_be_visible(timeout=15000)
+    values = page.locator("#panel .panel-head dd").all_inner_texts()
+    assert values, "the panel drew no metadata"
+    blank = [value for value in values if value.strip() in ("", "…", "()")]
+    assert not blank, f"rows with no value: {blank}"

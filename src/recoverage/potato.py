@@ -1190,7 +1190,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <table role="presentation" id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
 <td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
 % if db_mtime:
- &middot; DB updated <time datetime="{{db_mtime_iso}}">{{db_mtime}}</time>
+ &middot; coverage updated <time datetime="{{db_mtime_iso}}">{{db_mtime}}</time>
 % end
 </font></td>
 <td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
@@ -1512,7 +1512,7 @@ def handle_potato() -> bytes | Any:
         # /data, /asm, /bytes.  The newest mtime joins it because the footer
         # renders it: the fingerprint keys on content, so a rebuild that wrote
         # the same bytes keeps it, and a 304 would keep the previous build's
-        # "DB updated" stamp.
+        # "coverage updated" stamp.
         qs = request.query_string
         if isinstance(qs, bytes):
             qs = qs.decode("utf-8", errors="replace")

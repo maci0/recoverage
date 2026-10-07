@@ -41,6 +41,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the CLI do: `EXACT`, `RELOC`, `NEAR`, `STUB` and `PROVEN` instead of
   "exact", "near-match" and "Proven (verified equivalent)". The `NEAR` pill
   and its access key are `N` (were `M`), and the map header counts it as `N:`.
+- Potato Mode's footer stamps "coverage updated" instead of "DB updated".
 - Potato Mode's progress line reads "141,382 B · 316/576 functions matched ·
   72.2% covered" (was "141382b · 316/576 matched · 72.2%"), and its 503 page
   is titled "Coverage unavailable", which also covers an empty coverage
@@ -57,9 +58,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   targets" together. It now shows the failure once, with its Retry.
 - Enter in the search box jumped to the match but left the result list open
   over the head of the detail panel it had just filled.
-- A function whose document left `updated_by` empty showed "Updated by ()".
-  Empty document columns read `(n/a)`, which replaces the "?" and "—"
-  placeholders some rows used.
+- The detail panel treated a column rebrew leaves empty (`""`) as a value: it
+  drew Ghidra, Function list and Size source labels over nothing, a SHA256 of
+  "…" with a Copy SHA that copied nothing, and "Updated by ()". Those rows are
+  left out now, and a required column that is empty reads `(n/a)`, which
+  replaces the "?" and "—" placeholders some rows used.
 - The coverage summary line names why it is unavailable instead of only
   saying that it is.
 

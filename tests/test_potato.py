@@ -1496,7 +1496,7 @@ def test_back_to_main_link():
 def test_footer_db_date():
     target = require_target()
     html = render_potato_url(f"/potato?target={target}")
-    assert "DB updated" in html
+    assert "coverage updated" in html
     assert "recoverage" in html
 
 
@@ -1683,7 +1683,7 @@ class TestDbUpdatedLabel:
         self._doc(directory, "PAGE", 1_700_000_000_000_000_000)
         monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         page = render_potato_url("/potato?target=PAGE")
-        assert "DB updated" in page
+        assert "coverage updated" in page
         assert scans == 1
 
 
