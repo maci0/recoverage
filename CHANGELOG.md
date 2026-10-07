@@ -52,6 +52,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   72.2% covered" (was "141382b · 316/576 matched · 72.2%"), and its 503 page
   is titled "Coverage unavailable", which also covers an empty coverage
   directory, instead of "Database unavailable".
+- `recoverage --help` lists its examples as one aligned block that fits 80
+  columns.
 - Counts in CLI status lines take their noun ("1 document", "2 origins were")
   instead of "document(s)".
 - Help names its placeholders `PATH`, `ARCHIVE` and `PERCENT` instead of

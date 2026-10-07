@@ -34,6 +34,22 @@ from recoverage.devserver import (
 )
 from recoverage.documents import COVERAGE_GLOB
 
+#: The root help's examples, as (command, what it does), printed as one block
+#: with the comments in a column: typer hands the epilog to Rich as written, so
+#: a single newline stays a line break and the padding survives. Every line
+#: fits the 80 columns a terminal opens at.
+_HELP_EXAMPLES: tuple[tuple[str, str], ...] = (
+    ("recoverage", f"start the dashboard on port {config.DEFAULT_PORT}"),
+    ("recoverage serve --port 3000", "the same, on another port"),
+    ("recoverage stats", "coverage per section, as a table"),
+    ("recoverage export -f csv > cov.csv", "the same rows as CSV"),
+    ("recoverage check --min-coverage 50", "CI gate: exit 1 below 50%"),
+    ("recoverage regen", "rebuild the coverage documents"),
+    ("recoverage open", "open the running dashboard"),
+    ("recoverage config", "what serve would start with"),
+)
+_HELP_EXAMPLE_WIDTH = max(len(command) for command, _ in _HELP_EXAMPLES)
+
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
     add_completion=True,
@@ -45,16 +61,11 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
     epilog=(
         "[bold]Examples:[/bold]\n\n"
-        f"  recoverage [dim]# start the dashboard (port {config.DEFAULT_PORT})[/dim]\n\n"
-        f"  recoverage serve [dim]# same thing, spelled out[/dim]\n\n"
-        "  recoverage serve --port 3000 [dim]# custom port[/dim]\n\n"
-        "  recoverage stats --json [dim]# machine-readable statistics[/dim]\n\n"
-        "  recoverage export --format csv > coverage.csv [dim]# export as CSV[/dim]\n\n"
-        "  recoverage check --min-coverage 50 [dim]# CI gate[/dim]\n\n"
-        "  recoverage regen [dim]# rebuild the coverage documents[/dim]\n\n"
-        "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
-        "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
-        "[bold]Prerequisites:[/bold]\n\n"
+        + "\n".join(
+            f"  {command.ljust(_HELP_EXAMPLE_WIDTH)}  [dim]# {comment}[/dim]"
+            for command, comment in _HELP_EXAMPLES
+        )
+        + "\n\n[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew coverage build[/dim] first to create "
         "db/coverage-*.toml.\n\n"
         f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "

@@ -2994,3 +2994,16 @@ class TestOpenWarnsWithoutAListener:
             result = runner.invoke(app, ["open", "--port", str(port)])
         assert result.exit_code == 0
         assert "nothing is listening" not in result.stderr
+
+
+def test_the_root_help_examples_line_up_inside_80_columns() -> None:
+    """The examples are one block, each comment in one column, and no line is
+    wider than the terminal a reader opens. One paragraph per example spread
+    nine lines over eighteen, with every comment at a different column."""
+    result = CliRunner().invoke(app, ["--help"], terminal_width=80)
+    lines = result.output.splitlines()
+    start = lines.index(next(line for line in lines if line.strip() == "Examples:"))
+    block = [line for line in lines[start + 2 :] if line.strip()][: len(cli._HELP_EXAMPLES)]
+    assert all(line.lstrip().startswith("recoverage") for line in block), block
+    assert len({line.index("#") for line in block}) == 1, block
+    assert all(len(line.rstrip()) <= 80 for line in lines), "a help line overflows 80 columns"
