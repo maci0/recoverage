@@ -34,6 +34,45 @@ the next restart.
 
 ## [Unreleased]
 
+## [6.0.0]
+
+The dashboard, the HTTP API and the coverage document are unchanged. Four
+pieces of CLI output a script may read changed.
+
+### Section order in `stats`, `export` and `check`
+
+Before: sections were listed alphabetically (`.bss` first).
+
+After: they follow the coverage document, which rebrew writes in load order
+with `.text` first, matching the dashboard's tabs. CSV rows follow the same
+order.
+
+Do: sort by the `section` column if a script depended on alphabetical rows.
+
+### `NEAR` is named `NEAR` everywhere
+
+Before: `stats` and the Markdown export headed the near-match column "Match".
+
+After: the column is `NEAR`, beside `EXACT`, `RELOC` and `STUB`.
+
+Do: change a script that looks for the "Match" header to `NEAR`.
+
+### `check --json` reason text
+
+Before: a reason read, for example, "no tracked cells — coverage is not
+recorded".
+
+After: "no tracked cells; coverage is not recorded". Error and completion lines
+use a colon or a semicolon the same way.
+
+Do: match on the exit code or the structured fields, not on reason prose.
+
+### Potato Mode's `NEAR` access key
+
+Before: the `NEAR` filter pill was `M` and took the `M` access key.
+
+After: it is `N`. The map header counts it as `N:`.
+
 ## [5.0.0]
 
 Three changes break a consumer, and one changes a field's presence on the wire

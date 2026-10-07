@@ -5,11 +5,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-10-07
+
 ### Added
 
 - `recoverage open` warns on stderr when nothing accepts a connection at the
   address it opens (a mistyped port, a dashboard that is not running), and
   still opens the tab.
+
+### Breaking
+
+- CLI output a script may parse changed: `stats`, `export` and `check` list
+  sections in document order, `stats` and the Markdown export head the `NEAR`
+  column `NEAR` (was "Match"), `check --json` reasons use a semicolon where they
+  used a dash, and Potato Mode's `NEAR` access key is `N` (was `M`). See
+  [UPGRADING.md](docs/UPGRADING.md).
 
 ### Changed
 

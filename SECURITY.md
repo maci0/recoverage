@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-The current release line is `5.x`. `recoverage` is a single-developer,
+The current release line is `6.x`. `recoverage` is a single-developer,
 single-machine tool: it is supported on the version the maintainer ships, and
 older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 5.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v5.0.0`) | yes |
-| < 5.0.0 | no |
+| 6.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v6.0.0`) | yes |
+| < 6.0.0 | no |
 
 The supported line is what `__version__` says, so a build that disagrees with
 the tag is the thing to look at first rather than this table.
