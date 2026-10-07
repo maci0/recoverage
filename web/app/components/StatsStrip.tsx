@@ -124,7 +124,10 @@ export function StatsStrip({
  * The headline is `.text`'s figure and says so. Another section's own figure
  * closes the line, scoped by its name: on a complete project both read
  * "100.0%", and a figure a reader cannot scope is a figure they cannot use. On
- * `.text` itself the second figure would repeat the first, so it is left out. */
+ * `.text` the second figure is left out when it would repeat the first; it
+ * differs only when the cells do not span the declared section, since the
+ * headline divides by the declared size and the section row by the bytes its
+ * cells cover. */
 function Summary({
   stats,
   error,
@@ -157,7 +160,9 @@ function Summary({
         {count(summary.matchedFunctions)} of {count(summary.totalFunctions)}{" "}
         {plural(summary.matchedFunctions, { one: "function", other: "functions" })}{" "}
         matched
-        {section === null || section === TEXT_SECTION || sectionPct === null ? null : (
+        {section === null ||
+        sectionPct === null ||
+        (section === TEXT_SECTION && percentLabel(sectionPct) === percentLabel(summary.coveragePercent)) ? null : (
           <>
             {" · "}
             <span className="font-mono text-text">{section}</span> {percentLabel(sectionPct)}

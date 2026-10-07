@@ -250,7 +250,7 @@ graph TD
 > **As a Project Lead**, I want the coverage figures and the per-status breakdown in one row above the map so that I can track decompilation progress without counting cells.
 
 ### Acceptance Criteria
-- The row above the map is a text strip, not a drawn bar: `<coverage %> of .text covered, <matched> of <total> functions matched`, then, on another section, that section's own figure, and one pill per cell state with its count
+- The row above the map is a text strip, not a drawn bar: `<coverage %> of .text covered, <matched> of <total> functions matched`, then the section on screen's own figure (left out on `.text` when it repeats the headline), and one pill per cell state with its count
 - Every figure is the one `/stats` serves, so the strip cannot disagree with the map beside it; nothing in it is measured, clipped or laid out from JavaScript. Potato Mode prints the same two lines from the same payload
 - "Matched" counts exact + reloc functions only: a NEAR is a miss and a stub is a stand-in. `PROVEN` is a semantic-equivalence promotion, so it counts as covered but not as byte-matched
 - Each per-state pill is the filter toggle for that state, reachable by keyboard and carrying `aria-pressed`. There is no bar segment and no second vocabulary

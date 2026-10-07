@@ -9,7 +9,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The dashboard headline reads "72.2% of `.text` covered": the figure is
   `.text`'s byte coverage, and "of the target covered" claimed the data
-  sections too. On `.text` itself the section figure that repeated it is gone.
+  sections too. On `.text` the section figure follows only when it differs from
+  the headline instead of repeating it.
 - The legend sets the verdicts (`EXACT`, `RELOC`, `NEAR`, `STUB`, `PROVEN`) in
   the mono the filter pills already used, so the two keys to the map match.
 - An empty project is one card, "No coverage documents yet", without the

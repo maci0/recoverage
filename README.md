@@ -27,7 +27,7 @@ block that covers it.
 | Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
-| Interactive progress bar | Segmented by state; click a segment to filter the grid |
+| Filter by verdict | One pill per state with its block count; click one to dim every other block |
 | First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~40 KB today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
@@ -340,6 +340,23 @@ recoverage stats --target SERVER    # single target
 recoverage stats --json             # machine-readable
 ```
 
+Against the synthetic coverage document the test suite builds
+(`tests/coverage_fixture.py`):
+
+```console
+$ recoverage stats
+FAKEDLL
+  Functions: 2 of 3 matched (66.6%)
+
+  Section      Size   Cells   EXACT   RELOC   NEAR   STUB   Coverage
+ ────────────────────────────────────────────────────────────────────
+  .text     4,096 B       8       2       1      0      1      87.5%
+  .data     1,024 B       1       0       0      0      0     100.0%
+```
+
+The verdict columns use the dashboard's words, and the sections follow the
+document's load order, `.text` first.
+
 With `--json`, a failure is reported on stdout as
 `{"error": "...", "exit_code": N}` rather than as a stderr line, so a script
 parses one shape whether the run failed or not.  `check --json` and
@@ -391,8 +408,9 @@ Re-run the catalog analysis to regenerate the coverage documents.
 recoverage regen
 ```
 
-recoverage calls rebrew's catalog and build-db functions as a library, in
-process, rather than spawning the `rebrew` console script.  The run has no
+recoverage calls rebrew's `coverage build` (catalog analysis plus the document
+writer) as a library, in process, rather than spawning the `rebrew` console
+script.  The run has no
 timeout, so it always runs to completion.
 
 Nothing reaches stdout: the progress line, the completion line and every error
