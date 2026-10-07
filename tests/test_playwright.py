@@ -388,3 +388,97 @@ def test_phone_load_holds_its_layout(page: Any):
 
     assert page.evaluate("window.__emptyStateSeen") is False
     assert page.evaluate("window.__cls") < GOOD_CLS
+
+
+def test_an_empty_project_shows_one_empty_state(page: Any):
+    """A project with no documents is one card, not a dashboard of dead parts.
+
+    The empty state used to sit among the filter pills, the legend, an empty
+    section-tab frame and a detail panel offering Copy VA and Copy Symbol, all
+    describing a map that did not exist.
+    """
+    page.route(
+        "**/api/targets",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"targets": []}'
+        ),
+    )
+    page.goto(f"{BASE_URL}/")
+    expect(page.locator("#section-panel")).to_contain_text("No coverage documents yet")
+    expect(page.locator(".filter-btn")).to_have_count(0)
+    expect(page.locator(".legend")).to_be_hidden()
+    expect(page.locator(".tabs")).to_be_hidden()
+    expect(page.locator("#panel")).to_have_count(0)
+
+
+def test_a_failed_target_list_is_reported_once(page: Any):
+    """A refused target list is the failure, not an empty project.
+
+    It drew the error line, then the "no coverage" empty state under it telling
+    the reader to build documents, and a target picker stuck on "Loading
+    targets" beside both.
+    """
+    page.route(
+        "**/api/targets",
+        lambda route: route.fulfill(
+            status=503,
+            content_type="application/json",
+            body='{"error": "Database unavailable", "code": "db_unavailable", "detail": "x"}',
+        ),
+    )
+    page.goto(f"{BASE_URL}/")
+    alerts = page.locator("[role=alert]")
+    expect(alerts).to_have_count(1)
+    expect(alerts).to_contain_text("Database unavailable")
+    expect(alerts.get_by_role("button", name="Retry")).to_have_count(1)
+    # The empty state is the card that tells the reader to run the build.
+    expect(page.locator("#section-panel code", has_text="rebrew coverage build")).to_have_count(0)
+    expect(page.get_by_label("Target binary")).to_have_count(0)
+
+
+def test_enter_on_a_search_closes_its_list(page: Any):
+    """Enter jumps to a match, and the list that offered it goes with it.
+
+    Left open, it lay over the head of the detail panel the jump had just
+    filled, hiding the name of the function the reader asked for.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    name = page.evaluate(
+        """async (base) => {
+            const targets = await (await fetch(`${base}/api/targets`)).json();
+            const target = targets.targets?.[0]?.id;
+            if (!target) return null;
+            const data = await (await fetch(
+                `${base}/api/targets/${encodeURIComponent(target)}/data?section=.text`
+            )).json();
+            return Object.keys(data.search_index ?? {})[0] ?? null;
+        }""",
+        BASE_URL,
+    )
+    if name is None:
+        pytest.skip("the sample database has no function to search for")
+    page.fill("#search-input", name)
+    expect(page.locator(".search-results")).to_have_count(1, timeout=15000)
+    page.keyboard.press("Enter")
+    expect(page.locator(".search-results")).to_have_count(0)
+    expect(page.locator("#panel-title")).to_be_visible(timeout=15000)
+
+
+def test_the_panel_head_appears_with_a_selection(page: Any):
+    """Before a selection the panel is its hint alone.
+
+    Its head named the section the tabs already name, over Copy VA and Copy
+    Symbol buttons with nothing to copy.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    panel = page.locator("#panel")
+    expect(panel).to_have_attribute("aria-label", "Block detail")
+    expect(panel.locator(".panel-head")).to_have_count(0)
+    expect(panel.get_by_role("button", name="Copy VA")).to_have_count(0)
+
+    page.locator(".grid[role=application]").focus()
+    page.keyboard.press("Enter")
+    expect(panel.locator(".panel-head")).to_have_count(1, timeout=15000)
+    expect(panel).to_have_attribute("aria-labelledby", "panel-title")

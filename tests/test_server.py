@@ -5895,7 +5895,7 @@ class TestSpaBidirectionalText:
 
     def test_a_standalone_document_value_takes_its_own_direction(self) -> None:
         assert 'dir="auto"' in _web("components/ui/meta.tsx")
-        assert 'id="panel-title"\n            dir="auto"' in _web("components/CoveragePanel.tsx")
+        assert 'id="panel-title"\n              dir="auto"' in _web("components/CoveragePanel.tsx")
 
     def test_isolate_wraps_a_value_in_the_unicode_isolate_pair(self) -> None:
         fmt = _web("lib/format.ts")

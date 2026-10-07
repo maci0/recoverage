@@ -534,14 +534,14 @@ export const MSG = {
     "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
   NA: "(n/a)",
-  REGEN_USING_CACHE: (remaining: number) => `Using cached data. Regeneration available in ${remaining}s...`,
+  REGEN_USING_CACHE: (remaining: number) => `Using cached data. Regeneration available in ${remaining}s.`,
   REGEN_IN_PROGRESS: "Regenerating…",
   REGEN_ALREADY_RUNNING:
     "This regeneration is already running. The map refreshes by itself when it finishes.",
   REGEN_DONE: "Coverage data regenerated.",
   REGEN_UNAVAILABLE: "Regeneration unavailable",
   LIVE_RELOAD_OFF:
-    "Live reload disconnected — the map only refreshes when you reload the page. Reconnecting…",
+    "Live reload disconnected: the map refreshes only when you reload the page. Reconnecting…",
   FETCH_FAILED: (url: string) => `(failed to load: ${url})`,
   JUMP_NO_BLOCK: (address: string) =>
     `No block covers ${address} in this target, so there is nothing to select.`,

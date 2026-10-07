@@ -150,16 +150,18 @@ export function useCoverage(target: string, section: string): Coverage {
   }, [target]);
 
   useEffect(() => {
-    if (target === "") {
-      return;
-    }
-    const control = new AbortController();
     // A superseded load's error goes with it. The effect re-runs on a target
     // switch, a section switch and a rebuild, and each of those starts a
     // request for a different document: a stale target the server no longer
     // serves answers 404 here, and without the clear the red line for THAT
-    // target stayed up over the real target's map while it loaded.
+    // target stayed up over the real target's map while it loaded. Cleared
+    // before the empty-target return too, since a target dropped for an empty
+    // list leaves nothing loading that could replace the stale line.
     setLoadError(null);
+    if (target === "") {
+      return;
+    }
+    const control = new AbortController();
     void load(section, control.signal);
     return () => control.abort();
   }, [load, reloadToken, section, target]);

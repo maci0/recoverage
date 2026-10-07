@@ -91,6 +91,13 @@ const STATUS_INK = new Map<string, string>([
   ["EXTRACT_ERROR", "text-st-fail"],
 ]);
 
+/** A document column as a value, or null when the document left it empty.
+ * rebrew writes an unset text column as `""` rather than omitting it, so
+ * `updated_by = ""` beside `updated_at = ""` rendered the row as ` ()`. */
+function filled(column: string | null | undefined): string | null {
+  return column == null || column === "" ? null : column;
+}
+
 function statusInk(status: string): string {
   return STATUS_INK.get(status.toUpperCase()) ?? "text-text-muted";
 }
@@ -233,9 +240,9 @@ function FunctionMeta({
           {storageLabel}
         </MetaItem>
         <MetaItem label="Owner">{fn.owners?.join(", ") || ownerLabel}</MetaItem>
-        <MetaItem label="Users">{fn.referenced_in?.join(", ") || "—"}</MetaItem>
+        <MetaItem label="Users">{fn.referenced_in?.join(", ") || MSG.NA}</MetaItem>
         <MetaItem label="Declarations">
-          {fn.declared_in?.join(", ") || fn.files?.join(", ") || "—"}
+          {fn.declared_in?.join(", ") || fn.files?.join(", ") || MSG.NA}
         </MetaItem>
       </dl>
     );
@@ -247,11 +254,13 @@ function FunctionMeta({
   // is hex, and a reader matching this one against a map range, a search term
   // or a disassembly line has to convert it by hand.
   const addressHex = hex(toVa(address), 8);
-  const status = fn.status ?? "?";
+  const status = filled(fn.status) ?? MSG.NA;
   // Both similarity columns are 0-1 fractions off the wire; `similarityPct`
   // scales, floors, and refuses a value the document spelled as something else.
   const fnSimilarity = similarityPct(fn.similarity);
   const lastVerifySimilarity = similarityPct(fn.last_verify?.similarity);
+  const updatedBy = filled(fn.updated_by);
+  const updatedAt = filled(fn.updated_at);
   return (
     <dl className={META_GRID}>
       <MetaItem label="VA">
@@ -280,9 +289,9 @@ function FunctionMeta({
           {status}
         </span>
       </MetaItem>
-      <MetaItem label="Module">{fn.module ?? "?"}</MetaItem>
-      <MetaItem label="Compiler">{fn.cflags == null || fn.cflags === "" ? MSG.NA : fn.cflags}</MetaItem>
-      <MetaItem label="Marker">{fn.markerType ?? "?"}</MetaItem>
+      <MetaItem label="Module">{filled(fn.module) ?? MSG.NA}</MetaItem>
+      <MetaItem label="Compiler">{filled(fn.cflags) ?? MSG.NA}</MetaItem>
+      <MetaItem label="Marker">{filled(fn.markerType) ?? MSG.NA}</MetaItem>
       {fn.blocker == null || fn.blocker === "" ? null : (
         <MetaItem label="Blocker" fullWidth>
           <span className="meta-value">{fn.blocker}</span>
@@ -319,9 +328,9 @@ function FunctionMeta({
       {fn.last_verify?.effective_match === true ? (
         <MetaItem label="Effective">register-only delta, a candidate for a proof</MetaItem>
       ) : null}
-      {fn.updated_by == null ? null : (
+      {updatedBy === null ? null : (
         <MetaItem label="Updated by">
-          {`${fn.updated_by}${fn.updated_at == null ? "" : ` (${dateTime(fn.updated_at)})`}`}
+          {`${updatedBy}${updatedAt === null ? "" : ` (${dateTime(updatedAt)})`}`}
         </MetaItem>
       )}
       {fnSimilarity === null ? null : <MetaItem label="Similarity">{fnSimilarity}</MetaItem>}
@@ -334,7 +343,7 @@ function FunctionMeta({
         // use, and the panel head's Copy button is how the rest of this panel
         // hands over a value verbatim.
         <MetaItem label="SHA256">
-          <span title={fn.sha256}>{`${fn.sha256.slice(0, 16)}...`}</span>
+          <span title={fn.sha256}>{`${fn.sha256.slice(0, 16)}…`}</span>
         </MetaItem>
       )}
       {sourceItem}
@@ -441,6 +450,7 @@ export function CoveragePanel({
   const { cells } = section ?? {};
   const cell = cellIndex === null || cells === undefined ? undefined : cells.at(cellIndex);
   const { fn } = panes;
+  const selected = fn !== null || cellIndex !== null;
   const subject = cellIndex === null ? (section?.name ?? "") : `Block ${count(cellIndex)}`;
   const title = isolate(fn?.name ?? subject);
   const openModal = (heading: string, text: string, language: HighlightLanguage): void => {
@@ -474,67 +484,74 @@ export function CoveragePanel({
         hiddenWhenStacked && "max-lg:hidden",
       )}
       id="panel"
-      aria-labelledby="panel-title"
+      // With nothing selected there is no title to name the panel by, and an
+      // `aria-labelledby` naming a missing id names nothing.
+      aria-labelledby={selected ? "panel-title" : undefined}
+      aria-label={selected ? undefined : "Block detail"}
     >
-      <div className="panel-head border-b border-border bg-raised p-4">
-        <div className="flex flex-wrap items-start gap-2">
-          {/* A decompiled C identifier is as long as the analyst's patience, and
-              in the terminal face it has no break opportunity, so it pushes the
-              copy buttons out of the panel unless the title may break and the
-              buttons are the part that stays whole. The title keeps at least
-              10rem; past that the buttons wrap to their own row, or a phone
-              stacks the title one letter per line. */}
-          <h2
-            className="panel-title m-0 min-w-0 flex-1 basis-40 font-mono text-intro font-semibold leading-snug wrap-anywhere"
-            id="panel-title"
-            dir="auto"
-          >
-            {title}
-          </h2>
-          <div className="panel-actions ms-auto flex shrink-0 flex-wrap justify-end gap-2">
-            <CopyButton
-              label="Copy VA"
-              value={copyVA ?? ""}
-              ariaLabel="Copy VA"
-              title="Copy this block's address range"
-              disabled={copyVA === null}
-            />
-            <CopyButton
-              label="Copy Symbol"
-              value={fn?.symbol ?? ""}
-              ariaLabel="Copy Symbol"
-              title="Copy the function's symbol"
-              disabled={fn?.symbol == null}
-            />
-            {copySha === null ? null : (
+      {/* The head names a selection and hands over its values. Before one
+          exists it would be a title naming the section the tabs already
+          name, over copy buttons with nothing to copy. */}
+      {selected && (
+        <div className="panel-head border-b border-border bg-raised p-4">
+          <div className="flex flex-wrap items-start gap-2">
+            {/* A decompiled C identifier is as long as the analyst's patience, and
+                in the terminal face it has no break opportunity, so it pushes the
+                copy buttons out of the panel unless the title may break and the
+                buttons are the part that stays whole. The title keeps at least
+                10rem; past that the buttons wrap to their own row, or a phone
+                stacks the title one letter per line. */}
+            <h2
+              className="panel-title m-0 min-w-0 flex-1 basis-40 font-mono text-intro font-semibold leading-snug wrap-anywhere"
+              id="panel-title"
+              dir="auto"
+            >
+              {title}
+            </h2>
+            <div className="panel-actions ms-auto flex shrink-0 flex-wrap justify-end gap-2">
               <CopyButton
-                label="Copy SHA"
-                value={copySha}
-                ariaLabel="Copy SHA256"
-                title="Copy the function's full SHA256 digest"
+                label="Copy VA"
+                value={copyVA ?? ""}
+                ariaLabel="Copy VA"
+                title="Copy this block's address range"
+                disabled={copyVA === null}
               />
-            )}
+              {/* Offered when there is a symbol to take, like Copy SHA: a
+                  block with no function would otherwise carry a button that
+                  can never do anything. */}
+              {fn?.symbol == null ? null : (
+                <CopyButton
+                  label="Copy Symbol"
+                  value={fn.symbol}
+                  ariaLabel="Copy Symbol"
+                  title="Copy the function's symbol"
+                />
+              )}
+              {copySha === null ? null : (
+                <CopyButton
+                  label="Copy SHA"
+                  value={copySha}
+                  ariaLabel="Copy SHA256"
+                  title="Copy the function's full SHA256 digest"
+                />
+              )}
+            </div>
+          </div>
+          <div className="mt-3">
+            <PanelMeta
+              fn={fn}
+              cell={cell}
+              section={section}
+              sourceRoot={sourceRoot}
+              docs={panes.docs}
+              parentVaFor={parentVaFor}
+              onJumpToAddress={onJumpToAddress}
+            />
           </div>
         </div>
-        <div className="mt-3">
-          <PanelMeta
-            fn={fn}
-            cell={cell}
-            section={section}
-            sourceRoot={sourceRoot}
-            docs={panes.docs}
-            parentVaFor={parentVaFor}
-            onJumpToAddress={onJumpToAddress}
-          />
-        </div>
-      </div>
+      )}
       <div className="px-4 pb-4">
-        {fn === null && cellIndex === null ? (
-          <p className="hint m-0 pt-4 text-data text-text-muted">
-            Select a block on the map, or search for a function, to see its C source, disassembly
-            and original bytes here.
-          </p>
-        ) : (
+        {selected ? (
           <>
             <CodeSection
               icon="braces"
@@ -597,6 +614,11 @@ export function CoveragePanel({
               onOpen={openModal}
             />
           </>
+        ) : (
+          <p className="hint m-0 pt-4 text-data text-text-muted">
+            Select a block on the map, or search for a function, to see its C source, disassembly
+            and original bytes here.
+          </p>
         )}
       </div>
       <CodeModal

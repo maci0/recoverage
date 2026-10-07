@@ -66,6 +66,15 @@ export const STATE_LABEL = [
   "problem",
 ];
 
+/** The face a state word is set in. A verdict is a code token (relumea brand
+ * guide, "Terminology"), so it takes the mono the status chip and the CLI
+ * print it in; the descriptive words (`undocumented`, `padding`, `problem`)
+ * are prose and stay in the sans. One rule for the pills and the legend, so
+ * the two keys to one map cannot set one word two ways. */
+export function verdictFace(label: string): string {
+  return label === label.toUpperCase() ? "font-mono tracking-chip" : "";
+}
+
 /** The verdict fill tokens, in slot order. The canvas resolves them on the map
  * element, so a theme switch is a token swap rather than a repaint from
  * literals. The brand has no padding verdict; padding is alignment filler, so

@@ -4,7 +4,7 @@ import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { count, percentLabel, plural } from "@/lib/format";
-import { STATE_FILTERS, swatchForFilter } from "@/states";
+import { STATE_FILTERS, swatchForFilter, verdictFace } from "@/states";
 
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
  * the server folds them into `other`, which is the state the map paints as slot
@@ -18,6 +18,11 @@ const BUCKET_KEY = {
   proven: "proven",
   problem: "other",
 } as const satisfies Record<string, string>;
+
+/** The section `summary.coveragePercent` measures (`server._summary` divides
+ * `.text`'s covered bytes by its size), so the headline names it: "of the
+ * target" claimed the data sections too, which the figure never counts. */
+const TEXT_SECTION = ".text";
 
 export type StatsStripProps = {
   stats: StatsPayload | null;
@@ -100,9 +105,7 @@ export function StatsStrip({
                 className={cn("swatch size-2.5 rounded-cell", swatchForFilter(entry.key))}
                 aria-hidden="true"
               />
-              <span className={entry.label === entry.label.toUpperCase() ? "font-mono tracking-chip" : ""}>
-                {entry.label}
-              </span>
+              <span className={verdictFace(entry.label)}>{entry.label}</span>
               {blocks === null ? null : (
                 <span className="font-mono tabular-nums text-text-muted">{count(blocks)}</span>
               )}
@@ -118,9 +121,10 @@ export function StatsStrip({
  * holds the place while a rebuild runs for minutes and says why when the read
  * failed, rather than leaving the reader to assume a target has no coverage.
  *
- * The section's own figure closes the line, scoped by its name: on a complete
- * project both figures read "100.0%", and a figure a reader cannot scope is a
- * figure they cannot use. */
+ * The headline is `.text`'s figure and says so. Another section's own figure
+ * closes the line, scoped by its name: on a complete project both read
+ * "100.0%", and a figure a reader cannot scope is a figure they cannot use. On
+ * `.text` itself the second figure would repeat the first, so it is left out. */
 function Summary({
   stats,
   error,
@@ -136,7 +140,7 @@ function Summary({
 }): ComponentChildren {
   if (stats === null) {
     if (error !== null) {
-      return <p className="m-0 text-data text-text-muted">Coverage summary unavailable.</p>;
+      return <p className="m-0 text-data text-text-muted">Coverage summary unavailable: {error}</p>;
     }
     return loading ? (
       <p className="m-0 text-data text-text-muted">Loading the coverage summary…</p>
@@ -149,11 +153,11 @@ function Summary({
         {percentLabel(summary.coveragePercent)}
       </b>
       <span className="text-data text-text-muted">
-        of the target covered, {count(summary.matchedFunctions)} of{" "}
-        {count(summary.totalFunctions)}{" "}
+        of <span className="font-mono text-text">{TEXT_SECTION}</span> covered,{" "}
+        {count(summary.matchedFunctions)} of {count(summary.totalFunctions)}{" "}
         {plural(summary.matchedFunctions, { one: "function", other: "functions" })}{" "}
         matched
-        {section === null || sectionPct === null ? null : (
+        {section === null || section === TEXT_SECTION || sectionPct === null ? null : (
           <>
             {" · "}
             <span className="font-mono text-text">{section}</span> {percentLabel(sectionPct)}

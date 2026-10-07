@@ -27,7 +27,7 @@ import {
   trimSearch,
 } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
-import { FILTER_KEY, MARK_CLASS, STATE_LABEL, SWATCH_CLASS } from "@/states";
+import { FILTER_KEY, MARK_CLASS, STATE_LABEL, SWATCH_CLASS, verdictFace } from "@/states";
 import { Icon } from "@/system/icons/Icon";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -246,13 +246,6 @@ export function App() {
     cellIndex: selectedIndex,
     dll,
   });
-  const { reload, busy } = useLiveReload({
-    enabled: target !== "",
-    onDbUpdated: coverage.reload,
-    onNotice: setNotice,
-    onDone: flash,
-  });
-
   useEffect(() => {
     // The tab is a second surface for the same selection the topbar shows, and
     // a flat "ReCoverage" left it reading as a marketing page in every state.
@@ -348,7 +341,13 @@ export function App() {
   // Pick a target once the list is known: a URL target that the server still
   // serves stays, then the remembered one, then the first the server offers.
   useEffect(() => {
-    if (!targetReady || targets.length === 0) {
+    if (!targetReady || loadError !== null) {
+      return;
+    }
+    if (targets.length === 0) {
+      // Nothing is served, so a remembered or linked target can only answer
+      // 404, and that refusal would stand in for the empty-project state.
+      setTarget("");
       return;
     }
     const served = targets.some((entry) => entry.id === target);
@@ -362,7 +361,7 @@ export function App() {
         targets[0]?.id ??
         "",
     );
-  }, [target, targetReady, targets, urlTarget]);
+  }, [loadError, target, targetReady, targets, urlTarget]);
 
   // The URL carries the state a reload or a shared link has to restore.
   //
@@ -776,6 +775,10 @@ export function App() {
         }
       }
     }
+    // A jump answers the search, so the list that offered it closes: left
+    // open, it covers the head of the detail panel the jump just filled.
+    setResultsOpen(false);
+    setActiveResult(null);
     if (local >= 0) {
       setSelectedIndex(local);
       gridFocus.current?.(local);
@@ -860,7 +863,10 @@ export function App() {
     setSelectedIndex((current) => (current === index ? null : index));
   }, []);
 
-  const noTargets = targetReady && targets.length === 0;
+  // A target list that failed to load is the failure, not an empty project:
+  // the error names the cause, and an empty-state card beside it telling the
+  // reader to build documents that may well exist contradicts it.
+  const noTargets = targetReady && targets.length === 0 && loadError === null;
 
   /** Re-run the read the error line is reporting. The target list and the
    * section data are separate requests and a reader cannot tell from the line
@@ -878,6 +884,27 @@ export function App() {
     coverage.reload();
   }, [coverage, loadError, loadTargets]);
 
+  /** What a rebuild refreshes: the target list as well as the map. A rebuild
+   * can add a target, and the first `rebrew coverage build` beside an empty
+   * dashboard (or a Regenerate pressed on its empty state) adds every one: a
+   * list read once at load kept the empty state up over the new documents
+   * until the page was reloaded by hand. The stream is opened once the list
+   * has answered, not once a target is chosen, so that empty state hears it. */
+  const { reload: reloadCoverage } = coverage;
+  const onDbUpdated = useCallback((): void => {
+    if (targetsControl.current === null) {
+      targetsControl.current = new AbortController();
+    }
+    loadTargets(targetsControl.current.signal);
+    reloadCoverage();
+  }, [loadTargets, reloadCoverage]);
+  const { reload, busy } = useLiveReload({
+    enabled: targetReady && loadError === null,
+    onDbUpdated,
+    onNotice: setNotice,
+    onDone: flash,
+  });
+
   // Potato Mode reads `search` and a comma-joined `filter`, so the link carries
   // the reader's position across instead of dropping them on the default view.
   const potatoHref = useMemo(
@@ -889,8 +916,10 @@ export function App() {
    * switch and a lazy cell load both replace the canvas with no focusable
    * element, so without this the only signal that anything happened is the
    * pixels changing. */
-  const mapStatus = describeMapArea(noTargets, active, coverage.cellError, filters);
-  const sectionEmpty = !coverage.loading && target !== "" && names.length === 0;
+  const failure = loadError ?? coverage.error;
+  const mapStatus = describeMapArea(noTargets, failure, active, coverage.cellError, filters);
+  const sectionEmpty =
+    failure === null && !coverage.loading && target !== "" && names.length === 0;
   /** The map area is a loading line whose height is not the map's. Whatever
    * sits under it (the legend, and the panel once the layout stacks below
    * `lg`) would jump down when the map lands, which Lighthouse scores as
@@ -899,8 +928,13 @@ export function App() {
     !noTargets &&
     !sectionEmpty &&
     (active === null
-      ? (loadError ?? coverage.error) === null
+      ? failure === null
       : active.cells === undefined && coverage.cellError?.section !== active.name);
+  /** No section will draw: the project is empty, the target has no document,
+   * or the read failed before any section arrived. The filter pills, the
+   * legend and the detail panel all describe a map, so with none to describe
+   * they are controls that do nothing and a key to nothing. */
+  const blank = active === null && !mapPending;
   /** The summary above the map is still a loading line. It grows by a figure
    * and a wrapped sentence when `/stats` answers, and its filter pills gain
    * their counts and wrap onto another row, so a loading line under it would
@@ -941,7 +975,12 @@ export function App() {
             // min-h-8.5 is one row of tabs (a 28px tab, the padding and the
             // border), held before the section list arrives so the topbar does
             // not grow under the reader when it does (CLS).
-            className="tabs flex min-h-8.5 flex-wrap gap-0.5 rounded-control border border-border bg-surface-2 p-0.5"
+            className={cn(
+              "tabs flex min-h-8.5 flex-wrap gap-0.5 rounded-control border border-border bg-surface-2 p-0.5",
+              // Held empty while the sections load; with none coming it is an
+              // empty frame beside the wordmark.
+              blank && names.length === 0 && "hidden",
+            )}
             role="tablist"
             aria-label="Sections"
             aria-orientation="horizontal"
@@ -1113,8 +1152,8 @@ export function App() {
                 own below `sm`: sized to its longest option, the arrival of
                 the list moved the buttons after it onto or off a second line
                 on a phone and the page with them (CLS). A list that loaded
-                empty removes it. */}
-            {!noTargets && (
+                empty, or failed to load, removes it. */}
+            {!noTargets && loadError === null && (
               <select
                 className="h-8 w-full min-w-0 max-w-full rounded-control border border-control-line bg-surface px-2 font-mono text-micro text-text hover:border-control-line-hover sm:w-auto"
                 aria-label="Target binary"
@@ -1193,14 +1232,16 @@ export function App() {
           aria-labelledby={names.length > 0 ? `section-tab-${active?.name ?? section}` : undefined}
           aria-label={names.length > 0 ? undefined : "Coverage map"}
         >
-          <StatsStrip
-            stats={coverage.stats}
-            error={coverage.statsError}
-            loading={coverage.loading}
-            section={active?.name ?? null}
-            filters={filters}
-            onToggleFilter={toggleFilter}
-          />
+          {!blank && (
+            <StatsStrip
+              stats={coverage.stats}
+              error={coverage.statsError}
+              loading={coverage.loading}
+              section={active?.name ?? null}
+              filters={filters}
+              onToggleFilter={toggleFilter}
+            />
+          )}
           {/* Always mounted, like the search status: a finished regen or a
               jump that found nothing has to be announced (WCAG 4.1.3). Empty,
               it is visually nothing. */}
@@ -1215,12 +1256,15 @@ export function App() {
           >
             {notice ?? ""}
           </p>
-          {(loadError ?? coverage.error) !== null && (
+          {/* Over a map that is still drawn, a failed reload is a line above
+              it. With no map, the map area itself carries the failure and its
+              Retry, and a second copy here would say it twice. */}
+          {failure !== null && !blank && (
             <p
               className="mb-3 flex flex-wrap items-center gap-3 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-st-fail"
               role="alert"
             >
-              <span className="min-w-0">{loadError ?? coverage.error}</span>
+              <span className="min-w-0">{failure}</span>
               {/* Re-runs the read that failed: the target list when that is
                   what was refused, the current section's data otherwise. */}
               <Button size="sm" onClick={retryFailedLoad}>
@@ -1242,7 +1286,7 @@ export function App() {
               coverage={coverage}
               active={active}
               sectionEmpty={sectionEmpty}
-              loadError={loadError ?? coverage.error}
+              loadError={failure}
               onRetry={retryFailedLoad}
               filters={filters}
               matchedFns={matchedFns}
@@ -1258,7 +1302,7 @@ export function App() {
           <ul
             className={cn(
               "legend m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-micro text-text-muted",
-              mapPending && "hidden",
+              (mapPending || blank) && "hidden",
             )}
           >
             {STATE_LABEL.map((label, slot) => (
@@ -1267,20 +1311,22 @@ export function App() {
                   aria-hidden="true"
                   className={cn("swatch size-2.5 rounded-cell", SWATCH_CLASS[slot], MARK_CLASS[slot])}
                 />
-                {label}
+                <span className={verdictFace(label)}>{label}</span>
               </li>
             ))}
           </ul>
         </div>
-        <CoveragePanel
-          section={active}
-          cellIndex={selectedIndex}
-          panes={panes}
-          sourceRoot={sourceRoot}
-          parentVaFor={parentVaFor}
-          onJumpToAddress={jumpToAddress}
-          hiddenWhenStacked={mapPending}
-        />
+        {!blank && (
+          <CoveragePanel
+            section={active}
+            cellIndex={selectedIndex}
+            panes={panes}
+            sourceRoot={sourceRoot}
+            parentVaFor={parentVaFor}
+            onJumpToAddress={jumpToAddress}
+            hiddenWhenStacked={mapPending}
+          />
+        )}
       </main>
     </>
   );
@@ -1350,10 +1396,12 @@ function MapArea({
   if (noTargets) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
-        <p className="m-0 text-intro font-semibold text-text">No coverage database</p>
+        <p className="m-0 text-intro font-semibold text-text">No coverage documents yet</p>
         <p className="m-0 max-w-prose">
-          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> to write{" "}
-          <code className="font-mono text-micro text-text">db/coverage-*.toml</code>, then press Regenerate.
+          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> in the
+          project to write <code className="font-mono text-micro text-text">db/coverage-*.toml</code>,
+          or press Regenerate to run it from here. The map opens as soon as the first document is
+          written.
         </p>
       </div>
     );
@@ -1370,7 +1418,8 @@ function MapArea({
         </p>
         <p className="m-0 max-w-prose">
           Run <code className="font-mono text-micro text-text">rebrew coverage build</code> to write{" "}
-          <code className="font-mono text-micro text-text">db/coverage-{target}.toml</code>, then press Regenerate.
+          <code className="font-mono text-micro text-text">db/coverage-{target}.toml</code>, or press
+          Regenerate to run it from here.
         </p>
       </div>
     );
@@ -1382,7 +1431,10 @@ function MapArea({
   if (active === null) {
     if (loadError !== null) {
       return (
-        <div className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail">
+        <div
+          className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail"
+          role="alert"
+        >
           <p className="m-0">Coverage data unavailable: {loadError}</p>
           <Button size="sm" onClick={onRetry}>
             Retry
@@ -1431,15 +1483,16 @@ function MapArea({
  * figure the map header shows beside it. */
 function describeMapArea(
   noTargets: boolean,
+  failure: string | null,
   active: Section | null,
   cellError: { section: string; detail: string } | null,
   filters: ReadonlySet<string>,
 ): string {
   if (noTargets) {
-    return "No coverage database.";
+    return "No coverage documents yet.";
   }
   if (active === null) {
-    return "Loading coverage data.";
+    return failure === null ? "Loading coverage data." : "Coverage data unavailable.";
   }
   if (active.cells === undefined) {
     if (cellError?.section === active.name) {

@@ -5,6 +5,34 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard headline reads "72.2% of `.text` covered": the figure is
+  `.text`'s byte coverage, and "of the target covered" claimed the data
+  sections too. On `.text` itself the section figure that repeated it is gone.
+- The legend sets the verdicts (`EXACT`, `RELOC`, `NEAR`, `STUB`, `PROVEN`) in
+  the mono the filter pills already used, so the two keys to the map match.
+- An empty project is one card, "No coverage documents yet", without the
+  filter pills, the legend, an empty section-tab frame or a detail panel
+  around it. The map opens on its own once `rebrew coverage build` or
+  Regenerate writes the first document, and a newly built target joins the
+  picker without a page reload.
+- The detail panel shows its title and copy buttons once a block is selected.
+  Copy Symbol appears only for a function that has a symbol, like Copy SHA.
+
+### Fixed
+
+- A target list that failed to load showed the error line, the empty-project
+  card telling the reader to build documents, and a picker stuck on "Loading
+  targets" together. It now shows the failure once, with its Retry.
+- Enter in the search box jumped to the match but left the result list open
+  over the head of the detail panel it had just filled.
+- A function whose document left `updated_by` empty showed "Updated by ()".
+  Empty document columns read `(n/a)`, which replaces the "?" and "—"
+  placeholders some rows used.
+- The coverage summary line names why it is unavailable instead of only
+  saying that it is.
+
 ## [5.0.0] - 2026-10-06
 
 ### Added
