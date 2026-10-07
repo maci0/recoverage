@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `recoverage open` warns on stderr when nothing accepts a connection at the
+  address it opens (a mistyped port, a dashboard that is not running), and
+  still opens the tab.
+
 ### Changed
 
 - The dashboard headline reads "72.2% of `.text` covered": the figure is
@@ -46,6 +52,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   72.2% covered" (was "141382b · 316/576 matched · 72.2%"), and its 503 page
   is titled "Coverage unavailable", which also covers an empty coverage
   directory, instead of "Database unavailable".
+- Counts in CLI status lines take their noun ("1 document", "2 origins were")
+  instead of "document(s)".
 - Help names its placeholders `PATH`, `ARCHIVE` and `PERCENT` instead of
   `<str>` and `MIN_COVERAGE`, `--regen` says it rebuilds the coverage
   documents, and the man page names `rebrew coverage build` instead of the

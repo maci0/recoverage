@@ -66,6 +66,11 @@ app = typer.Typer(
 _log = logging.getLogger("recoverage")
 
 
+def _counted(count: int, one: str, other: str) -> str:
+    """*count* with the noun it takes: "1 document", "2 documents"."""
+    return f"{count:,} {one if count == 1 else other}"
+
+
 # Color is emitted through _secho, never bare typer.secho, so the opt-outs are
 # honored on a terminal too.  Click only strips ANSI when the stream is not a
 # TTY, so a piped run already loses color, but NO_COLOR (https://no-color.org)
@@ -822,6 +827,25 @@ _BROWSER_OPEN_TIMEOUT_SECONDS = 10
 _OPEN_LISTEN_WAIT_SECONDS = 5.0
 _OPEN_LISTEN_POLL_SECONDS = 0.05
 
+#: How long `recoverage open` waits for the dashboard to accept one connection
+#: before it warns that nothing is listening.  A local refusal is immediate;
+#: this bounds a host that drops the packet instead.
+_OPEN_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _is_listening(url: str) -> bool:
+    """Whether something accepts a connection on the address *url* names."""
+    parts = urlsplit(url)
+    try:
+        with socket.create_connection(
+            (parts.hostname or "127.0.0.1", parts.port or _DEFAULT_HTTP_PORT),
+            timeout=_OPEN_PROBE_TIMEOUT_SECONDS,
+        ):
+            return True
+    except OSError:
+        return False
+
+
 #: How long after the listener is asked to start the opener is scheduled.  It
 #: probes rather than assuming, so this only has to clear the startup banner.
 _BROWSER_OPEN_DELAY_SECONDS = 0.5
@@ -1154,8 +1178,9 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
     if requested and not cors:
         warnings.append(
             "warning: --cors-origin has no effect without --cors: "
-            f"CORS processing is disabled, so {len(requested)} origin(s) were "
-            "dropped. Pass --cors, or set RECOVERAGE_CORS=1, to enable it."
+            "CORS processing is disabled, so "
+            f"{_counted(len(requested), 'origin was', 'origins were')} dropped. "
+            "Pass --cors, or set RECOVERAGE_CORS=1, to enable it."
         )
     return warnings
 
@@ -2198,7 +2223,8 @@ def regen(no_color: bool = _no_color_option()) -> None:
     written = _run_regen(_project_dir())
     if written:
         _secho(
-            f"Done: {len(written)} coverage document(s) written to {written[0].parent}.",
+            f"Done: {_counted(len(written), 'coverage document', 'coverage documents')} "
+            f"written to {written[0].parent}.",
             fg=typer.colors.GREEN,
             err=True,
         )
@@ -2287,7 +2313,7 @@ def backup(
         table.add_row(escape(name), f"{size:,}", digest[:16])
     Console(no_color=True if _color_off() else None).print(table)
     _secho(
-        f"Verified backup: {info.path}, {len(info.members)} document(s), "
+        f"Verified backup: {info.path}, {_counted(len(info.members), 'document', 'documents')}, "
         f"{info.total_bytes:,} bytes, taken {info.created}.",
         fg=typer.colors.GREEN,
         err=True,
@@ -2335,7 +2361,8 @@ def restore(
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
     _secho(
-        f"Restored {len(written)} document(s) to {written[0].parent if written else _db_path()}.",
+        f"Restored {_counted(len(written), 'document', 'documents')} to "
+        f"{written[0].parent if written else _db_path()}.",
         fg=typer.colors.GREEN,
         err=True,
     )
@@ -2367,6 +2394,9 @@ def open_cmd(
     remember the new address and port as well.  A port of 0 is refused: it
     names the free port the server picked, which is in the banner
     [bold]serve[/bold] printed and is not something this command can know.
+
+    Warns on stderr, and opens the tab anyway, when nothing accepts a
+    connection at that address.
 
     Writes nothing to stdout: the "Opening ..." line and every error are
     status, and status goes to stderr, so a caller reads the outcome from the
@@ -2403,6 +2433,17 @@ def open_cmd(
     # treated a non-empty stdout as success read a headless container entrypoint
     # as an opened dashboard.
     _secho(f"Opening {url}", err=True)
+    # A warning, not a refusal: the reader may be about to start the server,
+    # and the tab then loads on its first retry. Without it, a typo'd port or
+    # a dashboard that is not running opened a tab that could only fail, under
+    # an exit 0.
+    if not _is_listening(url):
+        _secho(
+            f"warning: nothing is listening at {url} yet; start the dashboard with "
+            "'recoverage serve'.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     if not open_browser(url):
         _secho(
             f"Error: no browser available to open {url}. Open the URL by hand, "

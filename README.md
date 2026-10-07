@@ -514,6 +514,10 @@ that interface, because loopback is a socket that bind never reached. A port of
 `0` is refused with exit 2: it names the free port `serve` picked, which only
 the banner that run printed holds.
 
+When nothing accepts a connection at that address, `open` warns on stderr and
+opens the tab anyway, since a dashboard about to start serves it on the first
+reload; the exit code stays 0.
+
 ---
 
 ## API Endpoints

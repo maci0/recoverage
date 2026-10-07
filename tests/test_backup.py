@@ -565,6 +565,8 @@ class TestBackupCli:
         result = runner.invoke(app, ["restore", str(archive)])
         assert result.exit_code == 0, result.output
         assert list(db.glob("coverage-*.toml"))
+        # The one synthetic document is counted as one, not as "document(s)".
+        assert "Restored 1 document to" in result.output
 
     def test_backup_json_is_machine_readable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

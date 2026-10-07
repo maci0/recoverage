@@ -2964,3 +2964,33 @@ def test_the_banner_names_each_address_once(
     assert "Listening on" not in out
     assert "  Coverage: " in out
     assert "  DB: " not in out
+
+
+class TestOpenWarnsWithoutAListener:
+    """`open` says when the address it opens has no dashboard behind it.
+
+    A mistyped port, or a dashboard that is not running, opened a tab that
+    could only fail and exited 0 with "Opening ..." as the whole report.
+    """
+
+    def test_a_closed_port_is_named(self, monkeypatch: Any) -> None:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        result = runner.invoke(app, ["open", "--port", str(port)])
+        assert result.exit_code == 0
+        assert opened == [f"http://127.0.0.1:{port}"]
+        assert f"nothing is listening at http://127.0.0.1:{port}" in result.stderr
+        assert "recoverage serve" in result.stderr
+
+    def test_a_listening_port_opens_quietly(self, monkeypatch: Any) -> None:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            monkeypatch.setattr("recoverage.cli.open_browser", lambda _url: True)
+            result = runner.invoke(app, ["open", "--port", str(port)])
+        assert result.exit_code == 0
+        assert "nothing is listening" not in result.stderr
