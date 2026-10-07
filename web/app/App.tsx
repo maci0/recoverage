@@ -1019,7 +1019,12 @@ export function App() {
               horizontal overflow, so a row that cannot break at 320 CSS px
               (WCAG 1.4.10) would lose its last control with no scroll
               position that brings it back. */}
-          <div className="search relative flex min-w-0 grow flex-col gap-1 sm:max-w-80" ref={searchBoxRef}>
+          <div
+            className="search relative flex min-w-0 grow flex-col gap-1 sm:max-w-80"
+            ref={searchBoxRef}
+            // Nothing to search: no target was served, or the list failed.
+            hidden={noTargets || loadError !== null}
+          >
             <div className="search-row flex flex-wrap items-center gap-1.5">
               {/* A real <label>: the hint inside the field is gone once a reader types
                   (WCAG 3.3.2), and the name is this element's own text so the

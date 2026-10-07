@@ -13,8 +13,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The legend sets the verdicts (`EXACT`, `RELOC`, `NEAR`, `STUB`, `PROVEN`) in
   the mono the filter pills already used, so the two keys to the map match.
 - An empty project is one card, "No coverage documents yet", without the
-  filter pills, the legend, an empty section-tab frame or a detail panel
-  around it. The map opens on its own once `rebrew coverage build` or
+  search box, the filter pills, the legend, an empty section-tab frame or a
+  detail panel around it. The map opens on its own once `rebrew coverage build` or
   Regenerate writes the first document, and a newly built target joins the
   picker without a page reload.
 - The detail panel shows its title and copy buttons once a block is selected.

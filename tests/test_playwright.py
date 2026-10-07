@@ -409,6 +409,7 @@ def test_an_empty_project_shows_one_empty_state(page: Any):
     expect(page.locator(".legend")).to_be_hidden()
     expect(page.locator(".tabs")).to_be_hidden()
     expect(page.locator("#panel")).to_have_count(0)
+    expect(page.locator("#search-input")).to_be_hidden()
 
 
 def test_a_failed_target_list_is_reported_once(page: Any):
@@ -434,6 +435,7 @@ def test_a_failed_target_list_is_reported_once(page: Any):
     # The empty state is the card that tells the reader to run the build.
     expect(page.locator("#section-panel code", has_text="rebrew coverage build")).to_have_count(0)
     expect(page.get_by_label("Target binary")).to_have_count(0)
+    expect(page.locator("#search-input")).to_be_hidden()
 
 
 def test_enter_on_a_search_closes_its_list(page: Any):
