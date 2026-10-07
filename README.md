@@ -36,10 +36,10 @@ block that covers it.
 
 > [!NOTE]
 > These four shots are captured from a running `recoverage serve` against a
-> synthetic coverage document (`tests/coverage_fixture.py`), so the target is
-> the fixture's `FAKEDLL` rather than a real one. The layout, the palette and
-> the states on the grid are the product's own; re-shoot against a real build
-> to replace the fixture's numbers.
+> synthetic project: an invented `DEMO` target whose coverage document was
+> written with `tests/coverage_fixture.py`'s writer, beside generated C files
+> and generated x86 code bytes. Every name and figure in them is made up; the
+> layout, the palette and the states on the grid are the product's own.
 
 ### Main dashboard
 
