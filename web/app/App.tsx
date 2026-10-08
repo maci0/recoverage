@@ -1269,12 +1269,15 @@ export function App() {
           )}
           {/* Always mounted, like the search status: a finished regen or a
               jump that found nothing has to be announced (WCAG 4.1.3). Empty,
-              it is visually nothing. */}
+              it is visually nothing. Shown, it floats over the foot of the
+              viewport rather than sitting above the map: in the flow it pushed
+              the map down when it arrived and pulled it back up four seconds
+              later, under a reader who was reading it. */}
           <p
             className={
               notice === null
                 ? "sr-only"
-                : "mb-3 rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text"
+                : "fixed inset-x-4 bottom-4 z-30 mx-auto max-w-prose rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text shadow-lift"
             }
             role="status"
             aria-live="polite"

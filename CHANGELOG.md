@@ -28,6 +28,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A coverage map wider than the screen (every section on a phone) says so
   under the map: the card showed no scrollbar until touched, so the visible
   part read as the whole section.
+- A finished regenerate, or a jump that found no block, floats its notice at
+  the foot of the window instead of pushing the map down and pulling it back
+  up four seconds later.
 
 ### Fixed
 
