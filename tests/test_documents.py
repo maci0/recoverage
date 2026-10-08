@@ -277,3 +277,18 @@ def test_an_unreadable_document_is_logged_on_one_line(
     message = record.getMessage()
     assert "\n" not in message
     assert "\u2028" not in message
+
+
+def test_an_unreadable_document_is_reported_by_name_and_reason(db: Path) -> None:
+    """The skipped document is named with its error, in the same state the
+    readable ones come from, and the reason drops the absolute path."""
+    (db / "coverage-BROKEN.toml").write_text("version = [\n", encoding="utf-8")
+
+    assert sorted(documents.load_all(db)) == ["GAME", "TOOL"]
+    [(name, target, reason)] = documents.unreadable(db)
+    assert (name, target) == ("coverage-BROKEN.toml", "BROKEN")
+    assert reason.startswith("malformed TOML (")
+    assert str(db) not in reason
+
+    (db / "coverage-BROKEN.toml").unlink()
+    assert documents.unreadable(db) == ()

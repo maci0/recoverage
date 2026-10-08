@@ -110,11 +110,14 @@ class _Doc:
 
 
 #: One directory's state: its path, the stat of every document, each document's
-#: memo entry, and the mapping handed to callers.  One slot, like rebrew's: a
-#: scan of another directory drops the previous one's entries.  Swapped as a
-#: whole tuple, which is atomic under the GIL; a miss is serialized by
+#: memo entry, the mapping handed to callers, and why each document that failed
+#: to load did (file name to reason).  One slot, like rebrew's: a scan of
+#: another directory drops the previous one's entries.  Swapped as a whole
+#: tuple, which is atomic under the GIL; a miss is serialized by
 #: :data:`_LOAD_LOCK`.
-_State = tuple[Path, tuple[_StatKey, ...], dict[str, _Doc], dict[str, CoverageSnapshot]]
+_State = tuple[
+    Path, tuple[_StatKey, ...], dict[str, _Doc], dict[str, CoverageSnapshot], dict[str, str]
+]
 _STATE: _State | None = None
 
 #: Serializes a reload, so a request herd after a rebuild parses each changed
@@ -348,6 +351,22 @@ def load_all(db_dir: Path) -> dict[str, CoverageSnapshot]:
     return _current(db_dir)[3]
 
 
+def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
+    """``(file name, target, reason)`` for every document in *db_dir* that failed to load.
+
+    The documents :func:`load_all` skipped, name-sorted, read off the same
+    state, so a document is in exactly one of the two answers.  The reason is
+    the reader's error without the path it opens with: the file name already
+    says which document, and the absolute path is not something a served
+    payload names.  It is document-derived text (a parse error can quote a
+    value), so a caller renders it as text, never as markup.
+    """
+    return tuple(
+        (name, name[len(_PREFIX) : -len(_SUFFIX)], reason)
+        for name, reason in sorted(_current(db_dir)[4].items())
+    )
+
+
 def versions(db_dir: Path) -> tuple[tuple[str, str, int], ...]:
     """``(name, version, size)`` for every document in *db_dir*, name-sorted.
 
@@ -359,7 +378,7 @@ def versions(db_dir: Path) -> tuple[tuple[str, str, int], ...]:
     answer.  Read off the same state :func:`load_all` returns, so a version
     and the snapshot built from those bytes cannot come from two reads.
     """
-    _dir, key, docs, _snapshots = _current(db_dir)
+    _dir, key, docs, _snapshots, _unreadable = _current(db_dir)
     out: list[tuple[str, str, int]] = []
     for name, mtime_ns, size, ino in key:
         doc = docs.get(name)
@@ -398,6 +417,7 @@ def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
     previous = state[2] if state is not None and state[0] == db_dir else {}
     docs: dict[str, _Doc] = {}
     snapshots: dict[str, CoverageSnapshot] = {}
+    failures: dict[str, str] = {}
     for stat in key:
         name = stat[0]
         target = name[len(_PREFIX) : -len(_SUFFIX)]
@@ -405,13 +425,20 @@ def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
         try:
             doc = _load(path, target, stat, previous.get(name))
         except CoverageTomlError as exc:
+            reason = _reason(path, exc)
+            failures[name] = reason
             # %r, not %s: a filename can carry a line break (legal on ext4), and
             # the parse error quotes document values.  repr escapes every
             # character that ends a log line, the guarantee server._log_safe
             # gives the request path, which this level cannot import.
-            _log.warning("coverage_toml: skipping %r: %r", str(path), str(exc))
+            _log.warning("skipping unreadable coverage document %r: %r", str(path), reason)
             continue
         docs[name] = doc
         snapshots[target] = doc.snapshot
-    _STATE = (db_dir, key, docs, snapshots)
+    _STATE = (db_dir, key, docs, snapshots, failures)
     return _STATE
+
+
+def _reason(path: Path, exc: CoverageTomlError) -> str:
+    """*exc*'s message without the ``<path>: `` both readers open it with."""
+    return str(exc).removeprefix(f"{path}: ")

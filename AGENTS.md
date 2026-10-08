@@ -454,7 +454,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/<filename:app.js, style.css, print.css, favicon.svg, highlight.js, archivo.woff2, jetbrains-mono.woff2>` | GET | The packaged static assets, `no-cache` with a strong `ETag`. `highlight.js` is the second Vite build: the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets (ETag-revalidating) |
+| `/api/targets` | GET | List available targets, plus `unreadable`: each document that exists and does not parse, from `server.unreadable_documents` (ETag-revalidating) |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data. `?section=` narrows the cells (siblings omit the key); `?index=0` omits `search_index`, which the SPA holds already, so a section switch does not re-send it (`index` is a flag: `0`, `1` or absent, anything else a 400) |
 | `/api/targets/<target>/functions` | GET | Paginated function list (`?status=` takes rebrew's status vocabulary; anything else is a 400). ETag-revalidating like `/stats` and `/data`: every parameter that shapes the page is in the validator |

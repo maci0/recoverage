@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/compat
 
 import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
 
-import { fetchTargets, type Section, type TargetInfo } from "@/api";
+import { fetchTargets, type Section, type TargetInfo, type UnreadableDocument } from "@/api";
 import { CoverageMap, type CoverageMapProps } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { SearchResults, searchResultRows } from "@/components/SearchResults";
@@ -133,6 +133,11 @@ function searchHint(
 export function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [targets, setTargets] = useState<Array<TargetInfo>>([]);
+  // Documents the server found and could not parse. They are named beside the
+  // target list rather than dropped from it: a directory whose only document
+  // is corrupt otherwise reads as an empty project, and a broken document
+  // beside good ones loses its target from the picker without a word.
+  const [unreadable, setUnreadable] = useState<Array<UnreadableDocument>>([]);
   // A `?target=` in the URL is the page's own state, so it seeds the selection
   // before the target list arrives: `/api/targets/<t>/data` then starts in
   // parallel with `/api/targets` instead of one round trip behind it, which is
@@ -315,7 +320,9 @@ export function App() {
   const loadTargets = useCallback((signal: AbortSignal): void => {
     void (async () => {
       try {
-        setTargets(await fetchTargets(signal));
+        const listed = await fetchTargets(signal);
+        setTargets(listed.targets);
+        setUnreadable(listed.unreadable);
         setLoadError(null);
         setTargetReady(true);
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, which carries the Retry, and the dashboard still renders its empty state
@@ -917,7 +924,20 @@ export function App() {
    * element, so without this the only signal that anything happened is the
    * pixels changing. */
   const failure = loadError ?? coverage.error;
-  const mapStatus = describeMapArea(noTargets, failure, active, coverage.cellError, filters);
+  const mapStatus = describeMapArea(
+    noTargets,
+    unreadable.length > 0,
+    failure,
+    active,
+    coverage.cellError,
+    filters,
+  );
+  /** The selected target's own document, when it is one the server could not
+   * read: a target the project config declares is still listed, and its map
+   * area says why it is empty instead of asking for a build that ran. */
+  const targetUnreadable = unreadable.find((doc) => doc.target === target) ?? null;
+  /** The other broken documents, named above a map that does draw. */
+  const otherUnreadable = unreadable.filter((doc) => doc !== targetUnreadable);
   const sectionEmpty =
     failure === null && !coverage.loading && target !== "" && names.length === 0;
   /** The map area is a loading line whose height is not the map's. Whatever
@@ -1264,6 +1284,9 @@ export function App() {
           {/* Over a map that is still drawn, a failed reload is a line above
               it. With no map, the map area itself carries the failure and its
               Retry, and a second copy here would say it twice. */}
+          {!noTargets && otherUnreadable.length > 0 && (
+            <UnreadableNotice documents={otherUnreadable} />
+          )}
           {failure !== null && !blank && (
             <p
               className="mb-3 flex flex-wrap items-center gap-3 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-st-fail"
@@ -1287,6 +1310,8 @@ export function App() {
           {!holdMapArea && (
             <MapArea
               noTargets={noTargets}
+              unreadable={unreadable}
+              targetUnreadable={targetUnreadable}
               target={target}
               coverage={coverage}
               active={active}
@@ -1371,6 +1396,10 @@ function Mark(): ComponentChildren {
  * `onGridReady` is required here because the shell always supplies it. */
 type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
   noTargets: boolean;
+  /** Every document the server could not read. */
+  unreadable: ReadonlyArray<UnreadableDocument>;
+  /** The selected target's document, when it is one of those. */
+  targetUnreadable: UnreadableDocument | null;
   target: string;
   coverage: Coverage;
   active: Section | null;
@@ -1384,6 +1413,8 @@ type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
 
 function MapArea({
   noTargets,
+  unreadable,
+  targetUnreadable,
   target,
   coverage,
   active,
@@ -1398,6 +1429,27 @@ function MapArea({
   onSelect,
   onGridReady,
 }: MapAreaProps): ComponentChildren {
+  if (noTargets && unreadable.length > 0) {
+    const one = unreadable.length === 1;
+    return (
+      <div
+        className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
+        role="alert"
+      >
+        <p className="m-0 text-intro font-semibold text-text">
+          {one
+            ? "The coverage document could not be read"
+            : `${count(unreadable.length)} coverage documents could not be read`}
+        </p>
+        <UnreadableList documents={unreadable} />
+        <p className="m-0 max-w-prose">
+          Fix or remove {one ? "it" : "them"}, or rebuild {one ? "it" : "them"} with{" "}
+          <code className="font-mono text-micro text-text">rebrew coverage build</code> or
+          Regenerate. The map opens as soon as a document reads.
+        </p>
+      </div>
+    );
+  }
   if (noTargets) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
@@ -1414,7 +1466,27 @@ function MapArea({
   // A target the project config declares but no build has written yet lands
   // here rather than in the case above: it is in the dropdown, so the reader
   // chose it deliberately, and "no sections" on its own names neither the
-  // missing document nor the command that writes it.
+  // missing document nor the command that writes it. A declared target whose
+  // document exists and does not parse is neither: its read answers empty or
+  // 503, and the card names the file and the parse error instead.
+  if (targetUnreadable !== null && (sectionEmpty || active === null)) {
+    return (
+      <div
+        className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
+        role="alert"
+      >
+        <p className="m-0 text-intro font-semibold text-text">
+          No coverage data for <span className="font-mono">{target}</span>
+        </p>
+        <UnreadableList documents={[targetUnreadable]} />
+        <p className="m-0 max-w-prose">
+          Fix or remove it, or rebuild it with{" "}
+          <code className="font-mono text-micro text-text">rebrew coverage build</code> or
+          Regenerate.
+        </p>
+      </div>
+    );
+  }
   if (sectionEmpty) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
@@ -1488,13 +1560,14 @@ function MapArea({
  * figure the map header shows beside it. */
 function describeMapArea(
   noTargets: boolean,
+  unreadable: boolean,
   failure: string | null,
   active: Section | null,
   cellError: { section: string; detail: string } | null,
   filters: ReadonlySet<string>,
 ): string {
   if (noTargets) {
-    return "No coverage documents yet.";
+    return unreadable ? "Coverage documents could not be read." : "No coverage documents yet.";
   }
   if (active === null) {
     return failure === null ? "Loading coverage data." : "Coverage data unavailable.";
@@ -1511,6 +1584,50 @@ function describeMapArea(
     active.cells.length,
     { one: "block", other: "blocks" },
   )}.${filtered}`;
+}
+
+/** Each unreadable document, by file name, with the reader's error. Both are
+ * document text, so they render as text in their own direction. */
+function UnreadableList({
+  documents,
+}: {
+  documents: ReadonlyArray<UnreadableDocument>;
+}): ComponentChildren {
+  return (
+    <ul className="m-0 flex max-w-prose list-none flex-col gap-1 p-0">
+      {documents.map((doc) => (
+        <li key={doc.file} className="break-words">
+          <code className="font-mono text-micro text-st-fail" dir="auto">
+            {doc.file}
+          </code>
+          : <span dir="auto">{doc.error}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The line above a map that draws while other documents did not load: their
+ * targets have no data to show, and this is the only place that says
+ * why. */
+function UnreadableNotice({
+  documents,
+}: {
+  documents: ReadonlyArray<UnreadableDocument>;
+}): ComponentChildren {
+  return (
+    <div
+      className="mb-3 flex flex-col gap-1 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-text"
+      role="status"
+    >
+      <p className="m-0">
+        {documents.length === 1
+          ? "One coverage document could not be read, so its target has no map:"
+          : `${count(documents.length)} coverage documents could not be read, so their targets have no map:`}
+      </p>
+      <UnreadableList documents={documents} />
+    </div>
+  );
 }
 
 function pending(text: string): ComponentChildren {

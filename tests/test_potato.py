@@ -3863,6 +3863,55 @@ class TestDbUnavailableContract:
         assert status.startswith("503")
         assert b"Coverage unavailable" in body
 
+    def test_the_503_page_names_the_document_and_why(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A document that exists and does not parse is not "run the build".
+
+        The page names the file and the parse error, escaped, because both
+        are document input; the absolute path stays in the log.
+        """
+        directory = self._point_at_empty_dir(tmp_path, monkeypatch)
+        directory.mkdir()
+        (directory / "coverage-A<b>.toml").write_text("version = [\n", encoding="utf-8")
+        status, _, body = wsgi_get("/potato")
+        assert status.startswith("503")
+        page = body.decode("utf-8")
+        assert "No coverage document could be read" in page
+        assert "<code>coverage-A&lt;b&gt;.toml</code>: " in page
+        assert "<code>coverage-A<b>.toml</code>" not in page
+        assert str(directory) not in page
+
+    def test_an_empty_directory_does_not_claim_a_broken_document(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = self._point_at_empty_dir(tmp_path, monkeypatch)
+        directory.mkdir()
+        status, _, body = wsgi_get("/potato")
+        assert status.startswith("503")
+        assert b"The coverage directory holds no document." in body
+        assert b"could be read" not in body
+
+    def test_a_broken_document_beside_a_good_one_is_named_on_the_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The good target renders, and the page says which document it left out."""
+        directory = self._point_at_empty_dir(tmp_path, monkeypatch)
+        section = {
+            "va": 0x1000,
+            "size": 1,
+            "fileOffset": 0,
+            "unitBytes": 1,
+            "columns": 1,
+            "cells": [cell(0, 1, "exact")],
+        }
+        write_coverage(directory, "GOOD", {".text": section})
+        (directory / "coverage-BROKEN.toml").write_text("version = [\n", encoding="utf-8")
+        status, _, body = wsgi_get("/potato?target=GOOD")
+        assert status.startswith("200")
+        page = body.decode("utf-8")
+        assert "Unreadable coverage document <b>coverage-BROKEN.toml</b>: malformed TOML" in page
+
     def test_the_coverage_read_warning_stays_one_log_line(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -4707,7 +4756,7 @@ class TestRenderedPageNamesAndStates:
         ("document", "heading"),
         [
             (_RENDER_ERROR_BODY, "Internal server error"),
-            (_db_unavailable_page().body, "Coverage unavailable"),
+            (_db_unavailable_page(()).body, "Coverage unavailable"),
         ],
     )
     def test_every_page_this_route_answers_carries_the_same_structure(

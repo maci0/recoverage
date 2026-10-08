@@ -216,9 +216,18 @@ def main() -> int:
             if rc == 0:
                 fallback_paths: list[str | Path] = []
                 for name, document in (
-                    ("potato-503.html", str(_db_unavailable_page().body)),
+                    ("potato-503.html", str(_db_unavailable_page(()).body)),
+                    (
+                        "potato-503-unreadable.html",
+                        str(
+                            _db_unavailable_page(
+                                [{"file": "coverage-X.toml", "target": "X", "error": "<bad>"}]
+                            ).body
+                        ),
+                    ),
                     ("potato-500.html", _RENDER_ERROR_BODY),
-                    ("potato-no-data.html", _no_data_page("SOME_TARGET")),
+                    ("potato-no-data.html", _no_data_page("SOME_TARGET", None)),
+                    ("potato-no-data-unreadable.html", _no_data_page("SOME_TARGET", "<bad>")),
                 ):
                     page = project_dir / name
                     page.write_text(document, encoding="utf-8")

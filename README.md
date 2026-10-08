@@ -530,8 +530,8 @@ reload; the exit code stays 0.
 | `/original/<filepath:path>` | GET | A file under the original binary's tree |
 | `/app.js`, `/style.css`, `/print.css`, `/favicon.svg`, `/highlight.js`, `/archivo.woff2`, `/jetbrains-mono.woff2` | GET | The packaged static assets (`no-cache` with a strong `ETag`). `/highlight.js` is the standalone highlighter the code panes load on demand; it is emitted as a second bundle beside `app.js` because the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets. Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
+| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info (`db.unreadable` names each document that does not parse, and any one degrades the status), installed extras, request/regen/stream/connection counters, cache hit-miss |
+| `/api/targets` | GET | List available targets, and under `unreadable` every coverage document that exists and does not parse (`file`, `target`, `error`; the file name only, never its path). Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages (no query parameters) |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary, or a `sort` column the list does not carry, is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |

@@ -1339,6 +1339,44 @@ class TestCheckMissingDbExitCode:
         assert "RECOVERAGE_DB" in result.output
 
 
+class TestUnreadableCoverageNamesTheDocument:
+    """Documents that exist and do not parse are not "no document".
+
+    The line used to read "cannot read coverage at DIR: DIR: no
+    coverage-*.toml document; run 'rebrew coverage build' (run 'rebrew
+    coverage build' to rebuild it)": the directory twice, the advice twice,
+    and a claim that no document existed beside the one that did.
+    """
+
+    def _broken_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        directory = tmp_path / "db"
+        directory.mkdir()
+        (directory / "coverage-GAME.toml").write_text("version = [\n", encoding="utf-8")
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        return directory
+
+    def test_the_error_names_each_file_and_its_parse_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._broken_dir(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["check", "--min-coverage", "60"])
+        assert result.exit_code == 2
+        assert "could be read:\n  coverage-GAME.toml: malformed TOML (" in result.stderr
+        assert "no coverage-*.toml document" not in result.stderr
+        assert result.stderr.count("rebrew coverage build") == 1
+
+    def test_the_json_error_is_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The machine channel keeps its message: a script may match on it."""
+        self._broken_dir(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
+        assert result.exit_code == 2
+        payload = json.loads(result.stdout)
+        assert payload["error"].startswith("cannot read coverage: ")
+        assert "no coverage-*.toml document" in payload["error"]
+
+
 class TestJsonErrorEnvelope:
     """A machine-readable mode answers every failure in one shape.
 

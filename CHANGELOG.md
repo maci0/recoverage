@@ -5,6 +5,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/targets` lists every coverage document that exists and does not
+  parse under `unreadable` (`file`, `target`, `error`), and `GET /api/health`
+  names them in `db.unreadable` and reports `degraded` while any is broken.
+
+### Fixed
+
+- A coverage directory whose only document is corrupt read as an empty
+  project ("No coverage documents yet"), and a broken document beside good
+  ones dropped its target from the picker without a word. The dashboard and
+  Potato Mode now name the file and its parse error, and a declared target
+  whose document is broken says so instead of asking for a build.
+- `stats`, `export` and `check` on a directory where no document parses name
+  each file and its error instead of claiming there is no document and
+  repeating the rebuild advice. The `--json` error is unchanged.
+
 ## [6.0.0] - 2026-10-07
 
 ### Added

@@ -126,8 +126,18 @@ export type TargetInfo = {
   name: string;
 };
 
+/** A coverage document the server could not read: its file name, the target
+ * id the name carries, and the reader's error. Document text, rendered as
+ * text. */
+export type UnreadableDocument = {
+  file: string;
+  target: string;
+  error: string;
+};
+
 export type TargetsPayload = {
   targets: Array<TargetInfo>;
+  unreadable: Array<UnreadableDocument>;
 };
 
 /** `cache: "no-cache"` on every read: the server answers 304 from its ETag, so
@@ -141,15 +151,16 @@ function init(signal?: AbortSignal): RequestInit {
   return signal === undefined ? NO_CACHE : { ...NO_CACHE, signal };
 }
 
-export async function fetchTargets(signal?: AbortSignal): Promise<Array<TargetInfo>> {
+export async function fetchTargets(signal?: AbortSignal): Promise<TargetsPayload> {
   const res = await fetch("/api/targets", init(signal));
   if (!res.ok) {
     throw new Error(await refusal(res));
   }
   // SAFETY: the response is this origin's own JSON, whose shape
-  // `recoverage.api.handle_api_targets` pins to `{"targets": [...]}`.
-  const body = (await res.json()) as TargetsPayload;
-  return body.targets ?? [];
+  // `recoverage.api.handle_api_targets` pins to `{"targets": [...],
+  // "unreadable": [...]}`.
+  const body = (await res.json()) as Partial<TargetsPayload>;
+  return { targets: body.targets ?? [], unreadable: body.unreadable ?? [] };
 }
 
 export async function fetchData(

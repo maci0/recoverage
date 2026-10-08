@@ -1330,6 +1330,11 @@ def handle_api_health() -> bytes:
     # narrower than the dropdown: `db_target_ids` omits a target the config
     # declares and no build has written, which `/api/targets` still serves.
     target_count = len(_server.db_target_ids())
+    # The documents the reader skipped, by name: a broken document beside
+    # readable ones drops its target from every list while every route still
+    # answers 200, so without this the probe called that deployment healthy.
+    broken = [entry["file"] for entry in _server.unreadable_documents()]
+    db_info["unreadable"] = broken
     if documents:
         db_info["size_bytes"] = sum(size for _name, _mtime, size in documents)
         if not target_count:
@@ -1338,6 +1343,12 @@ def handle_api_health() -> bytes:
             # nothing to serve.  Reporting only the missing-directory case
             # would call that deployment healthy.
             reasons.append(f"no readable coverage-*.toml in {db}")
+        elif broken:
+            reasons.append(
+                f"{len(broken)} unreadable coverage "
+                f"{'document' if len(broken) == 1 else 'documents'}: "
+                f"{_server._log_safe(', '.join(broken))}"
+            )
     else:
         reasons.append(f"no coverage-*.toml document in {db}")
     if mtime_ns is not None:
@@ -1569,6 +1580,10 @@ def handle_api_targets() -> bytes | HTTPResponse:
         ]
     else:
         _clear_targets_fallback()
+    # Beside the list, never folded into it: a document that does not parse is
+    # not a target with no data, and the reader has to be told which file
+    # failed and why rather than handed the empty-project state.
+    payload = {"targets": targets_list, "unreadable": _server.unreadable_documents()}
 
     etag = _etag_or_304(
         _snapshot_db_mtime(),
@@ -1579,14 +1594,8 @@ def handle_api_targets() -> bytes | HTTPResponse:
         # An unreadable DB is the case the snapshot cannot fingerprint, so
         # there is nothing to revalidate against and the list stays
         # uncacheable rather than being pinned to a tag that proves nothing.
-        return _json_ok(
-            {"targets": targets_list},
-            Cache_Control=CACHE_NO_STORE,
-        )
-    return _json_ok(
-        {"targets": targets_list},
-        **_revalidate_headers(etag),
-    )
+        return _json_ok(payload, Cache_Control=CACHE_NO_STORE)
+    return _json_ok(payload, **_revalidate_headers(etag))
 
 
 @app.get("/api/targets/<target>/stats")

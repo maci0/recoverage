@@ -578,7 +578,7 @@ def _load_coverage_or_exit(
     unreadable coverage set as an infrastructure error, distinct from
     "coverage below threshold" = 1); sibling commands keep their historical 1.
     """
-    from recoverage.server import coverage_snapshots
+    from recoverage.server import _log_safe, coverage_snapshots, unreadable_documents
 
     _check_env_or_exit()
     p = _db_path_or_exit(json_output=json_output)
@@ -596,6 +596,23 @@ def _load_coverage_or_exit(
     try:
         return coverage_snapshots()
     except CoverageTomlError as exc:
+        broken = unreadable_documents()
+        if broken:
+            # Documents are there and none parses: "no document" and its
+            # rebuild hint would send the reader after a build that already
+            # ran.  Name each file and its error instead.  The JSON channel
+            # keeps its message, which a script may already match on.
+            lines = "\n".join(
+                f"  {_log_safe(entry['file'])}: {_log_safe(entry['error'])}" for entry in broken
+            )
+            it = "it" if len(broken) == 1 else "them"
+            _fail(
+                f"Error: no coverage document in {p} could be read:\n{lines}\n"
+                f"Fix or remove {it}, or rebuild {it} with 'rebrew coverage build'.",
+                f"cannot read coverage: {exc}",
+                2,
+                json_output,
+            )
         # rebrew's own message can already end with the advice; the hint is
         # ours to add only where the reader would not get it twice.
         hint = "" if _REBUILD_HINT in str(exc) else f" {_REBUILD_HINT}"

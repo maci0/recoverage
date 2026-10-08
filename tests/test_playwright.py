@@ -412,6 +412,46 @@ def test_an_empty_project_shows_one_empty_state(page: Any):
     expect(page.locator("#search-input")).to_be_hidden()
 
 
+def test_a_corrupt_only_document_is_named_not_an_empty_project(page: Any):
+    """A directory whose one document does not parse is not "no documents yet".
+
+    `/api/targets` lists no target for it, and the dashboard used to read that
+    as an empty project and ask for a build that had already run.
+    """
+    body = (
+        '{"targets": [], "unreadable": [{"file": "coverage-GAME.toml", "target": "GAME",'
+        ' "error": "malformed TOML (at line 3, column 11)"}]}'
+    )
+    page.route(
+        "**/api/targets",
+        lambda route: route.fulfill(status=200, content_type="application/json", body=body),
+    )
+    page.goto(f"{BASE_URL}/")
+    card = page.locator("#section-panel [role=alert]")
+    expect(card).to_contain_text("The coverage document could not be read")
+    expect(card).to_contain_text("coverage-GAME.toml: malformed TOML (at line 3, column 11)")
+    expect(page.locator("#section-panel")).not_to_contain_text("No coverage documents yet")
+
+
+def test_a_broken_document_beside_good_ones_is_named_over_the_map(page: Any):
+    """The target the broken document carried is missing from the picker, and
+    this line is the one place that says why."""
+
+    def with_unreadable(route: Any) -> None:
+        listed = route.fetch().json()
+        listed["unreadable"] = [
+            {"file": "coverage-ZZZ.toml", "target": "ZZZ", "error": "sections is not a table"}
+        ]
+        route.fulfill(json=listed)
+
+    page.route("**/api/targets", with_unreadable)
+    page.goto(f"{BASE_URL}/")
+    page.wait_for_selector(".grid")
+    notice = page.locator("#section-panel [role=status]", has_text="coverage-ZZZ.toml")
+    expect(notice).to_contain_text("One coverage document could not be read")
+    expect(notice).to_contain_text("sections is not a table")
+
+
 def test_a_failed_target_list_is_reported_once(page: Any):
     """A refused target list is the failure, not an empty project.
 

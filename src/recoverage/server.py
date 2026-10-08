@@ -53,7 +53,7 @@ from rebrew.workspace import (
 
 from recoverage import clock, metrics
 from recoverage._paths import _db_path, config_fingerprint
-from recoverage.documents import COVERAGE_GLOB, load_all, versions
+from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -1161,6 +1161,21 @@ def db_target_ids() -> list[str]:
     from.
     """
     return sorted(load_all(_db_path()))
+
+
+def unreadable_documents() -> list[dict[str, str]]:
+    """Every coverage document the reader skipped, as served by ``/api/targets``.
+
+    ``file`` is the document's name (never its path), ``target`` the id the
+    name carries and ``error`` why it did not load.  A directory whose only
+    document is corrupt otherwise reads as one with no document at all, and a
+    broken document beside good ones drops its target from every list without
+    a word, so the surfaces that list targets name these beside them.
+    """
+    return [
+        {"file": name, "target": target, "error": reason}
+        for name, target, reason in unreadable(_db_path())
+    ]
 
 
 def target_key(target: str) -> str:

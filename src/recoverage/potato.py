@@ -17,7 +17,7 @@ import struct
 import textwrap
 import threading
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from heapq import nsmallest
 from html import escape as _html_escape
 from pathlib import Path
@@ -79,6 +79,8 @@ from recoverage.server import (
     response,
     set_auth_cookie,
     strip_ascii_whitespace,
+    target_key,
+    unreadable_documents,
     verify_by_va,
     verify_payload,
 )
@@ -1052,6 +1054,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           </tr></table>
         </td></tr>
         % end
+        % for doc in unreadable:
+        <tr><td colspan="4" align="center"><font face="{{MONO_FONT}}" size="2" color="{{FAIL_INK}}">Unreadable coverage document <b>{{doc['file']}}</b>: {{doc['error']}}</font></td></tr>
+        % end
         <!-- Search and target share the first row; the filter pills take
              their own second row.  As one row the three groups need ~1000px,
              which overflowed a 390px phone and clipped the filters (E/R/M/S/P
@@ -1305,7 +1310,7 @@ _PANEL_TPL = SimpleTemplate(source=_PANEL_SRC)
 # ── Rendering Logic ─────────────────────────────────────────────────
 
 
-def _db_unavailable_page() -> HTTPResponse:
+def _db_unavailable_page(broken: Sequence[Mapping[str, str]]) -> HTTPResponse:
     """503 HTML page for unreadable coverage in Potato Mode.
 
     ONE definition, so the page a reader gets is the same whichever tail
@@ -1327,16 +1332,33 @@ def _db_unavailable_page() -> HTTPResponse:
     than the retro surface a reader chooses, so they centre with a
     two-declaration flexbox and are valid documents instead of valid-looking
     ones.
+
+    *broken* is :func:`server.unreadable_documents`: documents that exist and
+    do not parse are named with their error, because "run the build" is the
+    wrong advice for a file the build already wrote.  Both are document input
+    and escaped.
     """
+    if broken:
+        items = "".join(
+            f"<li><code>{_esc(doc['file'])}</code>: {_esc(doc['error'])}</li>" for doc in broken
+        )
+        cause = (
+            f"<p>No coverage document could be read:</p><ul>{items}</ul>"
+            "<p>Fix or remove the broken documents, or rebuild them with "
+            "'rebrew coverage build', then "
+        )
+    else:
+        cause = (
+            "<p>The coverage directory holds no document. Run "
+            "'rebrew coverage build' to write them, then "
+        )
     return HTTPResponse(
         status=503,
         body=(
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>recoverage · coverage unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
-            "<body><main><h1>Coverage unavailable</h1>"
-            "<p>The coverage directory holds no document that could be read. Run "
-            "'rebrew coverage build' to write or rebuild them, then "
+            f"<body><main><h1>Coverage unavailable</h1>{cause}"
             '<a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the dashboard</a>.</p></main></body></html>'
         ),
@@ -1344,7 +1366,7 @@ def _db_unavailable_page() -> HTTPResponse:
     )
 
 
-def _no_data_page(target: str) -> str:
+def _no_data_page(target: str, error: str | None) -> str:
     """The page a target the project declares but nothing has built answers.
 
     A function rather than an inline literal, so ``tools/lint_html.py`` can
@@ -1354,14 +1376,26 @@ def _no_data_page(target: str) -> str:
     shipped unvalidated.  The target id is escaped, and it is a value rebrew
     names out of a PE image, so it is untrusted input like every other value
     read from a document.
+
+    *error* is why the target's document did not load, or None when there is
+    no document: the two need different fixes, so the page names the one that
+    applies.
     """
+    document = f"coverage-{target}.toml"
+    if error is None:
+        cause = f"Run 'rebrew coverage build' to write <code>{_esc(document)}</code>, or pick"
+    else:
+        cause = (
+            f"<code>{_esc(document)}</code> cannot be read: {_esc(error)}. Fix it or "
+            "rebuild it with 'rebrew coverage build', or pick"
+        )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>recoverage · no data for {_esc(target)}</title>{_FALLBACK_PAGE_STYLE}</head>"
         f"<body><main><h1>No data for target {_esc(target)}</h1>"
-        '<p>Pick a built target from <a href="/potato">Potato Mode</a> or '
-        '<a href="/">the SPA</a>.</p></main></body></html>'
+        f'<p>{cause} a built target from <a href="/potato">Potato Mode</a> or '
+        '<a href="/">the dashboard</a>.</p></main></body></html>'
     )
 
 
@@ -1462,7 +1496,7 @@ def render_potato(parsed_url: ParseResult) -> str:
         )
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # outage (same contract as the API's 503 db_unavailable).
-        raise _db_unavailable_page() from None
+        raise _db_unavailable_page(unreadable_documents()) from None
 
     # ONE frozen snapshot for the whole render.  A Potato page reads metadata,
     # sections, cells, functions, globals and (for the detail panels)
@@ -1558,7 +1592,7 @@ def handle_potato() -> bytes | Any:
             _log_safe(request.path),
             extra=request_log_fields(503),
         )
-        return _db_unavailable_page()
+        return _db_unavailable_page(unreadable_documents())
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
     except (OSError, ValueError, KeyError, TypeError):
         _log.exception(
@@ -3022,7 +3056,15 @@ def _render_potato_inner(
 
     sections, data = _load_section_data(coverage, snap=snap)
     if not sections:
-        return _no_data_page(target)
+        error = next(
+            (
+                doc["error"]
+                for doc in unreadable_documents()
+                if target_key(doc["target"]) == target_key(target)
+            ),
+            None,
+        )
+        return _no_data_page(target, error)
 
     if section not in sections:
         section = next(iter(sections))
@@ -3176,6 +3218,8 @@ def _render_potato_inner(
         search_accesskey=SEARCH_ACCESSKEY,
         progress=progress,
         progress_bar_png=progress_bar_png_uri,
+        unreadable=unreadable_documents(),
+        FAIL_INK=_INK_PROBLEM,
         ACTIVE_L=ACTIVE_L,
         ACTIVE_R=ACTIVE_R,
         ACTIVE_MID=ACTIVE_MID,

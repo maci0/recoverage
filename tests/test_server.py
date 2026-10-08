@@ -3814,6 +3814,80 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         assert status.startswith("200"), status
         assert json.loads(body)["sections"][".text"]["exact"] == 1
 
+    def test_the_target_list_names_a_document_it_could_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A directory whose only document is corrupt is not an empty project.
+
+        `/api/targets` lists no target for it either way, so the reason rides
+        beside the list: the file name, the target id it carries and the
+        parse error, without the absolute path the log line already holds.
+        """
+        from conftest import wsgi_get
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "coverage-BROKEN.toml").write_text(self.BROKEN, encoding="utf-8")
+
+        status, _, body = wsgi_get("/api/targets")
+        assert status.startswith("200"), status
+        payload = json.loads(body)
+        assert payload["targets"] == []
+        [entry] = payload["unreadable"]
+        assert entry["file"] == "coverage-BROKEN.toml"
+        assert entry["target"] == "BROKEN"
+        assert entry["error"].startswith("malformed TOML (")
+        assert str(directory) not in body.decode("utf-8")
+
+    def test_a_readable_directory_lists_nothing_unreadable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from conftest import wsgi_get
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GOOD", {".text": _cell_section(["exact"])})
+        payload = json.loads(wsgi_get("/api/targets")[2])
+        assert [t["id"] for t in payload["targets"]] == ["GOOD"]
+        assert payload["unreadable"] == []
+
+    def test_a_broken_document_beside_a_good_one_is_named_and_degrades_health(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every route still answers 200 here, so the list and the probe are
+        the only places the missing target can be noticed."""
+        from conftest import wsgi_get
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GOOD", {".text": _cell_section(["exact"])})
+        (directory / "coverage-BROKEN.toml").write_text(self.BROKEN, encoding="utf-8")
+
+        payload = json.loads(wsgi_get("/api/targets")[2])
+        assert [t["id"] for t in payload["targets"]] == ["GOOD"]
+        assert [d["file"] for d in payload["unreadable"]] == ["coverage-BROKEN.toml"]
+
+        health = json.loads(wsgi_get("/api/health")[2])
+        assert health["db"]["unreadable"] == ["coverage-BROKEN.toml"]
+        assert health["status"] == "degraded"
+
+    def test_fixing_the_document_moves_the_target_list_etag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cached list naming the broken file must not outlive the fix."""
+        from conftest import wsgi_get
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GOOD", {".text": _cell_section(["exact"])})
+        broken = directory / "coverage-BROKEN.toml"
+        broken.write_text(self.BROKEN, encoding="utf-8")
+        _, headers, _ = wsgi_get("/api/targets")
+        etag = {k.lower(): v for k, v in headers.items()}["etag"]
+
+        broken.unlink()
+        write_coverage(directory, "BROKEN", {".text": _cell_section(["stub"])})
+        status, _, body = wsgi_get("/api/targets", headers={"If-None-Match": etag})
+        assert status.startswith("200"), status
+        assert json.loads(body)["unreadable"] == []
+
     def test_a_foreign_version_is_refused_not_guessed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
