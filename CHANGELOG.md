@@ -21,6 +21,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `stats`, `export` and `check` on a directory where no document parses name
   each file and its error instead of claiming there is no document and
   repeating the rebuild advice. The `--json` error is unchanged.
+- `serve` printed "Serving coverage dashboard at ..." and its config block
+  before binding the port, so a port another process held read as a
+  dashboard that started and then "Failed to start". The banner now prints
+  once the listener holds the port, and a conflict prints the failure alone.
 
 ## [6.0.0] - 2026-10-07
 

@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import socket
+from collections.abc import Callable
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
@@ -77,6 +78,24 @@ def configure_transport(*, max_connections: int, client_timeout_seconds: int) ->
     # So /api/health's `connections.max` names the enforced cap before the
     # first accept rather than reading 0 until one lands.
     metrics.CONNECTIONS.set_limit(max_connections)
+
+
+#: What the next listener runs once its socket is bound and listening, before
+#: the first accept; taken (and cleared) by that listener.  See
+#: :func:`on_listening`.
+_ON_LISTENING: Callable[[], None] | None = None
+
+
+def on_listening(callback: Callable[[], None] | None) -> None:
+    """Run *callback* once the next listener holds its port; None disarms it.
+
+    ``serve`` prints its banner through this, so "Serving coverage dashboard
+    at ..." is true when it is printed: a port another process holds fails in
+    ``bind()`` first, and the operator reads the failure alone rather than a
+    banner announcing a dashboard followed by "Failed to start".
+    """
+    global _ON_LISTENING
+    _ON_LISTENING = callback
 
 
 def listen_family(host: str) -> socket.AddressFamily:
@@ -175,6 +194,14 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     # The cost is one failed bind after a crash in the kernel's hands, which
     # serve already reports with the address in the message.
     allow_reuse_address = os.name != "nt"
+
+    def server_activate(self) -> None:
+        """Listen, then hand the bound port to whoever :func:`on_listening` named."""
+        global _ON_LISTENING
+        super().server_activate()
+        callback, _ON_LISTENING = _ON_LISTENING, None
+        if callback is not None:
+            callback()
 
     def process_request(self, request: Any, client_address: Any) -> None:
         """Admit the connection, or answer 503 and close it at the cap.

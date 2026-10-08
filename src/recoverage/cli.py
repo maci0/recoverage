@@ -30,6 +30,7 @@ from recoverage.devserver import (
     _KeepAliveRequestHandler,
     _server_class_for,
     configure_transport,
+    on_listening,
     resolve_listen_port,
 )
 from recoverage.documents import COVERAGE_GLOB
@@ -1373,18 +1374,16 @@ def _echo_banner(
     url: str,
     listen_url: str,
     assets: Path,
+    coverage: Path,
     active: Mapping[str, str],
     cors: bool,
 ) -> None:
-    """Print the startup banner on stdout.
+    """Print the startup banner on stdout, once the listener holds its port.
 
     The caller publishes *active* through ``server.configure_startup`` before
     calling, so the banner and ``/api/health`` carry the same rendered
     values.  Kept apart from ``serve`` so the banner is one callable rather
     than nine echoes interleaved with the listener setup.
-
-    ``_db_path_or_exit`` runs inside the print, so an unresolvable coverage
-    directory still fails before the listener binds.
     """
     typer.echo(f"Serving coverage dashboard at {url}")
     # The listener's own address only where it differs from the URL above (a
@@ -1393,7 +1392,7 @@ def _echo_banner(
     if listen_url != url:
         typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
-    typer.echo(f"  Coverage: {_db_path_or_exit()}")
+    typer.echo(f"  Coverage: {coverage}")
     typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
     if cors:
         typer.echo("  CORS: enabled")
@@ -1628,12 +1627,18 @@ def serve(
         max_connections=resolved.max_connections,
         client_timeout_seconds=resolved.client_timeout,
     )
-    _echo_banner(
-        url=url,
-        listen_url=listen_url,
-        assets=assets,
-        active=active,
-        cors=cors,
+    # The coverage directory is resolved now, so a bad one still fails before
+    # the bind; the banner itself waits for the listener (devserver.on_listening).
+    coverage = _db_path_or_exit()
+    on_listening(
+        lambda: _echo_banner(
+            url=url,
+            listen_url=listen_url,
+            assets=assets,
+            coverage=coverage,
+            active=active,
+            cors=cors,
+        )
     )
 
     browser_timer: threading.Timer | None = None
@@ -1719,6 +1724,9 @@ def serve(
         # thread has stopped, so a callback already past its own check runs
         # anyway — hence the listener probe inside the opener.
         restore_stop_handler()
+        # A start that never reached the bind leaves the banner armed; it must
+        # not fire for a listener some later caller in this process builds.
+        on_listening(None)
         if browser_timer is not None:
             browser_timer.cancel()
 

@@ -28,6 +28,15 @@ from recoverage.devserver import _server_class_for
 
 runner = CliRunner()
 
+
+def _listen_once(**kwargs: Any) -> None:
+    """Stand in for ``bottle_app.run``: bind the server class ``serve`` passed
+    on a free port, which runs the on-listening hook the banner waits for,
+    then close it without serving."""
+    server = kwargs["server_class"]((kwargs["host"], 0), kwargs["handler_class"])
+    server.server_close()
+
+
 #: The SGR sequence Rich paints the bold cyan target heading of `stats` with.
 #: Named because the color opt-out test asserts on the color part of that
 #: sequence, and Rich keeps the bold attribute when color is dropped.
@@ -316,7 +325,8 @@ class TestBareInvocationServes:
         # proof is that `serve`'s banner is printed, not click's error.
         class _StubApp:
             @staticmethod
-            def run(**_kwargs: Any) -> None:
+            def run(**kwargs: Any) -> None:
+                _listen_once(**kwargs)
                 raise KeyboardInterrupt
 
         monkeypatch.chdir(tmp_path)
@@ -335,7 +345,8 @@ class TestBareInvocationServes:
     ) -> None:
         class _StubApp:
             @staticmethod
-            def run(**_kwargs: Any) -> None:
+            def run(**kwargs: Any) -> None:
+                _listen_once(**kwargs)
                 raise KeyboardInterrupt
 
         monkeypatch.chdir(tmp_path)
@@ -1556,7 +1567,8 @@ class TestEphemeralPort:
     ) -> None:
         class _StubApp:
             @staticmethod
-            def run(**_kwargs: Any) -> None:
+            def run(**kwargs: Any) -> None:
+                _listen_once(**kwargs)
                 raise KeyboardInterrupt
 
         monkeypatch.chdir(tmp_path)
@@ -1590,7 +1602,8 @@ class TestServeInstallsTheResolvedOriginList:
     def _serve(argv: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
         class _StubApp:
             @staticmethod
-            def run(**_kwargs: Any) -> None:
+            def run(**kwargs: Any) -> None:
+                _listen_once(**kwargs)
                 raise KeyboardInterrupt
 
         monkeypatch.chdir(tmp_path)
@@ -1861,7 +1874,7 @@ class TestServeServerWiring:
             "recoverage.server.configure_security",
             lambda **kwargs: installed.update(kwargs),
         )
-        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: _listen_once(**kwargs))
         return installed
 
     def test_the_installed_allowlist_is_what_the_server_is_configured_with(
@@ -1908,7 +1921,7 @@ class TestServeServerWiring:
             "recoverage.server.configure_security",
             lambda **kwargs: captured.append(kwargs),
         )
-        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: _listen_once(**kwargs))
 
         result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
         assert result.exit_code == 0
@@ -2988,7 +3001,8 @@ def test_the_banner_names_each_address_once(
 
     class _StubApp:
         @staticmethod
-        def run(**_kwargs: Any) -> None:
+        def run(**kwargs: Any) -> None:
+            _listen_once(**kwargs)
             raise KeyboardInterrupt
 
     monkeypatch.chdir(tmp_path)
@@ -3002,6 +3016,31 @@ def test_the_banner_names_each_address_once(
     assert "Listening on" not in out
     assert "  Coverage: " in out
     assert "  DB: " not in out
+
+
+def test_a_port_another_process_holds_prints_no_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The banner waits for the bind.
+
+    It used to print "Serving coverage dashboard at ..." and the whole config
+    block before the listener bound, so a port conflict read as a dashboard
+    that started and then "Failed to start" under it.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+    with socket.socket() as holder:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        port = holder.getsockname()[1]
+        monkeypatch.setattr(sys, "argv", ["recoverage", "serve", "--port", str(port), "--no-open"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "Serving coverage dashboard" not in captured.out
+    assert "  Config: " not in captured.out
+    assert f"Failed to start server on http://127.0.0.1:{port}" in captured.err
 
 
 class TestOpenWarnsWithoutAListener:
