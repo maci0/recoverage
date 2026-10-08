@@ -283,7 +283,10 @@ async function refusal(res: Response): Promise<string> {
 function describeRefusal(res: Response, payload: ErrorEnvelope): string {
   const status = `${res.status} ${res.statusText}`;
   const headline = payload.error ?? status;
-  const reason = payload.detail ? `${headline}: ${payload.detail}` : headline;
+  // A semicolon, not a colon: headlines are often "Label: reason" already, and
+  // a second colon read as "Rate limited: wait before regenerating again:
+  // retry after 1.8s", a chain of labels with no sentence in it.
+  const reason = payload.detail ? `${headline}; ${payload.detail}` : headline;
   // The server mints a correlation id on every response and stamps it on
   // every log line it writes (`server._RequestIdFilter`). Carrying it in the
   // message is what lets a reader who reports "the map failed to load" hand

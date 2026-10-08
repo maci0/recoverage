@@ -31,6 +31,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A finished regenerate, or a jump that found no block, floats its notice at
   the foot of the window instead of pushing the map down and pulling it back
   up four seconds later.
+- Refusal messages join the server's reason to its detail with a semicolon:
+  "Rate limited: wait before regenerating again; retry after 1.8s" (was a
+  second colon).
 
 ### Fixed
 
