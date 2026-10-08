@@ -353,6 +353,31 @@ def test_code_modal_names_one_scroll_region(page: Any):
     expect(page.locator('.modal-body[role="region"]')).to_have_count(1)
 
 
+def test_a_pane_message_is_not_reported_as_unhighlighted_code(page: Any):
+    """With the highlighter unreachable, only panes holding code say so.
+
+    Every pane, the "(no disassembly ...)" placeholders and the error lines
+    included, carried "(syntax highlighting unavailable ...)" under it, which
+    turned one fact into a note per pane about text that is never coloured.
+    """
+    page.route("**/highlight.js", lambda route: route.abort())
+    page.goto(f"{BASE_URL}/?section=.data")
+    page.wait_for_selector(".grid-canvas")
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    if box is None:
+        pytest.skip("coverage map canvas did not layout")
+    canvas.click(position={"x": min(12, box["width"] / 2), "y": min(12, box["height"] / 2)})
+    source = page.locator("#panel .section", has_text="C Source")
+    expect(source.locator("button", has_text="Open")).to_be_enabled(timeout=15000)
+    note = "syntax highlighting unavailable"
+    expect(source).to_contain_text(note)
+    # The sample ships no original binary, so this pane holds a message.
+    raw = page.locator("#panel .section", has_text="Original Bytes")
+    expect(raw.locator("button", has_text="Open")).to_be_disabled()
+    expect(raw).not_to_contain_text(note)
+
+
 def test_the_code_modal_takes_focus_and_gives_it_back(page: Any):
     """Opening the modal moves focus to its Close button; closing returns it.
 

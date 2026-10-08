@@ -34,6 +34,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Refusal messages join the server's reason to its detail with a semicolon:
   "Rate limited: wait before regenerating again; retry after 1.8s" (was a
   second colon).
+- With the syntax highlighter unreachable, only panes that hold code say so;
+  every placeholder and error line carried the same note. A disabled Copy or
+  Open now says the pane holds no code (or the block no bytes) instead of
+  "Select a block first" beside a selected block.
 
 ### Fixed
 

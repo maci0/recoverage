@@ -138,13 +138,13 @@ function CodeSection({
             label="Copy"
             value={text}
             ariaLabel={`Copy ${heading}`}
-            title={empty ? "Select a block first" : ""}
+            title={empty ? "This pane holds no code to copy" : ""}
             disabled={empty}
           />
           <Button
             size="sm"
             aria-label={`Open ${heading} in a larger view`}
-            title={empty ? "Select a block first" : ""}
+            title={empty ? "This pane holds no code to open" : ""}
             disabled={empty}
             onClick={() => onOpen(heading, text, language)}
           >
@@ -156,6 +156,7 @@ function CodeSection({
         text={text}
         language={language}
         label={`${heading} pane`}
+        plain={empty}
         {...(onAddressClick === undefined ? {} : { onAddressClick })}
       />
     </section>
@@ -625,13 +626,13 @@ export function CoveragePanel({
                       label="Copy"
                       value={inspector}
                       ariaLabel="Copy Data Inspector"
-                      title={inspectorEmpty ? "Select a block first" : ""}
+                      title={inspectorEmpty ? "This block has no file-backed bytes to copy" : ""}
                       disabled={inspectorEmpty}
                     />
                     <Button
                       size="sm"
                       aria-label="Open Data Inspector in a larger view"
-                      title={inspectorEmpty ? "Select a block first" : ""}
+                      title={inspectorEmpty ? "This block has no file-backed bytes to open" : ""}
                       disabled={inspectorEmpty}
                       onClick={() => openModal("Data Inspector", inspector, "hex")}
                     >

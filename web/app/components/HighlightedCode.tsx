@@ -34,6 +34,11 @@ export type HighlightedCodeProps = {
   region?: boolean;
   /** Called with the numeric address of a clicked `.asm-link`. */
   onAddressClick?: (address: string) => void;
+  /** True when *text* is a pane message ("(no disassembly for this block)",
+   * an `Error:` line) rather than code: it is shown as it is, the
+   * highlighter is not fetched for it, and a highlighter that failed to load
+   * is not reported under a line that was never going to be coloured. */
+  plain?: boolean;
 };
 
 type Highlighter = Awaited<ReturnType<typeof loadHighlighter>>;
@@ -45,6 +50,7 @@ export function HighlightedCode({
   label,
   region = true,
   onAddressClick,
+  plain = false,
 }: HighlightedCodeProps): ComponentChildren {
   const [highlighter, setHighlighter] = useState<Highlighter | null>(null);
   const [failed, setFailed] = useState(false);
@@ -53,7 +59,7 @@ export function HighlightedCode({
   // does any work: `loadHighlighter` memoises the in-flight load, so opening a
   // second cell costs a resolved promise rather than a second request.
   useEffect(() => {
-    if (text === "") {
+    if (text === "" || plain) {
       return;
     }
     let live = true;
@@ -83,7 +89,7 @@ export function HighlightedCode({
     return () => {
       live = false;
     };
-  }, [text]);
+  }, [plain, text]);
 
   // An empty pane has nothing to colour and nothing to show, so it does not
   // render a border around a blank box and does not fetch the highlighter.
@@ -96,8 +102,11 @@ export function HighlightedCode({
   // runs), so re-running it for text that did not change drops frames the
   // keystroke is painting. The memo key is the text and the highlighter.
   const html = useMemo(
-    () => (highlighter === null ? escapeHtml(text) : highlightCode(highlighter, text, language)),
-    [highlighter, language, text],
+    () =>
+      highlighter === null || plain
+        ? escapeHtml(text)
+        : highlightCode(highlighter, text, language),
+    [highlighter, language, plain, text],
   );
 
   return (
@@ -133,7 +142,7 @@ export function HighlightedCode({
       {/* The status line is inside the labelled region, so a screen reader
        * reaching the pane is told the same thing the line shows. `role=status`
        * announces it without taking focus. */}
-      {failed && (
+      {failed && !plain && (
         <span role="status" className="mt-2 block font-mono text-micro text-text-muted">
           {MSG.HIGHLIGHT_FAILED}
         </span>

@@ -1,6 +1,6 @@
 /** Formatting helpers and the shared user-facing strings.
  *
- * `hex` upper-cases and zero-pads, which is the spelling every address, byte
+ * `hex` zero-pads in lowercase, which is the spelling every address, byte
  * offset and size in the dashboard uses; `percent1`, `percentLabel`, `count`, `dateTime` and
  * `foldForSearch` are the locale-aware spellings the numbers, the timestamps
  * and the search read through; `MSG` is the one vocabulary the shell
