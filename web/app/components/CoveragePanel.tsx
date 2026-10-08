@@ -542,7 +542,9 @@ export function CoveragePanel({
             >
               {title}
             </h2>
-            <div className="panel-actions ms-auto flex shrink-0 flex-wrap justify-end gap-2">
+            {/* Under `sm` the buttons always take a row of their own, so they
+                start at the title's edge rather than hanging off the right. */}
+            <div className="panel-actions flex shrink-0 flex-wrap gap-2 sm:ms-auto sm:justify-end">
               <CopyButton
                 label="Copy VA"
                 value={copyVA ?? ""}

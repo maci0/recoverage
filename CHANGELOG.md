@@ -23,6 +23,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A function's blocker is printed once, in its Blocker row, in the dashboard
   and in Potato Mode; the Annotations row under it repeated the same
   `// BLOCKER:` line.
+- On a phone the detail panel's copy buttons start under the title instead
+  of hanging off its right edge.
 
 ### Fixed
 
