@@ -353,6 +353,34 @@ def test_code_modal_names_one_scroll_region(page: Any):
     expect(page.locator('.modal-body[role="region"]')).to_have_count(1)
 
 
+def test_the_code_modal_takes_focus_and_gives_it_back(page: Any):
+    """Opening the modal moves focus to its Close button; closing returns it.
+
+    The page behind the dialog is inert, so a dialog that does not take focus
+    leaves the keyboard on nothing. The Close button's ref reached the Button
+    component rather than its `<button>`, and the open threw a TypeError
+    (`focus is not a function`) instead.
+    """
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{BASE_URL}/?section=.data")
+    page.wait_for_selector(".grid-canvas")
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    if box is None:
+        pytest.skip("coverage map canvas did not layout")
+    canvas.click(position={"x": min(12, box["width"] / 2), "y": min(12, box["height"] / 2)})
+
+    opener = page.locator("#panel .section", has_text="C Source").locator("button", has_text="Open")
+    expect(opener).to_be_enabled(timeout=15000)
+    opener.click()
+    expect(page.locator(".modal-close")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(page.locator(".modal")).to_have_count(0)
+    expect(opener).to_be_focused()
+    assert errors == []
+
+
 # Web Vitals' "good" ceiling for cumulative layout shift; Lighthouse scores
 # the load against it.
 GOOD_CLS = 0.1

@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import type { ComponentProps } from "preact";
+import { forwardRef } from "preact/compat";
 
 import { cn } from "@/lib/cn";
 
@@ -44,9 +45,14 @@ export type ButtonProps = ComponentProps<"button"> &
     active?: boolean;
   };
 
-export function Button({ className, active, variant, size, ...props }: ButtonProps) {
-  return (
+/** The ref reaches the `<button>` itself: a ref on a plain function component
+ * is handed the component instance, which has no `focus()`, so the code
+ * modal's move of focus to its Close button threw and focus stayed behind
+ * the now-inert page. */
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, active, variant, size, ...props }, ref) => (
     <button
+      ref={ref}
       type="button"
       data-active={active === true ? "" : undefined}
       className={cn(
@@ -55,5 +61,5 @@ export function Button({ className, active, variant, size, ...props }: ButtonPro
       )}
       {...props}
     />
-  );
-}
+  ),
+);

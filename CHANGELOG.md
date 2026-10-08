@@ -25,6 +25,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   before binding the port, so a port another process held read as a
   dashboard that started and then "Failed to start". The banner now prints
   once the listener holds the port, and a conflict prints the failure alone.
+- Opening a code pane in the full-screen viewer left keyboard focus on the
+  page it had just made inert (the move to Close threw), so Tab and Enter
+  reached nothing until the viewer was closed with the mouse or Escape.
 
 ## [6.0.0] - 2026-10-07
 
