@@ -25,6 +25,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `// BLOCKER:` line.
 - On a phone the detail panel's copy buttons start under the title instead
   of hanging off its right edge.
+- A coverage map wider than the screen (every section on a phone) says so
+  under the map: the card showed no scrollbar until touched, so the visible
+  part read as the whole section.
 
 ### Fixed
 

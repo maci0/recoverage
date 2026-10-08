@@ -160,6 +160,11 @@ export function CoverageMap({
   // children, so this is the only thing a screen reader can read about the
   // cell the arrow keys walked to (WCAG 4.1.2, 1.1.1).
   const [cursor, setCursor] = useState<string>("");
+  // Whether the lattice is wider than its card. A section never draws fewer
+  // columns than it declares, so on a phone most of the map sits past the
+  // right edge of a card that shows no scrollbar until it is touched, and a
+  // reader took the visible third for the whole section.
+  const [overflows, setOverflows] = useState(false);
 
   // The pack is keyed on the section object, exactly like the VanJS memo: a
   // rebuild hands a fresh section object, and lazy cell loads replace it, so
@@ -477,6 +482,7 @@ export function CoverageMap({
     const observer = new ResizeObserver(() => {
       geometry(true);
       paint();
+      setOverflows(wrap.scrollWidth > wrap.clientWidth);
     });
     observer.observe(wrap);
     return () => observer.disconnect();
@@ -574,54 +580,61 @@ export function CoverageMap({
   };
 
   return (
-    <div
-      ref={wrapRef}
-      // The `.grid` hook and `data-cols` are what the map and the browser
-      // specs query; `id` is what a jump to an address scrolls.
-      // The map and the detail panel beside it are both cards, so they share
-      // the card corner and the hairline; two boxes in one row with different
-      // corners read as two layouts.
-      className="grid max-w-full overflow-x-auto rounded-card border border-border bg-surface"
-      id={`grid-${section.name.replaceAll(".", "")}`}
-      data-cols={declaredColumns}
-      // A canvas carries no accessible children, so this is an application
-      // region with a roving cursor rather than the listbox it used to claim:
-      // a listbox with no options announces an empty widget and nothing about
-      // the cell the arrow keys are on. The status paragraph below is the
-      // value, the hint paragraph is how to move it.
-      role="application"
-      aria-label={`${isolate(section.name)} coverage map`}
-      aria-describedby={hintId}
-      tabIndex={0}
-      onPointerMove={(event) => onPointer(event.clientX, event.clientY, false)}
-      onPointerLeave={() => {
-        const wrap = wrapRef.current;
-        if (wrap !== null) {
-          wrap.title = "";
-          wrap.style.cursor = "default";
-        }
-      }}
-      onClick={(event) => onPointer(event.clientX, event.clientY, true)}
-      onKeyDown={onKeyDown}
-    >
-      <span ref={probeRef} className="hidden" aria-hidden="true" />
-      <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
-      {/* Shown only while something is dimming the lattice, so the ordinary
-          read of a full map is unchanged. A filter or a search naming states
-          this section does not hold leaves nothing lit, and the map then reads
-          as "this section is empty" rather than as "your filter excludes
-          everything here"; this line says which rule did it, what it left and
-          what undoes it. */}
-      {summary !== null && (
-        <p className="border-t border-border px-3 py-2 text-micro text-text-muted">{summary}</p>
+    <>
+      <div
+        ref={wrapRef}
+        // The `.grid` hook and `data-cols` are what the map and the browser
+        // specs query; `id` is what a jump to an address scrolls.
+        // The map and the detail panel beside it are both cards, so they share
+        // the card corner and the hairline; two boxes in one row with different
+        // corners read as two layouts.
+        className="grid max-w-full overflow-x-auto rounded-card border border-border bg-surface"
+        id={`grid-${section.name.replaceAll(".", "")}`}
+        data-cols={declaredColumns}
+        // A canvas carries no accessible children, so this is an application
+        // region with a roving cursor rather than the listbox it used to claim:
+        // a listbox with no options announces an empty widget and nothing about
+        // the cell the arrow keys are on. The status paragraph below is the
+        // value, the hint paragraph is how to move it.
+        role="application"
+        aria-label={`${isolate(section.name)} coverage map`}
+        aria-describedby={hintId}
+        tabIndex={0}
+        onPointerMove={(event) => onPointer(event.clientX, event.clientY, false)}
+        onPointerLeave={() => {
+          const wrap = wrapRef.current;
+          if (wrap !== null) {
+            wrap.title = "";
+            wrap.style.cursor = "default";
+          }
+        }}
+        onClick={(event) => onPointer(event.clientX, event.clientY, true)}
+        onKeyDown={onKeyDown}
+      >
+        <span ref={probeRef} className="hidden" aria-hidden="true" />
+        <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
+        {/* Shown only while something is dimming the lattice, so the ordinary
+            read of a full map is unchanged. A filter or a search naming states
+            this section does not hold leaves nothing lit, and the map then reads
+            as "this section is empty" rather than as "your filter excludes
+            everything here"; this line says which rule did it, what it left and
+            what undoes it. */}
+        {summary !== null && (
+          <p className="border-t border-border px-3 py-2 text-micro text-text-muted">{summary}</p>
+        )}
+        <p id={hintId} className="sr-only">
+          Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
+          selects the block under the cursor, Escape closes the block that is open.
+        </p>
+        <p className="sr-only" role="status" aria-live="polite">
+          {cursor}
+        </p>
+      </div>
+      {overflows && (
+        <p className="m-0 mt-2 text-micro text-text-muted">
+          The map is wider than the screen; swipe it sideways for the rest of the section.
+        </p>
       )}
-      <p id={hintId} className="sr-only">
-        Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
-        selects the block under the cursor, Escape closes the block that is open.
-      </p>
-      <p className="sr-only" role="status" aria-live="polite">
-        {cursor}
-      </p>
-    </div>
+    </>
   );
 }

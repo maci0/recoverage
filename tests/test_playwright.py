@@ -418,6 +418,25 @@ def test_phone_load_holds_its_layout(page: Any):
     assert page.evaluate("window.__cls") < GOOD_CLS
 
 
+def test_a_map_wider_than_the_screen_says_so(page: Any):
+    """A section never draws fewer columns than it declares, so on a phone the
+    lattice runs past the card's right edge with no scrollbar until touched.
+    The line under it is the only cue; on a desktop the map fits and it is
+    absent."""
+    hint = "swipe it sideways for the rest of the section"
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{BASE_URL}/")
+    page.wait_for_selector(".grid-canvas")
+    overflows = page.evaluate(
+        "() => { const g = document.querySelector('.grid'); return g.scrollWidth > g.clientWidth; }"
+    )
+    if not overflows:
+        pytest.skip("the served section fits a phone; nothing to say")
+    expect(page.get_by_text(hint)).to_be_visible()
+    page.set_viewport_size({"width": 1440, "height": 900})
+    expect(page.get_by_text(hint)).to_have_count(0)
+
+
 def test_an_empty_project_shows_one_empty_state(page: Any):
     """A project with no documents is one card, not a dashboard of dead parts.
 
