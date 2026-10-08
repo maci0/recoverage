@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-10-08
+
 ### Added
 
 - `GET /api/targets` lists every coverage document that exists and does not
