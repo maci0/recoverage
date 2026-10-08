@@ -26,7 +26,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   character, along with the ends of long disassembly lines.
 - A function's blocker is printed once, in its Blocker row, in the dashboard
   and in Potato Mode; the Annotations row under it repeated the same
-  `// BLOCKER:` line.
+  `// BLOCKER:` line. The dashboard's Annotations row also dropped the
+  `// FUNCTION:`, `// STATUS:`, `// SIZE:`, `// CFLAGS:` and `// SYMBOL:`
+  lines that repeat the rows above it, and Potato Mode now lists
+  `// ORIGIN:`, so both show the same annotations.
 - On a phone the detail panel's copy buttons start under the title instead
   of hanging off its right edge.
 - A coverage map wider than the screen (every section on a phone) says so

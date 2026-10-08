@@ -826,6 +826,29 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     assert "extractDocs(source, { note: detail.note, blocker: detail.blocker })" in selection
 
 
+def test_both_surfaces_annotate_with_the_same_tags(tmp_path: Path) -> None:
+    """The panel prints the VA, status, size, compiler and symbol as rows, so
+    the annotations carry only what no row does. The dashboard listed
+    `// FUNCTION:`, `// STATUS:` and `// SIZE:` again under those rows while
+    Potato Mode left them out, and Potato dropped `// ORIGIN:`."""
+    source = """// FUNCTION: GAME 0x1000
+// STATUS: RELOC
+// SIZE: 400
+// CFLAGS: /O2
+// SYMBOL: _f
+// ORIGIN: GAME
+// NOTE: n
+// SOURCE: f.c
+int f(void) { return 0; }
+"""
+    expected = ["// ORIGIN: GAME", "// NOTE: n", "// SOURCE: f.c"]
+    potato = [f"// {tag}: {text}" for tag, text in _extract_annotations(source)]
+    [dashboard] = _dashboard_docs(tmp_path, [{"source": source, "stored": None}])
+    assert dashboard is not None
+    assert potato == expected
+    assert dashboard.split("\n") == expected
+
+
 def test_cell_file_offset():
     assert _cell_file_offset({"start": 100}, {"fileOffset": 4096}) == 4196
     # 0 is a file offset, not "no file backing" (api.py serves those bytes);

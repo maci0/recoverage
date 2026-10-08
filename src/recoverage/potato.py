@@ -842,7 +842,10 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
 
 
 def _extract_annotations(code: str, *, note: str = "", blocker: str = "") -> list[tuple[str, str]]:
-    """Extract NOTE, BLOCKER, and SOURCE comments from C source.
+    """Extract NOTE, BLOCKER, ORIGIN and SOURCE comments from C source.
+
+    The tags no panel row prints, and the same four the dashboard's
+    ``extractDocs`` (``web/app/lib/format.ts``) reads.
 
     A note or blocker the file does not carry is filled from *note* and
     *blocker*, which the caller read off the ``MODULE.0xVA`` row. A comment
@@ -852,7 +855,7 @@ def _extract_annotations(code: str, *, note: str = "", blocker: str = "") -> lis
     seen: set[str] = set()
     for raw_line in code.splitlines():
         line = raw_line.strip()
-        for tag in ("NOTE", "BLOCKER", "SOURCE"):
+        for tag in ("NOTE", "BLOCKER", "ORIGIN", "SOURCE"):
             prefix = f"// {tag}:"
             if line.startswith(prefix):
                 text = line[len(prefix) :].strip()

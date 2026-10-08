@@ -480,7 +480,12 @@ export type StoredDocumentation = {
 /** Annotation comments from the C file, then a row's note and blocker when those
  * comments are absent. `// SOURCE:` stays a file comment. A comment already in
  * the file wins over the row. `null` when the source is a pane message, or when
- * neither the file nor the row recorded anything. */
+ * neither the file nor the row recorded anything.
+ *
+ * Only the annotations no panel row prints: `// FUNCTION:`, `// STATUS:`,
+ * `// SIZE:`, `// CFLAGS:` and `// SYMBOL:` repeated the VA, Status, Size,
+ * Compiler and Symbol rows directly above them. The same four tags Potato
+ * Mode's `_extract_annotations` reads. */
 export function extractDocs(
   source: string,
   stored?: StoredDocumentation | null,
@@ -488,17 +493,7 @@ export function extractDocs(
   if (source === "" || source.startsWith("(no C") || source.startsWith("(failed")) {
     return null;
   }
-  const prefixes = [
-    "// NOTE:",
-    "// BLOCKER:",
-    "// FUNCTION:",
-    "// STATUS:",
-    "// ORIGIN:",
-    "// SIZE:",
-    "// CFLAGS:",
-    "// SYMBOL:",
-    "// SOURCE:",
-  ];
+  const prefixes = ["// NOTE:", "// BLOCKER:", "// ORIGIN:", "// SOURCE:"];
   const docs = source
     .split("\n")
     .map((line) => line.trim())
