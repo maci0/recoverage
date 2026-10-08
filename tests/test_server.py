@@ -3903,6 +3903,8 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+#: The largest integer a JavaScript Number holds exactly.
+JS_MAX_SAFE_INTEGER = 2**53 - 1
 WEB_APP = REPO_ROOT / "web" / "app"
 
 
@@ -4416,9 +4418,14 @@ class TestSpaNumericBoundaries:
         assert proc.returncode == 0, f"hex harness failed to run: {proc.stderr}"
         rendered = json.loads(proc.stdout)
         for (address, width), text in zip(cases, rendered, strict=True):
-            assert re.fullmatch(r"0x[0-9A-F]+", text), (
+            assert re.fullmatch(r"0x[0-9a-f]+", text), (
                 f"hex({address}, {width}) = {text!r}: a signed digit string is not a hex address"
             )
+            # The spelling Potato Mode and the disassembly print, so one
+            # address reads one way on every surface. Only where a double holds
+            # the value exactly: past 2**53 the browser never sees the int.
+            if abs(address) <= JS_MAX_SAFE_INTEGER:
+                assert text == hex_addr(address, width), (address, width, text)
             # The width is a floor, and the padded sign pushed it past: every
             # address on the page is at least `width` digits, which is the
             # alignment the panel, the map range and the search row all share.
@@ -4429,7 +4436,7 @@ class TestSpaNumericBoundaries:
         # into a debugger rather than a silent clamp that renumbers it.
         negatives = [(a, w) for a, w in cases if a < 0]
         assert rendered[: len(negatives)] == [
-            "0x" + format(address & (2 ** (4 * width) - 1), f"0{width}X")
+            "0x" + format(address & (2 ** (4 * width) - 1), f"0{width}x")
             for address, width in negatives
         ], "hex no longer renders a negative address as its unsigned bits"
 

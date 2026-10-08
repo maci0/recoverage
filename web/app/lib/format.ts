@@ -37,13 +37,15 @@ export function errorMessage(error: unknown): string {
  * meant, so a 64-bit image's `0x7ff612345678` prints all sixteen digits beside
  * the padded eight of a 32-bit one. Only a NEGATIVE is read at the width: a
  * negative carries no width of its own, so the caller's supplies it, and -1 is
- * the 32-bit reading `0xFFFFFFFF` at width 8. */
+ * the 32-bit reading `0xffffffff` at width 8. Lowercase, as `server.hex_addr`,
+ * Potato Mode and the disassembly print it, so one address reads one way on
+ * every surface. */
 export function hex(address: number, width: number): string {
   const digits = Math.max(1, width);
   // A negative needs the two's-complement reading, which only a BigInt holds
   // all 64 bits of; a positive needs none of that and keeps every digit it has.
   const text = address < 0 ? twoComplement(address, digits) : Math.trunc(address).toString(16);
-  return `0x${text.toUpperCase().padStart(digits, "0")}`;
+  return `0x${text.padStart(digits, "0")}`;
 }
 
 /** *address*'s unsigned two's-complement reading, at *digits* hex digits.

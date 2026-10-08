@@ -11,6 +11,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   parse under `unreadable` (`file`, `target`, `error`), and `GET /api/health`
   names them in `db.unreadable` and reports `degraded` while any is broken.
 
+### Changed
+
+- The dashboard spells addresses in lowercase hex (`0x01003e74`), as Potato
+  Mode and the disassembly beside them already did; the panel, the map
+  ranges and the search list printed `0x01003E74`, and the Original Bytes
+  dump is lowercase as well.
+
 ### Fixed
 
 - A coverage directory whose only document is corrupt read as an empty

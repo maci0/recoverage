@@ -3248,9 +3248,9 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
     ONE definition shared by the /bytes endpoint's ``hex`` payload and
     Potato Mode's Original Bytes block (the two inline copies had already
     drifted: a single 48-char hex column vs 8+8 byte columns).  Layout:
-    8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter —
-    the same layout as the dashboard's client-side dump, which upper-cases the
-    hex, so the two renderings of one slice differ in case.  *max_bytes*
+    8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter, all
+    lowercase — the same layout and case as the dashboard's client-side dump
+    (``web/app/lib/bytes.ts``), so one slice reads the same on both.  *max_bytes*
     caps the dump and appends a ``... (N more bytes)`` tail; ``None`` dumps
     everything.
     """

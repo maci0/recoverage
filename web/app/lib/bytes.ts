@@ -23,7 +23,8 @@ function asciiChar(byte: number): string {
     : UNPRINTABLE;
 }
 
-/** A classic 16-byte-per-row dump: offset, two hex columns, ASCII gutter. */
+/** A classic 16-byte-per-row dump: offset, two hex columns, ASCII gutter, in
+ * the lowercase `server._format_hex_dump` prints for Potato Mode and `/bytes`. */
 export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
   const bytes = new Uint8Array(buffer);
   let out = "";
@@ -36,7 +37,7 @@ export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
     // cannot go on rendering an address the debugger will not accept.
     const offset = hex(baseOffset + i, 8).slice(2);
     const parts = Array.from({ length: 16 }, (_, j) =>
-      j < slice.length ? (slice[j] ?? 0).toString(16).toUpperCase().padStart(2, "0") : "  ",
+      j < slice.length ? (slice[j] ?? 0).toString(16).padStart(2, "0") : "  ",
     );
     const ascii = Array.from(slice, asciiChar).join("");
     out += `${offset}  ${parts.slice(0, 8).join(" ")}  ${parts.slice(8, 16).join(" ")}  |${ascii}|\n`;
