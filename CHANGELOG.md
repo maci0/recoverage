@@ -17,6 +17,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Mode and the disassembly beside them already did; the panel, the map
   ranges and the search list printed `0x01003E74`, and the Original Bytes
   dump is lowercase as well.
+- From 1280px wide the detail panel is wide enough for a whole row of the
+  Original Bytes dump; at 1440px its ASCII gutter was cut off after one
+  character, along with the ends of long disassembly lines.
+- A function's blocker is printed once, in its Blocker row, in the dashboard
+  and in Potato Mode; the Annotations row under it repeated the same
+  `// BLOCKER:` line.
 
 ### Fixed
 

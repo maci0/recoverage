@@ -266,6 +266,13 @@ function FunctionMeta({
   const sizeReason = filled(fn.size_reason);
   const sha256 = filled(fn.sha256);
   const updatedAt = filled(fn.updated_at);
+  // The Blocker row already prints the blocker, so its `// BLOCKER:` line
+  // is left out of the annotations rather than repeated under it.
+  const blocker = filled(fn.blocker);
+  const annotations =
+    docs === null || docs === MSG.SELECT_FUNCTION || docs === MSG.NO_DOCS
+      ? null
+      : withoutRepeatedBlocker(docs, blocker);
   return (
     <dl className={META_GRID}>
       <MetaItem label="VA">
@@ -297,9 +304,9 @@ function FunctionMeta({
       <MetaItem label="Module">{filled(fn.module) ?? MSG.NA}</MetaItem>
       <MetaItem label="Compiler">{filled(fn.cflags) ?? MSG.NA}</MetaItem>
       <MetaItem label="Marker">{filled(fn.markerType) ?? MSG.NA}</MetaItem>
-      {fn.blocker == null || fn.blocker === "" ? null : (
+      {blocker === null ? null : (
         <MetaItem label="Blocker" fullWidth>
-          <span className="meta-value">{fn.blocker}</span>
+          <span className="meta-value">{blocker}</span>
         </MetaItem>
       )}
       {fn.blockerDelta == null ? null : (
@@ -352,13 +359,29 @@ function FunctionMeta({
         </MetaItem>
       )}
       {sourceItem}
-      {docs === null || docs === MSG.SELECT_FUNCTION || docs === MSG.NO_DOCS ? null : (
+      {annotations === null ? null : (
         <MetaItem label="Annotations" fullWidth>
-          <pre className="m-0 whitespace-pre-wrap text-micro">{docs}</pre>
+          <pre className="m-0 whitespace-pre-wrap text-micro">{annotations}</pre>
         </MetaItem>
       )}
     </dl>
   );
+}
+
+const BLOCKER_PREFIX = "// BLOCKER:";
+
+/** *docs* without the `// BLOCKER:` line that says what the Blocker row
+ * already does, or null when nothing else is left. */
+function withoutRepeatedBlocker(docs: string, blocker: string | null): string | null {
+  const kept = docs
+    .split("\n")
+    .filter(
+      (line) =>
+        blocker === null ||
+        !line.startsWith(BLOCKER_PREFIX) ||
+        line.slice(BLOCKER_PREFIX.length).trim() !== blocker.trim(),
+    );
+  return kept.length > 0 ? kept.join("\n") : null;
 }
 
 /** The metadata under the title: a selected function's grid, a block's three
@@ -485,8 +508,13 @@ export function CoveragePanel({
 
   return (
     <aside
+      // From `xl` the panel is wide enough for one row of the Original Bytes
+      // dump (offset, 16 bytes, the ASCII gutter: 78 mono columns). At 30rem
+      // the gutter was cut off at its second character on a 1440px screen, and
+      // the long disassembly lines with it; the map still keeps the larger
+      // share of the row.
       className={cn(
-        "panel w-full shrink-0 self-start overflow-hidden rounded-card border border-border bg-surface lg:w-form",
+        "panel w-full shrink-0 self-start overflow-hidden rounded-card border border-border bg-surface lg:w-form xl:w-prose-wide",
         hiddenWhenStacked && "max-lg:hidden",
       )}
       id="panel"

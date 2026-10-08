@@ -731,6 +731,8 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     orphan_page = render_potato_url("/potato?target=NP&section=.text&idx=2")
     assert _ROW_NOTE in markerless_page
     assert _ROW_BLOCKER in markerless_page
+    # Once: the detail row prints it, so the annotations leave it out.
+    assert markerless_page.count(_ROW_BLOCKER) == 1
     assert "// FUNCTION:" not in markerless_page
     assert _COMMENT_NOTE in legacy_page
     assert _COMMENT_BLOCKER in legacy_page

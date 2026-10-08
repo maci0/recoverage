@@ -3522,7 +3522,14 @@ def _panel_function_detail(
             and isinstance(va, int)
         ):
             note, blocker = _row_note_blocker(Path.cwd().resolve(), target, module, va, source)
-        ctx["annotations"] = _extract_annotations(code_text, note=note, blocker=blocker)
+        # The detail rows already print the blocker, so its annotation is
+        # left out rather than repeated under it (the dashboard does the same).
+        shown = str(fn_data.get("blocker") or "").strip()
+        ctx["annotations"] = [
+            (tag, text)
+            for tag, text in _extract_annotations(code_text, note=note, blocker=blocker)
+            if not (tag == "BLOCKER" and shown and text.strip() == shown)
+        ]
         ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
