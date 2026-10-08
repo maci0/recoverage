@@ -17,6 +17,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Mode and the disassembly beside them already did; the panel, the map
   ranges and the search list printed `0x01003E74`, and the Original Bytes
   dump is lowercase as well.
+- Potato Mode's panel names a block's state the way its legend does
+  (`undocumented` for `NONE`, `NEAR` for `NEAR_MATCH`; a problem state keeps
+  its own name) and spells its range with eight hex digits, as the dashboard
+  does (`0x01001a00 .. 0x01001a40`).
 - From 1280px wide the detail panel is wide enough for a whole row of the
   Original Bytes dump; at 1440px its ASCII gutter was cut off after one
   character, along with the ends of long disassembly lines.

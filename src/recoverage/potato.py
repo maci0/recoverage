@@ -462,6 +462,12 @@ LEGEND_ITEMS = [
     ("compile_error", "problem"),
 ]
 
+#: The word the panel's State row prints for a cell state: the legend's, so
+#: the row says "undocumented" where it said "NONE" and "NEAR" where it said
+#: "NEAR_MATCH".  A problem state keeps its own name (COMPILE_ERROR says more
+#: than the legend's "problem"), as does any state the legend does not list.
+_STATE_WORD = {state: word for state, word in LEGEND_ITEMS if word != "problem"}
+
 
 # ── HTML Helpers ────────────────────────────────────────────────────────────────────────
 
@@ -1246,7 +1252,7 @@ _PANEL_SRC = r"""
 <a href="{{next_url}}"><font size="1">Next &raquo;</font></a>
 % end
 </td></tr></table>
-<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_label}}</b></font></td></tr>
 % if cell_label:
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
@@ -2655,7 +2661,12 @@ def _build_grid_html(
         selected = orig_idx == sel_idx
         link = f"{link_prefix}&idx={orig_idx}{link_suffix}"
         funcs = cell.get("functions", [])
-        title = f"{hex(sec_va + (cell.get('start') or 0))}..{hex(sec_va + (cell.get('end') or 0))} | {state}"
+        # hex_addr at width 1: the shortest spelling (this title is on every cell
+        # of the page), and the unsigned reading of a negative VA.
+        title = (
+            f"{hex_addr(sec_va + (cell.get('start') or 0), 1)}.."
+            f"{hex_addr(sec_va + (cell.get('end') or 0), 1)} | {state}"
+        )
         if funcs:
             title += f" | {funcs[0]}"
         # The alt text IS the link's accessible name here, so it carries the
@@ -3245,7 +3256,7 @@ def _panel_base_ctx() -> dict[str, Any]:
         "has_cell": False,
         "idx": 0,
         "cell_range": "",
-        "state_upper": "",
+        "state_label": "",
         "state_color": TEXT_COLOR,
         "funcs": [],
         "fn_data": None,
@@ -3678,8 +3689,11 @@ def _render_panel(
         {
             "has_cell": True,
             "idx": idx,
-            "cell_range": f"{hex(sec_va + (cell.get('start') or 0))} .. {hex(sec_va + (cell.get('end') or 0))}",
-            "state_upper": state.upper(),
+            "cell_range": (
+                f"{hex_addr(sec_va + (cell.get('start') or 0))} .. "
+                f"{hex_addr(sec_va + (cell.get('end') or 0))}"
+            ),
+            "state_label": _STATE_WORD.get(state.lower(), state.upper()),
             "state_color": STATE_INK.get(state.lower(), TEXT_COLOR),
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
