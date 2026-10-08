@@ -1479,11 +1479,11 @@ def serve(
     read by every command rather than by serve alone), plus
     RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
     transport rather than select a behavior and so have no flag.
-    [bold]--no-open[/bold], [bold]--regen[/bold] and [bold]--no-color[/bold] are
-    the three flags with no variable, because a service that wants the browser
-    or a rebuild asks for it in argv, not in the environment, and the colour
-    opt-out is the unprefixed NO_COLOR convention rather than a RECOVERAGE_*
-    name.
+
+    --no-open, --regen and --no-color are the three flags with no variable,
+    because a service that wants the browser or a rebuild asks for it in argv,
+    not in the environment, and the colour opt-out is the unprefixed NO_COLOR
+    convention rather than a RECOVERAGE_* name.
 
     A flag always wins over the environment; an unrecognised RECOVERAGE_*
     name is a startup error, and so is a value that is not a valid port,
@@ -1493,11 +1493,11 @@ def serve(
     Exits 2 for any of those, before the listener binds. Exits 1 when --bind
     names a non-loopback address without --allow-remote (the refusal and the
     firewall warning go to stderr) or when the port is already taken, and 0 on
-    Ctrl+C. [bold]recoverage config[/bold] runs the same checks and ends the
-    same way, so a deployment can preflight this configuration. It reads the
-    environment only and takes none of these flags, so it preflights a
-    deployment that sets RECOVERAGE_*; one that passes these flags in argv is
-    checked when it starts.
+    Ctrl+C. recoverage config runs the same checks and ends the same way, so a
+    deployment can preflight this configuration. It reads the environment
+    only and takes none of these flags, so it preflights a deployment that
+    sets RECOVERAGE_*; one that passes these flags in argv is checked when it
+    starts.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -1908,20 +1908,19 @@ def export(
 ) -> None:
     """Export coverage data to stdout.
 
-    JSON verbatim. CSV cells that start with a spreadsheet formula or control
-    character are prefixed with an apostrophe, rows end with the platform's
-    line ending, and a line break inside a cell is written as the document
-    spells it. Markdown cells escape pipes and newlines.
+    JSON verbatim. CSV cells that start with a spreadsheet formula or
+    control character are prefixed with an apostrophe, rows end with the
+    platform's line ending, and a line break inside a cell is written as the
+    document spells it. Markdown cells escape pipes and newlines.
 
-    The rows are the only thing on stdout, so a redirect or a pipe gets clean
-    data. Exits 1 when the coverage directory holds no document or --target
-    names a target no build has written, and the report goes to stderr (to
-    stdout as a JSON object under --format json).
+    The rows are the only thing on stdout, so a redirect or a pipe gets
+    clean data. Exits 1 when the coverage directory holds no document or
+    --target names a target no build has written, and the report goes to
+    stderr (to stdout as a JSON object under --format json).
 
-    --json is the spelling every other reporting command takes
-    ([bold]stats[/bold], [bold]check[/bold], [bold]config[/bold]), and it means
-    --format json.  Naming both, with a --format that is not json, is a usage
-    error rather than a silent winner.
+    --json is the spelling every other reporting command takes (stats,
+    check, config), and it means --format json. Naming both, with a --format
+    that is not json, is a usage error rather than a silent winner.
     """
     _use_utf8_stdout()
     if json_flag and output_format is not ExportFormat.json:
@@ -2139,9 +2138,9 @@ def check(
     """Check coverage against a threshold (CI gate).
 
     Exits 0 when every compared section meets the threshold, 1 when one does
-    not, and 2 for a bad --min-coverage or an unreadable coverage document.  A section
-    the grid never records matches for is reported SKIP, unless --section
-    named it, which FAILs.
+    not, and 2 for a bad --min-coverage or an unreadable coverage document.
+    A section the grid never records matches for is reported SKIP, unless
+    --section named it, which FAILs.
     """
     _use_utf8_stdout()
     threshold = _checked_min_coverage(min_coverage, json_output)
@@ -2297,14 +2296,14 @@ def backup(
 
     Every archive is verified before this command reports success: each
     member's bytes are read back and checked against the manifest, so a
-    green exit means a restore could read it, not only that a write returned. An
-    archive is written through a temp file and fsynced before its name is
-    published, so a crash mid-run leaves the previous backup rather than a
-    truncated one.
+    green exit means a restore could read it, not only that a write
+    returned. An archive is written through a temp file and fsynced before
+    its name is published, so a crash mid-run leaves the previous backup
+    rather than a truncated one.
 
     Exits 1 when there is nothing to back up (an empty archive would verify
-    and then restore to an empty dashboard), and prints the members and their
-    digests either as a table or, with --json, as an object.
+    and then restore to an empty dashboard), and prints the members and
+    their digests either as a table or, with --json, as an object.
     """
     from rich import box
     from rich.console import Console
@@ -2425,19 +2424,20 @@ def open_cmd(
     """Open the dashboard in a browser.
 
     The port falls back to RECOVERAGE_PORT and the address to
-    RECOVERAGE_BIND, the same defaults [bold]serve[/bold] uses, so a deployment
-    that moved the server off 127.0.0.1:8001 does not need every operator to
-    remember the new address and port as well.  A port of 0 is refused: it
-    names the free port the server picked, which is in the banner
-    [bold]serve[/bold] printed and is not something this command can know.
+    RECOVERAGE_BIND, the same defaults serve uses, so a deployment that
+    moved the server off 127.0.0.1:8001 does not need every operator to
+    remember the new address and port as well. A port of 0 is refused: it
+    names the free port the server picked, which is in the banner serve
+    printed and is not something this command can know.
 
     Warns on stderr, and opens the tab anyway, when nothing accepts a
     connection at that address.
 
     Writes nothing to stdout: the "Opening ..." line and every error are
-    status, and status goes to stderr, so a caller reads the outcome from the
-    exit code alone. Exits 1 when no browser could be launched, so a script or
-    a container entrypoint that runs this and finds nothing open learns why.
+    status, and status goes to stderr, so a caller reads the outcome from
+    the exit code alone. Exits 1 when no browser could be launched, so a
+    script or a container entrypoint that runs this and finds nothing open
+    learns why.
     """
     _check_env_or_exit()
     try:
@@ -2497,25 +2497,24 @@ def config_cmd(
     ),
     no_color: bool = _no_color_option(),
 ) -> None:
-    """Print the configuration [bold]serve[/bold] would start with, without binding a port.
+    """Print the configuration serve would start with, without binding a port.
 
-    The values come from the same merge and validation [bold]serve[/bold] runs,
-    over the [bold]environment[/bold]: this command declares no setting flags,
-    so a flag given to [bold]serve[/bold] on the command line is not a value it
-    can see or check.  It preflights the deployment that configures
-    [bold]serve[/bold] through RECOVERAGE_*; to preflight one that passes flags
-    in argv, read the answers back from a [bold]serve[/bold] that starts and
-    stops on them.  The token is reported as [bold]set[/bold] or
-    [bold]unset[/bold]; its value is never printed.
+    The values come from the same merge and validation serve runs, over the
+    environment: this command declares no setting flags, so a flag given to
+    serve on the command line is not a value it can see or check. It
+    preflights the deployment that configures serve through RECOVERAGE_*; to
+    preflight one that passes flags in argv, read the answers back from a
+    serve that starts and stops on them. The token is reported as set or
+    unset; its value is never printed.
 
-    It is a preflight, so it also ends the way [bold]serve[/bold] ends: the same
+    It is a preflight, so it also ends the way serve ends: the same
     network-bind refusal (exit 1) and the same CORS warnings, after the
-    values.  A check that exited 0 for a configuration [bold]serve[/bold] refuses
-    is a deployment that finds out at boot instead of at the check.
+    values. A check that exited 0 for a configuration serve refuses is a
+    deployment that finds out at boot instead of at the check.
 
     A port of 0 prints as 0: it is the configured value, and the free port
-    [bold]serve[/bold] binds in its place is a different one on every run.  The
-    banner that run prints is where the real number is.
+    serve binds in its place is a different one on every run. The banner
+    that run prints is where the real number is.
     """
     _use_utf8_stdout()
     _use_utf8_stderr()

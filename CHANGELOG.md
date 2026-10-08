@@ -38,6 +38,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every placeholder and error line carried the same note. A disabled Copy or
   Open now says the pane holds no code (or the block no bytes) instead of
   "Select a block first" beside a selected block.
+- `serve`, `config`, `open`, `export`, `check` and `backup` help read as
+  even paragraphs; a line that carried bold markup rendered short, and
+  sentences were split by double spaces.
 
 ### Fixed
 
