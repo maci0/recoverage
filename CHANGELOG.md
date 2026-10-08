@@ -21,39 +21,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`undocumented` for `NONE`, `NEAR` for `NEAR_MATCH`; a problem state keeps
   its own name) and spells its range with eight hex digits, as the dashboard
   does (`0x01001a00 .. 0x01001a40`).
-- From 1280px wide the detail panel is wide enough for a whole row of the
-  Original Bytes dump; at 1440px its ASCII gutter was cut off after one
-  character, along with the ends of long disassembly lines.
-- A function's blocker is printed once, in its Blocker row, in the dashboard
-  and in Potato Mode; the Annotations row under it repeated the same
-  `// BLOCKER:` line. The dashboard's Annotations row also dropped the
-  `// FUNCTION:`, `// STATUS:`, `// SIZE:`, `// CFLAGS:` and `// SYMBOL:`
-  lines that repeat the rows above it, and Potato Mode now lists
-  `// ORIGIN:`, so both show the same annotations.
-- On a phone the detail panel's copy buttons start under the title instead
-  of hanging off its right edge.
 - A coverage map wider than the screen (every section on a phone) says so
   under the map: the card showed no scrollbar until touched, so the visible
   part read as the whole section.
-- A finished regenerate, or a jump that found no block, floats its notice at
-  the foot of the window instead of pushing the map down and pulling it back
-  up four seconds later.
 - Refusal messages join the server's reason to its detail with a semicolon:
   "Rate limited: wait before regenerating again; retry after 1.8s" (was a
   second colon).
-- With the syntax highlighter unreachable, only panes that hold code say so;
-  every placeholder and error line carried the same note. A disabled Copy or
-  Open now says the pane holds no code (or the block no bytes) instead of
-  "Select a block first" beside a selected block.
-- `serve`, `config`, `open`, `export`, `check` and `backup` help read as
-  even paragraphs; a line that carried bold markup rendered short, and
-  sentences were split by double spaces.
-- `recoverage backup --to backups/` writes into that directory, creating it;
-  a path that did not exist yet was written as an archive file named
-  `backups`.
-- Potato Mode's Original Bytes gutter counts in VAs, like its Range row and
-  the dashboard's dump; it counted file offsets, so `00001000` sat under a
-  range of `0x1001a00`.
 
 ### Fixed
 
@@ -72,6 +45,33 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Opening a code pane in the full-screen viewer left keyboard focus on the
   page it had just made inert (the move to Close threw), so Tab and Enter
   reached nothing until the viewer was closed with the mouse or Escape.
+- From 1280px wide the detail panel is wide enough for a whole row of the
+  Original Bytes dump; at 1440px its ASCII gutter was cut off after one
+  character, along with the ends of long disassembly lines.
+- A function's blocker is printed once, in its Blocker row, in the dashboard
+  and in Potato Mode; the Annotations row under it repeated the same
+  `// BLOCKER:` line. The dashboard's Annotations row also dropped the
+  `// FUNCTION:`, `// STATUS:`, `// SIZE:`, `// CFLAGS:` and `// SYMBOL:`
+  lines that repeat the rows above it, and Potato Mode now lists
+  `// ORIGIN:`, so both show the same annotations.
+- On a phone the detail panel's copy buttons start under the title instead
+  of hanging off its right edge.
+- A finished regenerate, or a jump that found no block, floats its notice at
+  the foot of the window instead of pushing the map down and pulling it back
+  up four seconds later.
+- With the syntax highlighter unreachable, only panes that hold code say so;
+  every placeholder and error line carried the same note. A disabled Copy or
+  Open now says the pane holds no code (or the block no bytes) instead of
+  "Select a block first" beside a selected block.
+- `serve`, `config`, `open`, `export`, `check` and `backup` help read as
+  even paragraphs; a line that carried bold markup rendered short, and
+  sentences were split by double spaces.
+- `recoverage backup --to backups/` writes into that directory, creating it;
+  a path that did not exist yet was written as an archive file named
+  `backups`.
+- Potato Mode's Original Bytes gutter counts in VAs, like its Range row and
+  the dashboard's dump; it counted file offsets, so `00001000` sat under a
+  range of `0x1001a00`.
 
 ## [6.0.0] - 2026-10-07
 
