@@ -295,6 +295,9 @@ _MD_PIPE = "\\|"
 # between the commands that embed it in their database-error messages.
 _REBUILD_HINT = "(run 'rebrew coverage build' to rebuild it)"
 
+#: The spellings a path argument ends with to name a directory.
+_PATH_SEPARATORS = tuple(sep for sep in (os.sep, os.altsep, "/") if sep)
+
 
 def _pin_utf8(stream: IO[str], errors: str) -> None:
     """Reconfigure *stream* to encode UTF-8, whatever the locale's codec is.
@@ -2277,7 +2280,8 @@ def backup(
         None,
         "--to",
         metavar="PATH",
-        help="Archive path, or a directory for the stamped default name. "
+        help="Archive path, or a directory for the stamped default name (an existing "
+        "one, or any path ending in /). "
         "Defaults to $RECOVERAGE_BACKUP_DIR, else a backups/ beside the coverage directory.",
     ),
     as_json: bool = typer.Option(
@@ -2316,6 +2320,15 @@ def backup(
     _use_utf8_stderr()
     _check_env_or_exit()
     destination = Path(to).expanduser() if to else None
+    if to and destination is not None and to.endswith(_PATH_SEPARATORS):
+        # "--to backups/" names a directory, but Path drops the separator, and
+        # a path that did not exist yet became an archive FILE named "backups"
+        # with no extension. Creating it first is what makes it read as one.
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            _secho(f"Error: cannot create {destination}: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from exc
     try:
         info = write_backup(_db_path(), destination)
     except BackupError as exc:

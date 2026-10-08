@@ -41,6 +41,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `serve`, `config`, `open`, `export`, `check` and `backup` help read as
   even paragraphs; a line that carried bold markup rendered short, and
   sentences were split by double spaces.
+- `recoverage backup --to backups/` writes into that directory, creating it;
+  a path that did not exist yet was written as an archive file named
+  `backups`.
 
 ### Fixed
 

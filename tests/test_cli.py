@@ -1388,6 +1388,27 @@ class TestUnreadableCoverageNamesTheDocument:
         assert "no coverage-*.toml document" in payload["error"]
 
 
+def test_backup_to_a_path_ending_in_a_separator_writes_into_that_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--to backups/` is a directory even when it does not exist yet.
+
+    The separator was dropped with the path, so the archive was written as a
+    FILE named "backups" with no extension, and the next run replaced it.
+    """
+    directory = tmp_path / "db"
+    directory.mkdir()
+    write_coverage(directory, "GAME", {".text": {"va": 0x1000, "size": 1, "cells": []}})
+    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    target = tmp_path / "backups"
+    result = runner.invoke(app, ["backup", "--to", f"{target}/"])
+    assert result.exit_code == 0, result.output
+    assert target.is_dir()
+    [archive] = target.iterdir()
+    assert archive.name.startswith("coverage-")
+    assert archive.suffix == ".tar"
+
+
 class TestJsonErrorEnvelope:
     """A machine-readable mode answers every failure in one shape.
 

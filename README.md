@@ -463,7 +463,8 @@ could read it rather than that a write returned. The archive itself is written
 through a temp file, fsynced, and only then published by an atomic rename, so
 a crash mid-run leaves the previous backup rather than a truncated one.
 
-`--to` takes a file, or a directory to get the stamped default name. The
+`--to` takes a file, or a directory to get the stamped default name: one
+that exists, or any path ending in `/`, which is created. The
 default directory is `$RECOVERAGE_BACKUP_DIR`, else a `backups/` beside the
 coverage directory - never inside it, because the next run would copy the
 previous archive as if it were a document. Exits 1 when there is nothing to

@@ -109,7 +109,10 @@ on every write, so a regen over a directory whose documents were lost rebuilds
 the current facts and loses both arrays for good. Every archive is verified
 before this reports success, so a green exit means a restore could read it.
 .BI \-\-to " PATH"
-Archive path, or a directory for a stamped default name (default:
+Archive path, or a directory for a stamped default name (an existing one, or
+any path ending in
+.BR / ,
+which is created; default:
 .BR RECOVERAGE_BACKUP_DIR ,
 else a
 .B backups
