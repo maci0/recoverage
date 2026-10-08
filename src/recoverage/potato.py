@@ -3280,9 +3280,14 @@ def _panel_base_ctx() -> dict[str, Any]:
     }
 
 
-def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
+def _render_original_bytes(raw_bytes: bytes, address: int) -> str:
     """Hex dump of *raw_bytes* as an Original Bytes code block (shared by the
     empty-cell and function-detail panel paths so both stay in one format).
+
+    The gutter counts from *address*, the block's VA: the panel's Range row
+    and the dashboard's dump (``web/app/hooks/useSelection.ts``) both read
+    in VAs, and a gutter in file offsets put ``00001000`` under a range of
+    ``0x1001a00`` with nothing saying which space either number was in.
 
     The dump must NOT be re-wrapped: _format_hex_dump emits fixed-width
     16-byte lines (~78 chars), and _wrap_text(…, 72) split each one mid-row,
@@ -3294,7 +3299,7 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
     panel renders as it stands.  _format_hex_dump's max_bytes=None is what
     dumps a whole slice; nothing here needs one.
     """
-    hex_dump = _format_hex_dump(raw_bytes, file_offset)
+    hex_dump = _format_hex_dump(raw_bytes, address)
     return _code_block_raw(_highlight_hex(hex_dump))
 
 
@@ -3313,7 +3318,9 @@ def _panel_empty_cell_bytes(
     if not raw_bytes:
         return
     ctx["hex_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
-    ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, cell_file_offset)
+    section_va = sec_data.get("va")
+    address = (section_va if isinstance(section_va, int) else 0) + cell.get("start", 0)
+    ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, address)
     inspector = _format_data_inspector(raw_bytes)
     if inspector:
         ctx["inspector_html"] = inspector
@@ -3564,7 +3571,10 @@ def _panel_function_detail(
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
             ctx["bytes_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
-            ctx["bytes_html"] = _render_original_bytes(raw_bytes, fn_file_offset)
+            fn_va = fn_data.get("va")
+            ctx["bytes_html"] = _render_original_bytes(
+                raw_bytes, fn_va if isinstance(fn_va, int) else fn_file_offset
+            )
             if section != ".text":
                 inspector = _format_data_inspector(raw_bytes)
                 if inspector:

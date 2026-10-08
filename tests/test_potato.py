@@ -2657,6 +2657,36 @@ class TestRawByteRange:
         got = _get_raw_bytes(0, _MAX_RAW_READ + 1, "target")
         assert got == self.BINARY[:_MAX_RAW_READ]
 
+    def test_the_dump_gutter_counts_in_vas(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The panel's Range row is in VAs, and so is the dashboard's dump.
+
+        Potato's dump counted from the FILE offset, so a block at 0x1010 read
+        "00000210" in the gutter under a range of 0x1010 with nothing saying
+        which space either number was in.
+        """
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "VAS",
+            {
+                ".data": {
+                    "va": 0x1000,
+                    "size": 32,
+                    "fileOffset": 0x200,
+                    "unitBytes": 16,
+                    "columns": 2,
+                    "cells": [cell(0, 16, "none"), cell(16, 32, "none")],
+                }
+            },
+        )
+        monkeypatch.chdir(tmp_path)
+        html = render_potato_url("/potato?target=VAS&section=.data&idx=1")
+        assert "Original Bytes" in html
+        assert "00001010" in html
+        assert "00000210" not in html
+
 
 class TestGridColumnsValidation:
     """grid_columns <= 0 now raises ValueError (not assert)."""

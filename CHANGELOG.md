@@ -44,6 +44,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `recoverage backup --to backups/` writes into that directory, creating it;
   a path that did not exist yet was written as an archive file named
   `backups`.
+- Potato Mode's Original Bytes gutter counts in VAs, like its Range row and
+  the dashboard's dump; it counted file offsets, so `00001000` sat under a
+  range of `0x1001a00`.
 
 ### Fixed
 
