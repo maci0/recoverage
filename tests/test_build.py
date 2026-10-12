@@ -425,8 +425,8 @@ class TestLongDescriptionLinksResolveWhereItIsRendered:
 
     #: A target the index page can fetch. The blob host serves the file as
     #: stored; the raw host serves its bytes, which is what an image needs.
-    _REPO_BLOB = "https://github.com/relumea/recoverage/blob/main/"
-    _REPO_RAW = "https://raw.githubusercontent.com/relumea/recoverage/main/"
+    _REPO_BLOB = "https://github.com/maci0/recoverage/blob/main/"
+    _REPO_RAW = "https://raw.githubusercontent.com/maci0/recoverage/main/"
     _TARGET_RE = re.compile(r"\]\((?P<target>[^)\s]+)\)")
 
     @staticmethod

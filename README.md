@@ -1,6 +1,6 @@
 # recoverage
 
-![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recoverage/main/docs/mascot.jpg)
+![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/maci0/recoverage/main/docs/mascot.jpg)
 
 Coverage dashboard for binary-matching decompilation projects, for the person
 whose decomp stopped matching the original binary and has to find out which part.
@@ -43,19 +43,19 @@ block that covers it.
 
 ### Main dashboard
 
-![Main dashboard, the coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_main.png)
+![Main dashboard, the coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_main.png)
 
 ### Function detail
 
-![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_detail.png)
+![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_detail.png)
 
 ### Function detail, dark theme
 
-![Dark mode with function detail panel](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_dark.png)
+![Dark mode with function detail panel](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_dark.png)
 
 ### Potato Mode
 
-![Potato Mode, the retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_potato.png)
+![Potato Mode, the retro pure-HTML table view](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
 Every view is a plain HTML table (no CSS, no JS) so it works on
@@ -110,10 +110,10 @@ change that breaks a consumer takes a major version. Before upgrading, run
 way `serve` ends, so a raised floor, a malformed token or a bind that needs an
 acknowledgment shows up there rather than at the next restart.
 
-[docs/UPGRADING.md](https://github.com/relumea/recoverage/blob/main/docs/UPGRADING.md)
+[docs/UPGRADING.md](https://github.com/maci0/recoverage/blob/main/docs/UPGRADING.md)
 carries the before, the after and the thing to change for every major that
 broke something, and
-[CHANGELOG.md](https://github.com/relumea/recoverage/blob/main/CHANGELOG.md)
+[CHANGELOG.md](https://github.com/maci0/recoverage/blob/main/CHANGELOG.md)
 is the full record.
 
 ---
@@ -496,7 +496,7 @@ either way.
 
 Run `recoverage regen` afterwards, so the served snapshots and ETags follow the
 restored bytes. The full procedure is in
-[the recovery runbook](https://github.com/relumea/recoverage/blob/main/docs/RECOVERY.md).
+[the recovery runbook](https://github.com/maci0/recoverage/blob/main/docs/RECOVERY.md).
 
 ### `recoverage open`
 
@@ -795,7 +795,7 @@ for any non-loopback `--bind`) and `--token` (the bearer check every request
 then has to pass); `--cors` is for a separate local frontend origin and is never
 needed for the dashboard's own page. There is no TLS, so a token on a network
 bind travels in cleartext. The full picture, including what the code does not
-cover, is in [docs/THREAT_MODEL.md](https://github.com/relumea/recoverage/blob/main/docs/THREAT_MODEL.md).
+cover, is in [docs/THREAT_MODEL.md](https://github.com/maci0/recoverage/blob/main/docs/THREAT_MODEL.md).
 
 ### Mounting the app in your own WSGI server
 
@@ -991,7 +991,7 @@ The dashboard ships no vendored blob under `src/recoverage/assets/`: the
 `app.js` and `style.css` it serves are built by `make web-build` from the npm
 dependencies declared in `package.json`, so what the build folds into those two
 files is distributed with the wheel whether or not anyone records where it came
-from. The grants ship in [`NOTICE`](https://github.com/relumea/recoverage/blob/main/NOTICE), which `license-files` puts in the
+from. The grants ship in [`NOTICE`](https://github.com/maci0/recoverage/blob/main/NOTICE), which `license-files` puts in the
 distribution metadata next to the MIT license, and which is the file to read
 and amend when a dependency is added to `web/`:
 
@@ -1033,5 +1033,5 @@ directory from upstream, run `make vendor-manifest`, then
 MIT
 
 The wheel also bundles the third-party code listed above. Their grants ship
-as [`NOTICE`](https://github.com/relumea/recoverage/blob/main/NOTICE), which `license-files` puts in the distribution metadata
+as [`NOTICE`](https://github.com/maci0/recoverage/blob/main/NOTICE), which `license-files` puts in the distribution metadata
 next to the MIT license.

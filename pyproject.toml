@@ -63,10 +63,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/relumea/recoverage"
-Repository = "https://github.com/relumea/recoverage"
-Changelog = "https://github.com/relumea/recoverage/blob/main/CHANGELOG.md"
-Issues = "https://github.com/relumea/recoverage/issues"
+Homepage = "https://github.com/maci0/recoverage"
+Repository = "https://github.com/maci0/recoverage"
+Changelog = "https://github.com/maci0/recoverage/blob/main/CHANGELOG.md"
+Issues = "https://github.com/maci0/recoverage/issues"
 
 [project.optional-dependencies]
 dev = [

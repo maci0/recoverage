@@ -18,7 +18,7 @@ the tag is the thing to look at first rather than this table.
 
 No reporting address is recorded in this repository. Until one is, a report
 belongs on the project's GitHub issue tracker
-(`https://github.com/relumea/recoverage`, the `Repository` URL in
+(`https://github.com/maci0/recoverage`, the `Repository` URL in
 `pyproject.toml`), which is the only contact channel the repository names. Do
 not open a public issue for a vulnerability that is already exploited or that
 discloses private project material until a private channel exists.
