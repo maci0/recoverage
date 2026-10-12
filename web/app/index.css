@@ -1,7 +1,7 @@
 /* The dashboard's stylesheet entry.
  *
  * Every colour, size, radius, shadow and motion value comes from
- * `./system/tokens.css`, a verbatim copy of relumea.ai's `src/system/tokens.css`
+ * `./system/tokens.css`, a verbatim copy of relumea-site's `src/system/tokens.css`
  * (the relumea brand guide, "Consuming the tokens"). Never edit the copy: a
  * value the system lacks is proposed there first, then copied here.
  *
