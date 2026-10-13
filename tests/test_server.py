@@ -4465,7 +4465,7 @@ class TestSpaNumericBoundaries:
 
 # The colour maths behind both token gates. Every relumea token is declared
 # once as `light-dark(<light>, <dark>)` in `web/app/system/tokens.css`, a
-# verbatim copy of relumea-site's; relumea-site's `check:contrast` owns the full
+# verbatim copy of relumea-brand's; relumea-brand's `check:contrast` owns the full
 # matrix, and these two classes hold the pairs this dashboard actually paints,
 # so a copy that drifted from a measured file fails here.
 

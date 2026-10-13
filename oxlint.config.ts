@@ -72,7 +72,7 @@ export default defineConfig({
     // tokens), so a class outside the token set is an unknown class here.
     shadcn: {
       componentImports: ["^@/components/ui(/|$)"],
-      note: "Tokens come from web/app/system/tokens.css, a verbatim copy of relumea-site's. A value the system lacks is proposed there first.",
+      note: "Tokens come from web/app/system/tokens.css, a verbatim copy of relumea-brand's. A value the system lacks is proposed there first.",
     },
   },
   rules: {
@@ -198,7 +198,7 @@ export default defineConfig({
   },
   overrides: [
     {
-      // web/app/system is a verbatim copy of relumea-site's src/system, which
+      // web/app/system is a verbatim copy of relumea-brand's src/system, which
       // declares props with `interface`. The copy is never edited.
       files: ["web/app/system/**"],
       rules: {

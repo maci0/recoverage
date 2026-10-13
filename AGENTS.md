@@ -39,7 +39,7 @@ recoverage/
 │                           #   unit file or a container spec; pinned to config.KNOWN_VARS and the
 │                           #   module's defaults by tests/test_config.py (TestEnvExample)
 ├── web/                    # frontend sources: vite.config.ts + app/ (Preact + Tailwind)
-│                           #   app/system/ is a verbatim copy of relumea-site's src/system
+│                           #   app/system/ is a verbatim copy of relumea-brand's src/system
 │                           #   (tokens.css, icons/Icon.tsx, icons/paths.ts): never edit it,
 │                           #   re-copy after an upstream change
 ├── components.json         # shadcn config; @shadcn/lint reads the token set from the
