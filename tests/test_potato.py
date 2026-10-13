@@ -645,7 +645,7 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     lacks the field, and ``// SOURCE:`` stays in the file. A file with neither
     comments nor a row contributes nothing.
     """
-    from rebrew.metadata import (
+    from rebrew.metadata.functions import (
         get_entry,
         identity_file,
         record_function_identity,

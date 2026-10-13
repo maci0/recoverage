@@ -31,7 +31,7 @@ from urllib.parse import quote, unquote, urlsplit
 import brotli
 import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
-from rebrew.annotation import DATA_MARKERS
+from rebrew.metadata.annotation import DATA_MARKERS
 from rebrew.coverage_toml import (
     _BUCKET_OF_STATE,
     Cell,
@@ -580,7 +580,7 @@ def _contained_source_path(
 def _function_store_dir(project_dir: Path, target: str) -> Path | None:
     """Directory of ``rebrew-functions.toml`` for *target*, or None when the project has none."""
     from rebrew.config import ConfigError, load_config
-    from rebrew.metadata import METADATA_FILENAME
+    from rebrew.metadata.functions import METADATA_FILENAME
 
     try:
         cfg = load_config(project_dir, target=target)
@@ -631,7 +631,7 @@ def _row_note_blocker(
     store = _function_store_dir(project_dir, target)
     if store is None:
         return "", ""
-    from rebrew.metadata import get_entry
+    from rebrew.metadata.functions import get_entry
 
     try:
         entry = get_entry(store, va, module)
