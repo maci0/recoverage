@@ -50,13 +50,16 @@ dependencies = [
     # documents (rebrew.coverage_toml), so recoverage does not carry its own
     # copy of any of it.  Resolved from the sibling checkout by
     # [tool.uv.sources] below.
-    # 2.23.0 is the floor, the version tools/ci_clone_rebrew.sh pins: the
-    # function-detail panels read a row's note and blocker through
-    # rebrew.split.stored_file_matches (2.22.0), and every rebuild hint names
-    # `rebrew coverage build`, which replaced `rebrew build-db` in 2.22.0.
+    # 2.26.0 is the floor, the version tools/ci_clone_rebrew.sh pins: it moved
+    # the annotation parser to rebrew.metadata.annotation and the function
+    # store to rebrew.metadata.functions, with no aliases, and the server
+    # imports both from there. The function-detail panels read a row's note
+    # and blocker through rebrew.split.stored_file_matches (2.22.0), and every
+    # rebuild hint names `rebrew coverage build`, which replaced
+    # `rebrew build-db` in 2.22.0.
     # rebrew.coverage_toml, which the regen path writes and every read path
     # parses, has shipped since 2.16.0.
-    "rebrew>=2.23.0",
+    "rebrew>=2.26.0",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",

@@ -43,6 +43,7 @@ const STATE_SLOTS = new Map<string, number>([
   ["skip", 7],
   ["unknown", 7],
   ["drift", 7],
+  ["displaced", 7],
   ["unchecked", 7],
 ]);
 

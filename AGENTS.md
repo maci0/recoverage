@@ -635,8 +635,8 @@ Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=2.23.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
-  release, which ships `rebrew coverage build` and `rebrew.split.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
+- `rebrew>=2.26.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
+  release, which ships `rebrew.metadata.annotation`, `rebrew.metadata.functions`, `rebrew coverage build` and `rebrew.split.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)

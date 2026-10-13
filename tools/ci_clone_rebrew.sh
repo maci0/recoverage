@@ -19,8 +19,8 @@
 # REBREW_FORCE=1 overwrites a destination checkout that has uncommitted work.
 set -euo pipefail
 
-REBREW_REF="${REBREW_REF:-v2.23.0}"
-REBREW_SHA="${REBREW_SHA:-189f0df2eed554df142a22b7d8e813d658aad3fe}"
+REBREW_REF="${REBREW_REF:-v2.26.0}"
+REBREW_SHA="${REBREW_SHA:-3babd2d41cff542d36f0b43d31e7a57dde715f8a}"
 REBREW_URL="${REBREW_URL:-https://github.com/maci0/rebrew.git}"
 dest="${1:-../rebrew}"
 

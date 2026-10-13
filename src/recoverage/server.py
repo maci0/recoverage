@@ -31,7 +31,6 @@ from urllib.parse import quote, unquote, urlsplit
 import brotli
 import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
-from rebrew.metadata.annotation import DATA_MARKERS
 from rebrew.coverage_toml import (
     _BUCKET_OF_STATE,
     Cell,
@@ -40,6 +39,7 @@ from rebrew.coverage_toml import (
     Function,
     Global,
 )
+from rebrew.metadata.annotation import DATA_MARKERS
 from rebrew.utils import floor_pct
 from rebrew.workspace import (
     CONFIG_NAME,
@@ -1449,7 +1449,7 @@ def _bucket_row(section: Any) -> dict[str, Any]:
     splatted into a response payload and a caller that mutates it must not be
     editing the snapshot.  ``other`` is the producer's catch-all
     (compile_error, extract_error, invalid_va, missing_file, missing_size,
-    skip, unknown and the data drift/unchecked verdicts), so total_cells still
+    skip, unknown and the data drift/displaced/unchecked verdicts), so total_cells still
     reconciles with the bucket sum.
     """
     return dict(section.bucket_counts)

@@ -120,11 +120,14 @@ COLORS = {
     "thunk": "#7063a0",  # cell-thunk
     "none": "#212124",  # cell-unlit
     # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
-    # exact), so it takes the exact fill; DRIFT and UNCHECKED are the two
-    # problem states here, and both take _COLORS_PROBLEM, the fill the SPA
-    # paints the problem slot with.
+    # exact), so it takes the exact fill; DRIFT, DISPLACED and UNCHECKED are
+    # the problem states here, and all three take _COLORS_PROBLEM, the fill the
+    # SPA paints the problem slot with.  DISPLACED (the link map places the
+    # symbol at another VA) is a kind of drift: rebrew counts it in data_drift
+    # and folds it into the `other` bucket beside drift.
     "verified": "#2f7a56",
     "drift": _COLORS_PROBLEM,
+    "displaced": _COLORS_PROBLEM,
     "unchecked": _COLORS_PROBLEM,
     "compile_error": _COLORS_PROBLEM,
     "extract_error": _COLORS_PROBLEM,

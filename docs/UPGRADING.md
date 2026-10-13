@@ -34,6 +34,18 @@ the next restart.
 
 ## [Unreleased]
 
+### rebrew 2.26.0 is the floor
+
+Before: recoverage ran against rebrew 2.23.0 or later.
+
+After: it needs rebrew 2.26.0. That release moved the annotation parser to
+`rebrew.metadata.annotation` and the function store to
+`rebrew.metadata.functions` with no aliases, and the server imports both from
+there, so an older rebrew fails at import.
+
+Do: update the sibling rebrew checkout (`make clone-rebrew`), then
+`make setup`. Coverage documents, the HTTP API and the CLI are unchanged.
+
 ## [6.0.0]
 
 The dashboard, the HTTP API and the coverage document are unchanged. Four

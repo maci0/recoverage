@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- rebrew 2.26.0 is the minimum version (was 2.23.0): `rebrew>=2.26.0`. The
+  server imports the annotation parser and the function store from
+  `rebrew.metadata`, where 2.26.0 moved them. See
+  [UPGRADING.md](docs/UPGRADING.md).
+
 ## [6.1.0] - 2026-10-08
 
 ### Added

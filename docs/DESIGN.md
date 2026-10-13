@@ -95,7 +95,7 @@ it is mounted from.
   * **Size mismatch** (`cell-near`, amber): compiled size differs from the original (`size_mismatch`)
   * **`STUB`** (`cell-stub`, grey): far off or placeholder. Red is kept for failure.
   * **Padding** (`border-strong`, hairline grey, ruled in `text-muted`): alignment padding. The brand has no padding verdict, so it takes the quietest fill that is not the unlit cell.
-  * **Problem** (`cell-fail`, red): tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `unchecked` verdicts)
+  * **Problem** (`cell-fail`, red): tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `displaced` / `unchecked` verdicts)
   * **Undocumented** (`cell-unlit`): no claim on the block
 
   The fills share one lightness and differ by hue, with `EXACT`, `RELOC` and `PROVEN` all green and `STUB` and padding both grey, so those slots also carry a 1px ink mark on a 4px tile (`MARK_CLASS` in `web/app/states.ts`, the `mark-*` utilities in `web/app/index.css`, drawn as a canvas pattern on the map). `tests/test_server.py` fails when two fills closer than ΔE 20 share a mark, or a mark's ink is under 3:1 on its fill.
@@ -378,7 +378,7 @@ Cell states are the keys of `potato.COLORS`, spelled as `cells.state` spells the
 | `padding` | Silver | `#C0C0D4` |
 | `data` | Purple | `#8b5cf6` |
 | `thunk` | Orange | `#f97316` |
-| `drift`, `unchecked`, `compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown` | Violet | `#a855f7` |
+| `drift`, `displaced`, `unchecked`, `compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown` | Violet | `#a855f7` |
 | `none` | Dark Gray | `#3F4958` |
 | Background | Dark | `#0f1216` |
 | Panel | Slate | `#151a21` |
