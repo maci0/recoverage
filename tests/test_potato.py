@@ -3957,14 +3957,25 @@ class TestDbUnavailableContract:
         """
         directory = self._point_at_empty_dir(tmp_path, monkeypatch)
         directory.mkdir()
-        (directory / "coverage-A<b>.toml").write_text("version = [\n", encoding="utf-8")
+        (directory / "coverage-A&copy;.toml").write_text("version = [\n", encoding="utf-8")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
         page = body.decode("utf-8")
         assert "No coverage document could be read" in page
-        assert "<code>coverage-A&lt;b&gt;.toml</code>: " in page
-        assert "<code>coverage-A<b>.toml</code>" not in page
+        assert "<code>coverage-A&amp;copy;.toml</code>: " in page
+        assert "<code>coverage-A&copy;.toml</code>" not in page
         assert str(directory) not in page
+
+    def test_the_503_page_escapes_document_tags_and_error_text(self) -> None:
+        page = str(
+            _db_unavailable_page(
+                [{"file": "coverage-A<b>.toml", "error": '<script>alert("x")</script>'}]
+            ).body
+        )
+        assert "coverage-A&lt;b&gt;.toml" in page
+        assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in page
+        assert "<b>" not in page
+        assert "<script>" not in page
 
     def test_an_empty_directory_does_not_claim_a_broken_document(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The CLI help-layout test checks visible columns with forced terminal color
   enabled too. Runtime output and the CLI contract are unchanged.
+- The unreadable-document fixture uses an HTML-sensitive filename valid on
+  Windows too. Separate refusal-page assertions retain tag and error escaping.
 
 ## [7.0.0] - 2026-10-14
 
