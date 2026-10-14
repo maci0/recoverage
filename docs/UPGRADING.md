@@ -34,6 +34,8 @@ the next restart.
 
 ## [Unreleased]
 
+## [7.0.0]
+
 ### rebrew 2.26.0 is the floor
 
 Before: recoverage ran against rebrew 2.23.0 or later.
