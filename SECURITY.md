@@ -8,8 +8,8 @@ older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 7.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v7.0.0`) | yes |
-| < 7.0.0 | no |
+| 7.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v7.0.1`) | yes |
+| < 7.0.1 | no |
 
 The supported line is what `__version__` says, so a build that disagrees with
 the tag is the thing to look at first rather than this table.

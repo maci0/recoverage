@@ -17,6 +17,7 @@ from unittest import mock
 
 import pytest
 import typer
+from click.utils import strip_ansi
 from conftest import HAS_DB, path_the_filesystem_holds
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
@@ -3094,12 +3095,20 @@ class TestOpenWarnsWithoutAListener:
         assert "nothing is listening" not in result.stderr
 
 
-def test_the_root_help_examples_line_up_inside_80_columns() -> None:
+@pytest.mark.parametrize("force_color", [False, True])
+def test_the_root_help_examples_line_up_inside_80_columns(
+    monkeypatch: pytest.MonkeyPatch, force_color: bool
+) -> None:
     """The examples are one block, each comment in one column, and no line is
     wider than the terminal a reader opens. One paragraph per example spread
     nine lines over eighteen, with every comment at a different column."""
+    if force_color:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+    else:
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
     result = CliRunner().invoke(app, ["--help"], terminal_width=80)
-    lines = result.output.splitlines()
+    assert result.exit_code == 0
+    lines = strip_ansi(result.output).splitlines()
     start = lines.index(next(line for line in lines if line.strip() == "Examples:"))
     block = [line for line in lines[start + 2 :] if line.strip()][: len(cli._HELP_EXAMPLES)]
     assert all(line.lstrip().startswith("recoverage") for line in block), block

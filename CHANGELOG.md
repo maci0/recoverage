@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [7.0.1] - 2026-10-14
+
+### Fixed
+
+- The CLI help-layout test checks visible columns with forced terminal color
+  enabled too. Runtime output and the CLI contract are unchanged.
+
 ## [7.0.0] - 2026-10-14
 
 ### Breaking

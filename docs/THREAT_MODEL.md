@@ -2,7 +2,7 @@
 
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). The current package is
-`__version__ = "7.0.0"` (`src/recoverage/__init__.py:42`). Every claim below carries
+`__version__ = "7.0.1"` (`src/recoverage/__init__.py:42`). Every claim below carries
 a file reference so a later pass can re-verify it. These references were last
 reviewed on 2026-10-03 at `5fe9ea7`; updating the release label is not a new audit.
 
@@ -1052,7 +1052,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
    (`src/recoverage/server.py`), so the bound is 10 attempts per KEY, not per client. A
    process that can choose its source address (any local process against a
    loopback bind, and the internet behind a proxy that folds a client-supplied
-   forwarded address into `REMOTE_ADDR`) walks `127.0.0.0/8`, or the
+   forwarded address into `REMOTE_ADDR`) walks `127.0.1.0/8`, or the
    IPv4-mapped and plain spellings of one address, for `_AUTH_FAIL_MAX` fresh
    windows apiece (`src/recoverage/server.py`). One window is one key, so it does
    not bound a distributed guessing rate. Requests whose environ carries no
