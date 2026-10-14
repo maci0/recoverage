@@ -103,8 +103,8 @@ def _record_rebrew_calls(monkeypatch: pytest.MonkeyPatch, events: list[tuple[str
     def run_catalog(c: object) -> None:
         events.append(("run_catalog", c))
 
-    def build_db(project_root: Path, force: bool = False) -> None:
-        events.append(("build_db", project_root, force))
+    def build_db(project_root: Path) -> None:
+        events.append(("build_db", project_root))
 
     _install_fake_rebrew(
         monkeypatch,
@@ -127,10 +127,7 @@ class TestRunRegen:
         assert events == [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            # force=True: a coverage file from the previous format is the file
-            # this command exists to replace, and the writer takes the flag so
-            # a later version check cannot silently refuse it.
-            ("build_db", tmp_path, True),
+            ("build_db", tmp_path),
         ]
 
     def test_missing_rebrew_import_error_propagates(
@@ -244,7 +241,7 @@ class TestRunRegen:
             monkeypatch,
             load_config=lambda root: object(),
             run_catalog=lambda c: None,
-            build_db=lambda project_root, force: None,
+            build_db=lambda project_root: None,
         )
         monkeypatch.setattr(
             regen,
@@ -273,7 +270,7 @@ class TestRunRegen:
             monkeypatch,
             load_config=lambda root: object(),
             run_catalog=lambda c: None,
-            build_db=lambda project_root, force: None,
+            build_db=lambda project_root: None,
         )
         real_release = regen._release_lock
         monkeypatch.setattr(
@@ -303,7 +300,7 @@ class TestRunRegen:
         one_run = [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            ("build_db", tmp_path, True),
+            ("build_db", tmp_path),
         ]
         run_regen(tmp_path)
         run_regen(tmp_path)
@@ -351,7 +348,7 @@ class TestRunRegen:
             ("load_config", tmp_path),
             ("run_catalog", cfg),
             ("load_config", tmp_path),
-            ("build_db", tmp_path, True),
+            ("build_db", tmp_path),
         ]
 
     def test_a_failed_run_leaves_the_lock_free(
@@ -381,7 +378,7 @@ class TestRunRegen:
         assert events == [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            ("build_db", tmp_path, True),
+            ("build_db", tmp_path),
         ]
 
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="Windows has no fork to test with")
@@ -445,7 +442,7 @@ class TestRunRegen:
         assert events == [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            ("build_db", tmp_path, True),
+            ("build_db", tmp_path),
         ]
 
     def test_refuses_a_db_override_rebrew_would_not_write_to(
@@ -681,10 +678,7 @@ class TestRebrewSurface:
         root = Path("project")
         inspect.signature(load_config).bind(root)
         inspect.signature(run_catalog).bind(object())
-        # force=True is the fourth call shape regen depends on: the writer takes
-        # it so a coverage file from the previous format is replaced rather than
-        # refused, which is the one file a regen exists to replace.
-        inspect.signature(write_coverage_toml).bind(root, force=True)
+        inspect.signature(write_coverage_toml).bind(root)
 
 
 class TestOpenAndReap:

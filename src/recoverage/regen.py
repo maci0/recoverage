@@ -354,13 +354,8 @@ def run_regen(root: Path) -> list[Path]:
     cannot: a ``recoverage regen`` at a terminal beside a running dashboard, or
     a cron job over the same tree, is a duplicate no in-process lock sees.
 
-    ``force=True`` keeps the call shape the SQLite-era regen had: rebrew's
-    writer accepts it for signature symmetry with ``build_db`` and a document
-    from a previous format is replaced unconditionally either way, so a
-    dashboard whose coverage had fallen a version behind still rebuilds itself
-    from the Reload button.  The flag is what a future writer that grows a
-    version check would honour; passing it here means that addition cannot
-    silently break the one job this command exists for.
+    Rebrew's writer replaces each document whole, including a document from a
+    previous format, so the Reload button can rebuild outdated coverage.
     """
     import typer
     from rebrew.catalog.cli import run_catalog
@@ -372,6 +367,6 @@ def run_regen(root: Path) -> list[Path]:
     try:
         with _exclusive_regen(root):
             run_catalog(cfg)
-            return write_coverage_toml(root, force=True)
+            return write_coverage_toml(root)
     except typer.Exit as e:
         raise RegenError(e.exit_code) from None
