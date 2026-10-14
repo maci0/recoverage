@@ -17,10 +17,10 @@ from unittest import mock
 
 import pytest
 import typer
-from click.utils import strip_ansi
 from conftest import HAS_DB, path_the_filesystem_holds
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
+from rich.text import Text
 from typer.testing import CliRunner
 
 from recoverage import cli, devserver, metrics, server
@@ -3108,7 +3108,7 @@ def test_the_root_help_examples_line_up_inside_80_columns(
         monkeypatch.delenv("FORCE_COLOR", raising=False)
     result = CliRunner().invoke(app, ["--help"], terminal_width=80)
     assert result.exit_code == 0
-    lines = strip_ansi(result.output).splitlines()
+    lines = Text.from_ansi(result.output).plain.splitlines()
     start = lines.index(next(line for line in lines if line.strip() == "Examples:"))
     block = [line for line in lines[start + 2 :] if line.strip()][: len(cli._HELP_EXAMPLES)]
     assert all(line.lstrip().startswith("recoverage") for line in block), block
