@@ -7221,3 +7221,62 @@ class TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8:
         helper = self._module_path().read_text(encoding="utf-8")
         calls = [line for line in helper.splitlines() if "encodeURIComponent(" in line]
         assert len(calls) == 1, f"encodeUrlValue delegates {len(calls)} times: {calls}"
+
+
+class TestSpaStoredDocumentationPresentation:
+    """Run the real metadata formatter and private panel deduplicator under Bun."""
+
+    def test_blocker_row_deduplicates_only_the_generated_trailing_entry(
+        self, tmp_path: Path
+    ) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        panel = _web("components/CoveragePanel.tsx")
+        assert "withoutRepeatedBlocker(docs, blocker)" in panel
+        # Keep the component helper private while exercising its shipped implementation.
+        helper = (
+            "const BLOCKER_PREFIX"
+            + panel.split("const BLOCKER_PREFIX", 1)[1].split(
+                "/** The metadata under the title:", 1
+            )[0]
+        )
+        formatter = Path(__file__).resolve().parent.parent / "web/app/lib/format.ts"
+        cases = [
+            (
+                {"note": "metadata note", "blocker": "loop differs"},
+                "loop differs",
+                "Note: metadata note",
+            ),
+            ({"blocker": "loop differs"}, "loop differs", None),
+            ({"blocker": "loop differs"}, None, "Blocker: loop differs"),
+            ({"blocker": "loop differs"}, "another blocker", "Blocker: loop differs"),
+            (
+                {"note": "keep this\nBlocker: loop differs\nand this", "blocker": "loop differs"},
+                "loop differs",
+                "Note: keep this\nBlocker: loop differs\nand this",
+            ),
+            (
+                {"note": "keep note", "blocker": "first line\nsecond line"},
+                "first line\nsecond line",
+                "Note: keep note",
+            ),
+            ({"blocker": "first line\nsecond line"}, "first line\nsecond line", None),
+        ]
+        script = tmp_path / "documentation.ts"
+        script.write_text(
+            "import { extractDocs } from "
+            + json.dumps(formatter.as_uri())
+            + ";\n"
+            + helper
+            + "\nconst cases = "
+            + json.dumps(cases)
+            + ";\nconsole.log(JSON.stringify(cases.map(([stored, blocker]) => "
+            + "withoutRepeatedBlocker(extractDocs(stored), blocker))));\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == [expected for _, _, expected in cases]
