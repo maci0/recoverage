@@ -48,7 +48,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -105,7 +105,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -185,7 +185,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -239,7 +239,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -353,7 +353,7 @@ jobs:
           # over anything but the tree. LC_ALL/TZ for the first build come from
           # the recipe; the second build overrides them on the command line.
           SOURCE_DATE_EPOCH: "1700000000"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-dist
           path: dist/*
@@ -375,7 +375,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -420,7 +420,7 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -489,7 +489,7 @@ jobs:
           python tools/bundled_js_inventory.py --format spdx \
             --output recoverage-browser-spdx.json
           test -s recoverage-browser-spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-python-sbom
           path: recoverage-python-sbom.txt
@@ -498,7 +498,7 @@ jobs:
           # with no artifact attached for anyone to read.
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-browser-sbom
           path: recoverage-browser-sbom.txt
@@ -507,7 +507,7 @@ jobs:
           # records.
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-browser-spdx
           path: recoverage-browser-spdx.json
