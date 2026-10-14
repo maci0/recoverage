@@ -39,7 +39,7 @@ from rebrew.coverage_toml import (
     Function,
     Global,
 )
-from rebrew.metadata.annotation import DATA_MARKERS
+from rebrew.metadata.bindings import DATA_KINDS
 from rebrew.utils import floor_pct
 from rebrew.workspace import (
     CONFIG_NAME,
@@ -597,7 +597,7 @@ def _function_store_dir(project_dir: Path, target: str) -> Path | None:
 
 def _stored_names_source(stored: str, source: Path, *roots: Path) -> bool:
     """True when *stored* is *source* relative to one of *roots*, or a suffix of that path."""
-    from rebrew.split import stored_file_matches
+    from rebrew.metadata.functions import stored_file_matches
 
     text = stored.replace("\\", "/")
     if not text:
@@ -623,8 +623,7 @@ def _row_note_blocker(
     """Note and blocker from the ``MODULE.0xVA`` row whose ``file`` names *source*.
 
     Both strings are empty when the project has no function store, the row is
-    missing, or its ``file`` names a different source. The ``.c`` is not read
-    here: a comment in the file wins, and the caller applies that.
+    missing, or its ``file`` names a different source. The ``.c`` is not read.
     """
     if not module:
         return "", ""
@@ -658,7 +657,7 @@ def _attach_row_documentation(
     """Put the function row's note on *payload*, and its blocker when the document has none.
 
     The coverage document carries ``blocker`` and does not carry ``note``. A
-    marker-less ``.c`` keeps both texts on the ``MODULE.0xVA`` row. The field
+    dedicated ``MODULE.0xVA`` row holds both texts. The field
     is added only when the row has one, so a document with no matching row
     keeps the column set ``function_json`` already serves.
     """
@@ -1363,7 +1362,7 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 #: the Potato function list, and the by-status counts all filter on it, and
 #: three copies of the literal is three chances to disagree.
 #:
-#: Read off rebrew's ``DATA_MARKERS`` rather than re-spelled, because that
+#: Read off rebrew's ``DATA_KINDS`` rather than re-spelled, because that
 #: constant is rebrew's declared single home for the set and rebrew says so
 #: next to it ("do not re-spell the tuple at call sites").  A copy here was
 #: correct at the moment it was written and silently wrong the day rebrew
@@ -1373,7 +1372,7 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 #: response — would not, so one payload would answer "how many functions" two
 #: ways.  Sorted, so the name is stable in a traceback; a set would answer the
 #: same and read worse.
-DATA_MARKER_TYPES: tuple[str, ...] = tuple(sorted(DATA_MARKERS))
+DATA_MARKER_TYPES: tuple[str, ...] = tuple(sorted(DATA_KINDS))
 
 
 def _is_data_marker(fn: Any) -> bool:

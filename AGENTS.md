@@ -613,7 +613,7 @@ simpler and strictly wider.
      answers land in the SAME response (`summary.coveredBytes` beside
      `sections[..].covered_bytes`) with a fixed fixture vocabulary to hide it.
      The same holds for a vocabulary: `server.DATA_MARKER_TYPES` is read off
-     rebrew's `DATA_MARKERS`, not re-spelled, for the same reason.
+     rebrew's `DATA_KINDS`, not re-spelled, for the same reason.
    - A target the project config declares but no build has written is served
      from an EMPTY snapshot (`server.coverage_for`), which is what the SQLite
      reader got from an empty table set. A document that exists but does not
@@ -628,6 +628,9 @@ simpler and strictly wider.
      Layout spans have no standalone owner. Legacy `files` is declaration
      provenance and must never be presented as owners. Missing roles stay unknown.
    - Cell detail panel shows parent function as a clickable navigation link
+   - Function documentation on both surfaces comes only from dedicated Rebrew
+     metadata (`note`/`blocker`). Never parse inline state comments or use source
+     comments as a fallback; source availability must not gate stored documentation.
 
 ## Dependencies
 
@@ -635,8 +638,8 @@ Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=2.26.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
-  release, which ships `rebrew.metadata.annotation`, `rebrew.metadata.functions`, `rebrew coverage build` and `rebrew.split.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
+- `rebrew>=3.0.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
+  release, which ships `rebrew.metadata.bindings`, `rebrew.metadata.functions`, `rebrew coverage build` and `rebrew.metadata.functions.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)

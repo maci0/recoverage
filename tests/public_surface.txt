@@ -1,4 +1,4 @@
-# The public module-level surface of `recoverage` as of v3.0.0, the last release
+# The public module-level surface of `recoverage` as of the third major release, the last release
 # that shipped with no public name removed and no entry written about it.
 #
 # One `module::NAME` per line, read by `tests/test_release.py`

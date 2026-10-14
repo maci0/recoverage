@@ -469,7 +469,7 @@ export function toVa(raw: string | number): number {
   return typeof raw === "string" ? Number.parseInt(raw, 16) : raw;
 }
 
-/** Note and blocker from the function's `MODULE.0xVA` row, when the `.c` has no such comment.
+/** Note and blocker from the function's dedicated metadata row.
  * An absent detail field is `undefined`, which `exactOptionalPropertyTypes` keeps
  * distinct from a missing key, so the property accepts that too. */
 export type StoredDocumentation = {
@@ -477,35 +477,18 @@ export type StoredDocumentation = {
   blocker?: string | null | undefined;
 };
 
-/** Annotation comments from the C file, then a row's note and blocker when those
- * comments are absent. `// SOURCE:` stays a file comment. A comment already in
- * the file wins over the row. `null` when the source is a pane message, or when
- * neither the file nor the row recorded anything.
- *
- * Only the annotations no panel row prints: `// FUNCTION:`, `// STATUS:`,
- * `// SIZE:`, `// CFLAGS:` and `// SYMBOL:` repeated the VA, Status, Size,
- * Compiler and Symbol rows directly above them. The same four tags Potato
- * Mode's `_extract_annotations` reads. */
+/** Format stored documentation independently of source availability. */
 export function extractDocs(
-  source: string,
   stored?: StoredDocumentation | null,
 ): string | null {
-  if (source === "" || source.startsWith("(no C") || source.startsWith("(failed")) {
-    return null;
-  }
-  const prefixes = ["// NOTE:", "// BLOCKER:", "// ORIGIN:", "// SOURCE:"];
-  const docs = source
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => prefixes.some((prefix) => line.startsWith(prefix)));
-  const has = (prefix: string): boolean => docs.some((line) => line.startsWith(prefix));
+  const docs: Array<string> = [];
   const note = stored?.note?.trim() ?? "";
   const blocker = stored?.blocker?.trim() ?? "";
-  if (note !== "" && !has("// NOTE:")) {
-    docs.push(`// NOTE: ${note}`);
+  if (note !== "") {
+    docs.push(`Note: ${note}`);
   }
-  if (blocker !== "" && !has("// BLOCKER:")) {
-    docs.push(`// BLOCKER: ${blocker}`);
+  if (blocker !== "") {
+    docs.push(`Blocker: ${blocker}`);
   }
   return docs.length > 0 ? docs.join("\n") : null;
 }
@@ -520,7 +503,7 @@ export const MSG = {
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",
-  NO_DOCS: "No documentation comments in source file",
+  NO_DOCS: "No documentation recorded in metadata",
   NO_C_FOR_BLOCK: "(no C implementation)",
   UNDOCUMENTED_BLOCK: "(undocumented block)",
   ASM_PLACEHOLDER: "(no disassembly for this block)",

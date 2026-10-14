@@ -36,6 +36,7 @@ from recoverage.server import (
     FUNCTION_SORT_COLUMNS,
     MAX_SEARCH_CHARS,
     MAX_SLICE_SIZE,
+    _attach_row_documentation,
     _bucket_row,
     _cell_json,
     _compressed,
@@ -46,7 +47,6 @@ from recoverage.server import (
     _load_dll,
     _log_safe,
     _newest_mtime_ns,
-    _row_note_blocker,
     _snapshot_db_mtime,
     _touch,
     app,
@@ -842,33 +842,6 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
     if file_offset < 0 or end > len(dll_data):
         return None
     return dll_data[file_offset:end]
-
-
-def _extract_annotations(code: str, *, note: str = "", blocker: str = "") -> list[tuple[str, str]]:
-    """Extract NOTE, BLOCKER, ORIGIN and SOURCE comments from C source.
-
-    The tags no panel row prints, and the same four the dashboard's
-    ``extractDocs`` (``web/app/lib/format.ts``) reads.
-
-    A note or blocker the file does not carry is filled from *note* and
-    *blocker*, which the caller read off the ``MODULE.0xVA`` row. A comment
-    already in the file wins. ``// SOURCE:`` stays a file comment.
-    """
-    annotations: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for raw_line in code.splitlines():
-        line = raw_line.strip()
-        for tag in ("NOTE", "BLOCKER", "ORIGIN", "SOURCE"):
-            prefix = f"// {tag}:"
-            if line.startswith(prefix):
-                text = line[len(prefix) :].strip()
-                annotations.append((tag, text))
-                seen.add(tag)
-    if note and "NOTE" not in seen:
-        annotations.append(("NOTE", note))
-    if blocker and "BLOCKER" not in seen:
-        annotations.append(("BLOCKER", blocker))
-    return annotations
 
 
 def _format_data_inspector(raw_bytes: bytes | None) -> str:
@@ -3483,11 +3456,14 @@ def _panel_function_detail(
         return False
 
     fn_data = function_json(found_fn)
+    _attach_row_documentation(
+        fn_data, target=target, paths=data.get("paths"), project_dir=Path.cwd().resolve()
+    )
     ctx["fn_data"] = fn_data
     _panel_fn_attach_verify(coverage, fn_data)
 
     hex_fields = {"va", "fileOffset"}
-    skip_fields = {"files", "sha256", "is_thunk", "is_export"}
+    skip_fields = {"files", "sha256", "is_thunk", "is_export", "note"}
     if not fn_data.get("blocker"):
         skip_fields.add("blocker")
     if fn_data.get("blockerDelta") is None:
@@ -3525,35 +3501,12 @@ def _panel_function_detail(
 
     ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
 
-    # Source code + annotations. Comment lines win. A marker-less file fills
-    # note and blocker from the MODULE.0xVA row that names this source.
+    # Documentation comes from metadata even when the C file is unavailable.
+    note = str(fn_data.get("note") or "").strip()
+    ctx["annotations"] = [("NOTE", note)] if note else []
     files = fn_data.get("files", [])
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
-        note, blocker = "", ""
-        module = fn_data.get("module")
-        va = fn_data.get("va")
-        source = _contained_source_path(
-            Path.cwd().resolve(),
-            data.get("paths") if isinstance(data, dict) else None,
-            target,
-            files,
-        )
-        if (
-            source is not None
-            and isinstance(module, str)
-            and not isinstance(va, bool)
-            and isinstance(va, int)
-        ):
-            note, blocker = _row_note_blocker(Path.cwd().resolve(), target, module, va, source)
-        # The detail rows already print the blocker, so its annotation is
-        # left out rather than repeated under it (the dashboard does the same).
-        shown = str(fn_data.get("blocker") or "").strip()
-        ctx["annotations"] = [
-            (tag, text)
-            for tag, text in _extract_annotations(code_text, note=note, blocker=blocker)
-            if not (tag == "BLOCKER" and shown and text.strip() == shown)
-        ]
         ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 

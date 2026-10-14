@@ -7,9 +7,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
-- rebrew 2.26.0 is the minimum version (was 2.23.0): `rebrew>=2.26.0`. The
-  server imports the annotation parser and the function store from
-  `rebrew.metadata`, where 2.26.0 moved them. See
+- Function documentation in both dashboard modes comes only from dedicated
+  metadata (`note` and `blocker`). Inline `NOTE`, `BLOCKER`, `ORIGIN`, and
+  `SOURCE` comments no longer supply documentation state. `extractDocs` accepts
+  stored metadata only; its C-source argument and Potato Mode's private
+  `_extract_annotations` reader are removed.
+
+- Rebrew 3.0.0 is the minimum version (was 2.23.0): `rebrew>=3.0.0`. The
+  server uses address-only source bindings and canonical format-2 metadata.
+  Function and data state lives in the dedicated stores. See
   [UPGRADING.md](docs/UPGRADING.md).
 
 ## [6.1.0] - 2026-10-08

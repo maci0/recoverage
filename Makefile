@@ -95,9 +95,9 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it has no
-# rebrew.metadata.annotation or rebrew.metadata.functions, which the server
-# imports (the annotation parser and the function store moved there in 2.26.0).
-REBREW_FLOOR ?= 2.26.0
+# rebrew.metadata.bindings or rebrew.metadata.functions, which the server
+# imports (source bindings and the function store moved there in 3.0.0).
+REBREW_FLOOR ?= 3.0.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and
@@ -190,12 +190,12 @@ ensure-rebrew: ensure-uv
 	  exit 1; \
 	fi; \
 	ver=$$(awk -F'"' '/^__version__ = "/{print $$2; exit}' "$(REBREW_DIR)/src/rebrew/__init__.py"); \
-	if [ -f "$(REBREW_DIR)/src/rebrew/metadata/annotation.py" ]; then \
+	if [ -f "$(REBREW_DIR)/src/rebrew/metadata/bindings.py" ]; then \
 	  :; \
 	else \
-	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver and ships no src/rebrew/metadata/annotation.py,"; \
-	  echo "which is what $(REBREW_FLOOR) is the floor for: the server imports the annotation"; \
-	  echo "parser and the function store from rebrew.metadata."; \
+	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver and ships no src/rebrew/metadata/bindings.py,"; \
+	  echo "which is what $(REBREW_FLOOR) is the floor for: the server imports source bindings"; \
+	  echo "and the function store from rebrew.metadata."; \
 	  echo "Re-run 'make clone-rebrew' to check out the pinned rebrew, then 'make setup'."; \
 	  echo "To develop against a different one: make clone-rebrew REBREW_REF=<tag> REBREW_SHA=<commit>"; \
 	  exit 1; \

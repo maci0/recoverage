@@ -34,14 +34,15 @@ the next restart.
 
 ## [Unreleased]
 
-### rebrew 2.26.0 is the floor
+### Rebrew metadata bindings are required
 
 Before: recoverage ran against rebrew 2.23.0 or later.
 
-After: it needs rebrew 2.26.0. That release moved the annotation parser to
-`rebrew.metadata.annotation` and the function store to
-`rebrew.metadata.functions` with no aliases, and the server imports both from
-there, so an older rebrew fails at import.
+After: it needs the Rebrew release pinned by `tools/ci_clone_rebrew.sh`.
+Source bindings come from `rebrew.metadata.bindings`; functions and data use
+format-2 dedicated stores. Old inline metadata and old store formats are rejected.
+Convert existing project records before serving or regenerating their coverage.
+No compatibility reader is included.
 
 Do: update the sibling rebrew checkout (`make clone-rebrew`), then
 `make setup`. Coverage documents, the HTTP API and the CLI are unchanged.

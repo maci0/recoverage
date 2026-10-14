@@ -67,9 +67,9 @@ glance without loading the full SPA.
 ## Installation
 
 > [!IMPORTANT]
-> The wheel declares `rebrew>=2.26.0` as a hard runtime dependency, and rebrew
+> The wheel declares `rebrew>=3.0.0` as a hard runtime dependency, and rebrew
 > is not on the package index yet, so `pip install recoverage` stops at
-> resolution with "No matching distribution found for rebrew>=2.26.0". The
+> resolution with "No matching distribution found for rebrew>=3.0.0". The
 > commands below are the install that works today: recoverage resolves rebrew
 > from a sibling checkout, so the tree must sit beside one. `git clone`
 > recoverage on its own, or any git worktree of it, leaves `uv sync` failing

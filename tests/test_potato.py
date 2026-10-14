@@ -66,7 +66,6 @@ from recoverage.potato import (
     _db_updated_iso,
     _db_updated_label,
     _esc,
-    _extract_annotations,
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
@@ -576,23 +575,6 @@ def test_format_hex_dump():
     assert _format_hex_dump(b"", 0) == ""
 
 
-def test_extract_annotations():
-    code = """// FUNCTION: SERVER 0x10003da0
-// STATUS: MATCHING
-// NOTE: register alloc differs
-// BLOCKER: loop unrolling
-// SOURCE: deflate.c:fill_window
-int foo(void) { return 0; }
-"""
-    annotations = _extract_annotations(code)
-    assert ("NOTE", "register alloc differs") in annotations
-    assert ("BLOCKER", "loop unrolling") in annotations
-    assert ("SOURCE", "deflate.c:fill_window") in annotations
-    assert len(annotations) == 3
-    assert _extract_annotations("") == []
-    assert _extract_annotations("int main() { return 0; }") == []
-
-
 _FORMAT_TS = Path(__file__).resolve().parent.parent / "web" / "app" / "lib" / "format.ts"
 _ROW_NOTE = "register file lives on the row"
 _ROW_BLOCKER = "unrolled loop lives on the row"
@@ -615,7 +597,7 @@ def _dashboard_docs(workdir: Path, cases: list[dict[str, Any]]) -> list[str | No
         + json.dumps(_FORMAT_TS.resolve().as_uri())
         + ";\n"
         + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
-        + "console.log(JSON.stringify(cases.map((c) => extractDocs(c.source, c.stored))));\n"
+        + "console.log(JSON.stringify(cases.map((c) => extractDocs(c.stored))));\n"
     )
     program = workdir / "docs.ts"
     program.write_text(driver, encoding="utf-8")
@@ -637,14 +619,7 @@ def _dashboard_docs(workdir: Path, cases: list[dict[str, Any]]) -> list[str | No
 def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A marker-less row's note and blocker show on both surfaces.
-
-    The report is the Potato function panel. The dashboard is ``extractDocs`` from
-    ``web/app/lib/format.ts``, fed the note and blocker the
-    function-detail API actually served. Comment lines still win when the row
-    lacks the field, and ``// SOURCE:`` stays in the file. A file with neither
-    comments nor a row contributes nothing.
-    """
+    """Both surfaces use dedicated metadata; inline state stays source text."""
     from rebrew.metadata.functions import (
         get_entry,
         identity_file,
@@ -659,7 +634,11 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     markerless = source_dir / "fill_window.c"
     legacy = source_dir / "legacy.c"
     orphan = source_dir / "orphan.c"
-    markerless.write_text("int fill_window(void) { return 0; }\n", encoding="utf-8")
+    markerless.write_text(
+        f"// NOTE: {_COMMENT_NOTE}\n// BLOCKER: {_COMMENT_BLOCKER}\n"
+        "int fill_window(void) { return 0; }\n",
+        encoding="utf-8",
+    )
     legacy.write_text(
         "\n".join(
             (
@@ -698,7 +677,7 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
             module="NP",
             va=va,
             file=validate_identity_file(identity_file(path, store)),
-            marker_type="FUNCTION",
+            kind="FUNCTION",
             name=name,
         )
     update_field(store, 0x1000, "note", _ROW_NOTE, "NP")
@@ -760,6 +739,9 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     orphan_page = render_potato_url("/potato?target=NP&section=.text&idx=2")
     assert _ROW_NOTE in markerless_page
     assert _ROW_BLOCKER in markerless_page
+    # Conflicting state comments remain visible once, solely in the source pane.
+    assert markerless_page.count(_COMMENT_NOTE) == 1
+    assert markerless_page.count(_COMMENT_BLOCKER) == 1
     # Once: the detail row prints it, so the annotations leave it out.
     assert markerless_page.count(_ROW_BLOCKER) == 1
     assert "// FUNCTION:" not in markerless_page
@@ -767,6 +749,7 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     assert _COMMENT_BLOCKER in legacy_page
     assert _SOURCE_TEXT in legacy_page
     assert _ROW_NOTE not in legacy_page
+    assert "Annotations" not in legacy_page
     assert "Annotations" not in orphan_page
     assert _ROW_NOTE not in orphan_page
 
@@ -813,40 +796,41 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     assert docs[0] is not None
     assert _ROW_NOTE in docs[0]
     assert _ROW_BLOCKER in docs[0]
-    assert docs[1] is not None
-    assert _COMMENT_NOTE in docs[1]
-    assert _COMMENT_BLOCKER in docs[1]
-    assert _SOURCE_TEXT in docs[1]
-    assert _ROW_NOTE not in docs[1]
+    assert docs[1] is None
     assert docs[2] is None
 
     selection = (
         Path(__file__).resolve().parent.parent / "web" / "app" / "hooks" / "useSelection.ts"
     ).read_text(encoding="utf-8")
-    assert "extractDocs(source, { note: detail.note, blocker: detail.blocker })" in selection
+    assert "extractDocs({ note: detail.note, blocker: detail.blocker })" in selection
+
+    # Documentation survives loss of the physical C file, independently of the source pane.
+    markerless.unlink()
+    missing_source_page = render_potato_url("/potato?target=NP&section=.text&idx=0")
+    assert _ROW_NOTE in missing_source_page
+    assert _ROW_BLOCKER in missing_source_page
+    assert detail(0x1000)["note"] == _ROW_NOTE
 
 
-def test_both_surfaces_annotate_with_the_same_tags(tmp_path: Path) -> None:
-    """The panel prints the VA, status, size, compiler and symbol as rows, so
-    the annotations carry only what no row does. The dashboard listed
-    `// FUNCTION:`, `// STATUS:` and `// SIZE:` again under those rows while
-    Potato Mode left them out, and Potato dropped `// ORIGIN:`."""
-    source = """// FUNCTION: GAME 0x1000
-// STATUS: RELOC
-// SIZE: 400
-// CFLAGS: /O2
-// SYMBOL: _f
-// ORIGIN: GAME
-// NOTE: n
-// SOURCE: f.c
-int f(void) { return 0; }
-"""
-    expected = ["// ORIGIN: GAME", "// NOTE: n", "// SOURCE: f.c"]
-    potato = [f"// {tag}: {text}" for tag, text in _extract_annotations(source)]
-    [dashboard] = _dashboard_docs(tmp_path, [{"source": source, "stored": None}])
-    assert dashboard is not None
-    assert potato == expected
-    assert dashboard.split("\n") == expected
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"note": None, "blocker": "  "}, None),
+        ({"note": "  n  ", "blocker": " b "}, "Note: n\nBlocker: b"),
+        ({"note": "line one\nline two"}, "Note: line one\nline two"),
+    ],
+)
+def test_dashboard_formats_only_stored_documentation(
+    tmp_path: Path, stored: dict[str, Any] | None, expected: str | None
+) -> None:
+    """Source text cannot override metadata or become documentation state."""
+    [dashboard] = _dashboard_docs(
+        tmp_path,
+        [{"stored": stored, "source": "// NOTE: obsolete\n// SOURCE: obsolete\nordinary prose"}],
+    )
+    assert dashboard == expected
 
 
 def test_cell_file_offset():
