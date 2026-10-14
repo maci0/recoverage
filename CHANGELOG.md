@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-10-14
+
 ### Breaking
 
 - rebrew 2.26.0 is the minimum version (was 2.23.0): `rebrew>=2.26.0`. The
