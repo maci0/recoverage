@@ -31,6 +31,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   [UPGRADING.md](docs/UPGRADING.md).
 
 ### Fixed
+- Keep a fast-loading map and stacked details behind the pending summary until
+  it settles, preventing a late summary from shifting the phone layout. A failed
+  summary still releases the map with its error shown.
 - Open configured target sources and binaries outside the fixed `src/` and
   `original/` trees through target-scoped, project-contained file routes. Encode
   target and filename components once; serve project files under inert CSP.

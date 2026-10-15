@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REBREW_REF="${REBREW_REF:-v4.1.0}"
-REBREW_SHA="${REBREW_SHA:-b2705ba4e34369ac893e16d614127413e8c4f17c}"
+REBREW_SHA="${REBREW_SHA:-0b9d92e15263186cd2d607d708e427b589a2acae}"
 REBREW_URL="${REBREW_URL:-https://github.com/maci0/rebrew.git}"
 dest="${1:-../rebrew}"
 

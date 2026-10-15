@@ -952,10 +952,10 @@ export function App() {
   /** The summary above the map is still a loading line. It grows by a figure
    * and a wrapped sentence when `/stats` answers, and its filter pills gain
    * their counts and wrap onto another row, so a loading line under it would
-   * move twice. While both are loading the summary's own line is the one
-   * loading message on screen. */
+   * move twice. Hold the map and stacked details until the summary settles,
+   * including when cells arrive before stats. Summary errors release the map. */
   const holdMapArea =
-    mapPending && target !== "" && coverage.stats === null && coverage.statsError === null;
+    !blank && target !== "" && coverage.stats === null && coverage.statsError === null;
 
   return (
     <>
@@ -1255,7 +1255,7 @@ export function App() {
             <StatsStrip
               stats={coverage.stats}
               error={coverage.statsError}
-              loading={coverage.loading}
+              loading={coverage.loading || holdMapArea}
               section={active?.name ?? null}
               filters={filters}
               onToggleFilter={toggleFilter}
@@ -1329,7 +1329,7 @@ export function App() {
           <ul
             className={cn(
               "legend m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-micro text-text-muted",
-              (mapPending || blank) && "hidden",
+              (mapPending || holdMapArea || blank) && "hidden",
             )}
           >
             {STATE_LABEL.map((label, slot) => (
@@ -1351,7 +1351,7 @@ export function App() {
             target={target}
             parentVaFor={parentVaFor}
             onJumpToAddress={jumpToAddress}
-            hiddenWhenStacked={mapPending}
+            hiddenWhenStacked={mapPending || holdMapArea}
           />
         )}
       </main>

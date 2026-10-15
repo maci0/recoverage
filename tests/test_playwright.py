@@ -443,6 +443,35 @@ def test_phone_load_holds_its_layout(page: Any):
     assert page.evaluate("window.__cls") < GOOD_CLS
 
 
+@pytest.mark.parametrize("summary_fails", [False, True])
+def test_cells_wait_for_delayed_summary_without_hiding_summary_failures(
+    page: Any, summary_fails: bool
+):
+    """A fast map cannot paint below a short summary that is about to grow."""
+    held: list[Any] = []
+    page.set_viewport_size(PHONE_VIEWPORT)
+    page.route("**/api/targets/*/stats", lambda route: held.append(route))
+    page.goto(f"{BASE_URL}/")
+    # Section tabs prove /data arrived while /stats remains held.
+    expect(page.locator("[role=tab]", has_text=".text")).to_be_visible()
+    expect(page.locator(".stats")).to_contain_text("Loading the coverage summary")
+    expect(page.locator(".grid-canvas")).to_have_count(0)
+    expect(page.locator(".legend")).to_be_hidden()
+    expect(page.locator("#panel")).to_be_hidden()
+    assert len(held) == 1
+    if summary_fails:
+        held[0].fulfill(
+            status=503, content_type="application/json", body='{"error":"summary unavailable"}'
+        )
+        expect(page.locator(".stats")).to_contain_text("Coverage summary unavailable")
+    else:
+        held[0].continue_()
+        expect(page.locator(".stats b")).to_be_visible()
+    expect(page.locator(".grid-canvas")).to_be_visible()
+    expect(page.locator(".legend")).to_be_visible()
+    expect(page.locator("#panel")).to_be_visible()
+
+
 def test_a_map_wider_than_the_screen_says_so(page: Any):
     """A section never draws fewer columns than it declares, so on a phone the
     lattice runs past the card's right edge with no scrollbar until touched.
