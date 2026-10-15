@@ -1143,8 +1143,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   containment base, so a value that survives as an anchor or a parent hop
   replaces the base outright and the `is_relative_to` check that follows passes
   trivially. It lives in `server`, the shared kernel below the route modules,
-  because both the C-source reader (`potato`) and the `/src` and `/original`
-  routes (`ui`) guard a path the same way and a route module is not where a
+  because the C-source reader (`potato`) and the `/files/`, `/src` and
+  `/original` routes (`ui`) share containment rules and a route module is not where a
   sibling route module's rule can live. Stripping a leading `/` is a POSIX
   assumption and answers for the
   host, not for the document: a coverage document built on Windows used to name
@@ -1652,7 +1652,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   WARNING that names the reason and the peer, and the `rejected` counter move
   together; a 403 written inline is a refusal nothing in the log or in
   `/api/health` can see. The same rule governs the file routes:
-  `ui._repo_file_forbidden` is the one tail for a `/src` or `/original` path
+  `ui._repo_file_forbidden` is the shared tail for a `/files/`, `/src` or `/original` source path
   that escapes the tree, because the per-request line is DEBUG and a scanner
   walking `../../` otherwise left no trace at all. A new privileged or
   file-serving refusal names both the reason and the peer, escaped with

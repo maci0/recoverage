@@ -319,13 +319,14 @@ Non-network entry points:
   remaining two and are cosmetic.
 - `rebrew-project.toml` in the working directory, re-read on mtime+size change
   (`src/recoverage/_paths.py`, `src/recoverage/server.py`).
-- The target binary named by `[targets.*].filename`, resolved by
+- The target binary named by `[targets.*].binary`, resolved by
   `_target_filename` / `_find_dll_path` (`src/recoverage/server.py`).
 - Filesystem: configured live inputs or explicitly selected portable
   `coverage-<target>.toml` (read as UTF-8 text through
   `rebrew.coverage_toml`, `rebrew/coverage_toml.py`, reached at
   `src/recoverage/server.py`; nothing is held open between requests), `<project>/src`,
-  `<project>/original`, and the function source files Potato Mode reads directly
+  `<project>/original`, configured target file roots exposed by `/files/`, and the
+  function source files Potato Mode reads directly
   through its own resolve-and-contain check (`src/recoverage/potato.py`).
 - **A backup archive, as both a writer and a reader of the coverage directory.**
   `recoverage backup` and `recoverage restore` (`src/recoverage/cli.py`, the two

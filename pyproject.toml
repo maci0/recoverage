@@ -160,6 +160,7 @@ files = [
     "tests/test_import_graph.py",
     "tests/test_lint_html.py",
     "tests/test_paths.py",
+    "tests/test_target_files.py",
     "tests/test_documents.py",
 ]
 python_version = "3.13"
