@@ -109,11 +109,12 @@ export const SWATCH_CLASS = [
  * legend and filter swatches use (`index.css`); the map draws the same tile on
  * the canvas. The relumea fills separate verdicts by hue at one lightness, and
  * EXACT, RELOC and PROVEN share its green while STUB and padding share its
- * grey, so a colour-blind reader, or anyone at a glance, cannot tell those
+ * grey. Steel blue NEAR is close to STUB in light mode, so a colour-blind reader
+ * or anyone at a glance cannot tell those
  * apart by fill alone (WCAG 1.4.1). Every pair of fills closer than the ΔE
  * floor in tests/test_server.py carries different marks. */
 export type Mark = "" | "mark-dots" | "mark-hatch" | "mark-rule";
-export const MARK_CLASS: ReadonlyArray<Mark> = ["", "", "mark-dots", "", "", "mark-rule", "mark-hatch", ""];
+export const MARK_CLASS: ReadonlyArray<Mark> = ["", "", "mark-dots", "mark-dots", "", "mark-rule", "mark-hatch", ""];
 
 /** A packed state's filter key. A state the grid can paint but no button can
  * isolate would be unreachable by filter. */

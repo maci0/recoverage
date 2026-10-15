@@ -100,9 +100,9 @@ it is mounted from.
 * Cells take the relumea verdict fills (`cell-*` tokens in `web/app/system/tokens.css`), one opaque set per theme:
   * **`EXACT`** (`cell-exact`, green): byte-for-byte match
   * **`RELOC`** (`cell-reloc`, teal, dotted): match after masking relocations
-  * **`NEAR`** (`cell-near`, amber): near-miss with structural differences (stored state `near_match`; a document may spell it `near_matching`, which renders identically)
+  * **`NEAR`** (`cell-near`, steel blue, dotted): near-miss with structural differences (stored state `near_match`; a document may spell it `near_matching`, which renders identically)
   * **`PROVEN`** (`cell-proven`, pale green, hatched): post-verify semantic-equivalence promotion (`proven`)
-  * **Size mismatch** (`cell-near`, amber): compiled size differs from the original (`size_mismatch`)
+  * **Size mismatch** (`cell-near`, steel blue, dotted): compiled size differs from the original (`size_mismatch`)
   * **`STUB`** (`cell-stub`, grey): far off or placeholder. Red is kept for failure.
   * **Padding** (`border-strong`, hairline grey, ruled in `text-muted`): alignment padding. The brand has no padding verdict, so it takes the quietest fill that is not the unlit cell.
   * **Problem** (`cell-fail`, red): tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `displaced` / `unchecked` verdicts)

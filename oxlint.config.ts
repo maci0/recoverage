@@ -203,6 +203,8 @@ export default defineConfig({
       files: ["web/app/system/**"],
       rules: {
         "typescript/consistent-type-definitions": "off",
+        // The shared provider marks load their stylesheet for its side effects.
+        "import/no-unassigned-import": ["error", { allow: ["**/*.css"] }],
       },
     },
     {

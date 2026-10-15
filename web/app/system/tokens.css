@@ -73,7 +73,7 @@
 
   /* Tints behind a stopped run, a gated row and a failure. */
   --color-warn-soft: light-dark(#fdf3ea, #2c271e);
-  --color-near-soft: light-dark(#fdf8f1, #24201c);
+  --color-near-soft: light-dark(#eef1fa, #212635);
   --color-fail-soft: light-dark(#f8eded, #322425);
   --color-live-soft: light-dark(#ebf2f6, #1f2a33);
   --color-scrim: light-dark(rgb(10 10 11 / 72%), rgb(0 0 0 / 72%));
@@ -87,7 +87,8 @@
   --color-st-reloc: light-dark(#0f6f68, #4fc2b0);
   --color-st-proven: light-dark(#2a7154, #86d4ad);
   --color-st-thunk: light-dark(#5b3fa8, #b8a7f0);
-  --color-st-near: light-dark(#8a5a00, #e3b65c);
+  --color-st-near: light-dark(#445b99, #a8b8ed);
+  --color-st-warn: light-dark(#8a5a00, #e3b65c);
   --color-st-stub: light-dark(#5f6673, #a3a3ab);
   --color-st-live: light-dark(#0b5c8a, #6cb4e4);
   --color-st-fail: light-dark(#a32318, #f08a80);
@@ -103,7 +104,7 @@
   --color-cell-reloc: light-dark(#4b9786, #31806f);
   --color-cell-proven: light-dark(#64947b, #3f7a63);
   --color-cell-thunk: light-dark(#8f83b3, #7063a0);
-  --color-cell-near: light-dark(#a08840, #8a6c2c);
+  --color-cell-near: light-dark(#6f7fa7, #6c7ea8);
   --color-cell-stub: light-dark(#868a92, #6b6b74);
   --color-cell-live: light-dark(#628fab, #4f7088);
   --color-cell-fail: light-dark(#ba7972, #a05c54);
@@ -113,17 +114,17 @@
      strength in both. */
   --color-field-mask: rgb(0 0 0 / 50%);
 
-  /* Registry fills: one cell per tool. Gated shares the NEAR amber because
+  /* Registry fills: one cell per tool. Gated shares the NEAR steel blue because
      both mean "stops here until something changes". */
   --color-tool-read: light-dark(#cdd2da, #39393b);
-  --color-tool-gated: light-dark(#e3b65c, #8a6c2c);
+  --color-tool-gated: light-dark(#a8b8ed, #6c7ea8);
 
   /* Code listing palette, shared with the workspace so a sample on the landing
      looks like the product. Each clears AA on the ground and on accent-soft,
      the tint of a selected line. */
   --color-syn-keyword: light-dark(#5b3fa8, #b8a7f0);
   --color-syn-type: light-dark(#0b5c8a, #6cb4e4);
-  --color-syn-string: light-dark(#8a5a00, #e3b65c);
+  --color-syn-string: light-dark(#445b99, #a8b8ed);
   --color-syn-number: light-dark(#0f7a42, #4cc38a);
   --color-syn-register: light-dark(#0b5c8a, #6cb4e4);
   --color-syn-call: light-dark(#0f7a42, #3fbf7a);

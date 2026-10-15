@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.1.1] - 2026-10-15
+
+### Changed
+
+- NEAR and size mismatch paint in steel blue instead of amber, in the map,
+  Potato Mode, and the state ink. NEAR carries the dotted mark so it stays
+  distinct from STUB. Syntax strings use the same blue.
+
 ## [8.1.0] - 2026-10-15
 
 ### Changed

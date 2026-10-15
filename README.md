@@ -23,7 +23,7 @@ block that covers it.
 
 | What | How |
 |---|---|
-| Defrag-style grid | One cell per chunk, colored by verdict: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` (amber), `STUB` (grey), problem (red), undocumented (unlit) |
+| Defrag-style grid | One cell per chunk, colored by verdict: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` (steel blue), `STUB` (grey), problem (red), undocumented (unlit) |
 | Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |

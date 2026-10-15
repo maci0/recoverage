@@ -106,14 +106,14 @@ _COLORS_PROBLEM = "#a05c54"  # cell-fail
 COLORS = {
     "exact": "#2f7a56",  # cell-exact
     "reloc": "#31806f",  # cell-reloc
-    "near_match": "#8a6c2c",  # cell-near
+    "near_match": "#6c7ea8",  # cell-near
     # Canonical spelling of near_match; the map palette is its own (rebrew's
     # document carries the terminal report's STATUS_HEX, a darker set).
-    "near_matching": "#8a6c2c",
+    "near_matching": "#6c7ea8",
     # Post-verify semantic promotion, a state of its own rather than a match.
     "proven": "#3f7a63",  # cell-proven
-    # SIZE_MISMATCH: not a match, so it shares the near-match amber.
-    "size_mismatch": "#8a6c2c",
+    # SIZE_MISMATCH: not a match, so it shares the near-match steel blue.
+    "size_mismatch": "#6c7ea8",
     "stub": "#6b6b74",  # cell-stub
     "padding": "#3a3a42",  # border-strong, as the SPA paints padding
     "data": "#4f7088",  # cell-live
@@ -146,9 +146,9 @@ STATE_INK = {
     "exact": "#4cc38a",  # st-exact
     "verified": "#4cc38a",
     "reloc": "#4fc2b0",  # st-reloc
-    "near_match": "#e3b65c",  # st-near
-    "near_matching": "#e3b65c",
-    "size_mismatch": "#e3b65c",
+    "near_match": "#a8b8ed",  # st-near
+    "near_matching": "#a8b8ed",
+    "size_mismatch": "#a8b8ed",
     "proven": "#86d4ad",  # st-proven
     "stub": "#a3a3ab",  # st-stub
     "padding": "#a3a3ab",  # text-muted
@@ -178,7 +178,7 @@ ACCENT_BYTES = MUTED_COLOR
 HLJS_COMMENT = "#8e8e97"  # syn-comment
 HLJS_KEYWORD = "#b8a7f0"  # syn-keyword
 HLJS_SYMBOL = "#6cb4e4"  # syn-register
-HLJS_STRING = "#e3b65c"  # syn-string
+HLJS_STRING = "#a8b8ed"  # syn-string
 HLJS_TITLE = "#3fbf7a"  # syn-call
 HLJS_ATTR = "#6cb4e4"  # syn-type
 HLJS_SECTION = "#6cb4e4"  # syn-type

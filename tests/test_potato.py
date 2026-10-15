@@ -2627,10 +2627,10 @@ class TestV4StateColors:
         assert self._cell_bgcolor("proven") == "#3f7a63"
 
     def test_legacy_near_matching_renders_the_near_fill(self) -> None:
-        assert self._cell_bgcolor("near_matching") == "#8a6c2c"
+        assert self._cell_bgcolor("near_matching") == "#6c7ea8"
 
     def test_size_mismatch_renders_the_near_fill(self) -> None:
-        assert self._cell_bgcolor("size_mismatch") == "#8a6c2c"
+        assert self._cell_bgcolor("size_mismatch") == "#6c7ea8"
 
     def test_unknown_state_still_falls_back_to_the_unlit_fill(self) -> None:
         assert self._cell_bgcolor("some_future_state") == "#212124"
