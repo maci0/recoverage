@@ -30,6 +30,18 @@ from recoverage.devserver import _server_class_for
 runner = CliRunner()
 
 
+def _error_body(result: Any) -> dict[str, Any]:
+    """The clispec error object. JSON mode writes it as the last stderr line."""
+    text = result.stderr or result.output
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    assert lines, result.output
+    body = json.loads(lines[-1])
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert "message" in error and "hint" in error and "kind" in error
+    return error
+
+
 def _listen_once(**kwargs: Any) -> None:
     """Stand in for ``bottle_app.run``: bind the server class ``serve`` passed
     on a free port, which runs the on-listening hook the banner waits for,
@@ -588,14 +600,16 @@ class TestExportCommand:
         result = runner.invoke(app, ["export", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        # `len(data) > 0` is satisfied by an export that dropped every target
+        assert isinstance(data["items"], list)
+        # `len(items) > 0` is satisfied by an export that dropped every target
         # but one. The synthetic DB has exactly one, with two sections.
-        assert len(data) == 1
-        assert "target" in data[0]
-        assert "sections" in data[0]
-        assert set(data[0]["sections"]) == {".text", ".data"}
-        assert data[0]["sections"][".text"]["total_cells"] == 8
+        assert data["total"] == 1
+        assert len(data["items"]) == 1
+        row = data["items"][0]
+        assert "target" in row
+        assert "sections" in row
+        assert set(row["sections"]) == {".text", ".data"}
+        assert row["sections"][".text"]["total_cells"] == 8
 
     def test_export_json_flag_matches_the_format_it_shorthands(self) -> None:
         """`--json` is the spelling stats/check/config take; it must be the
@@ -887,9 +901,10 @@ class TestCheckCommand:
         JSON error (not the human-readable stderr path) before exiting 2."""
         result = runner.invoke(app, ["check", "--min-coverage", "150", "--json"])
         assert result.exit_code == 2
-        payload = json.loads(result.output)
-        assert payload["error"]
-        assert payload["exit_code"] == 2
+        error = _error_body(result)
+        assert error["message"]
+        assert error["kind"] == "usage"
+        assert result.stdout == ""
 
     def test_check_min_coverage_out_of_range(self) -> None:
         """--min-coverage outside [0, 100] must be rejected, not silently
@@ -920,7 +935,8 @@ class TestCheckCommand:
         # The per-target SKIP note shares the stream with the JSON error object,
         # so the payload is the last line, not the whole output.
         payload = json.loads(lines[-1])
-        assert payload["error"] == "no sections matched; nothing was checked"
+        assert payload["error"]["message"] == "no sections matched; nothing was checked"
+        assert payload["error"]["kind"] == "failure"
         assert "results" not in payload
 
     def test_check_skips_untracked_sections(
@@ -1250,11 +1266,12 @@ class TestStatsJson:
         result = runner.invoke(app, ["stats", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert isinstance(data, list)
-        assert data
-        assert "target" in data[0]
-        assert "sections" in data[0]
-        assert ".text" in data[0]["sections"]
+        assert isinstance(data["items"], list)
+        assert data["items"]
+        assert data["total"] == len(data["items"])
+        assert "target" in data["items"][0]
+        assert "sections" in data["items"][0]
+        assert ".text" in data["items"][0]["sections"]
 
 
 class TestStatsNullSectionSize:
@@ -1332,9 +1349,10 @@ class TestBrokenProjectFile:
         (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
         result = runner.invoke(app, ["stats", "--json"])
         assert result.exit_code == 2, result.output
-        payload = json.loads(result.stdout)
-        assert payload["exit_code"] == 2
-        assert "not valid TOML" in payload["error"]
+        error = _error_body(result)
+        assert error["kind"] == "usage"
+        assert "not valid TOML" in error["message"]
+        assert result.stdout == ""
 
 
 # ── check: exit-code and verdict contracts ────────────────────────
@@ -1388,9 +1406,10 @@ class TestUnreadableCoverageNamesTheDocument:
         self._broken_dir(tmp_path, monkeypatch)
         result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
         assert result.exit_code == 2
-        payload = json.loads(result.stdout)
-        assert payload["error"].startswith("cannot read coverage: ")
-        assert "no readable coverage targets" in payload["error"]
+        error = _error_body(result)
+        assert error["message"].startswith("cannot read coverage: ")
+        assert "no readable coverage targets" in error["message"]
+        assert result.stdout == ""
 
 
 def test_backup_to_a_path_ending_in_a_separator_writes_into_that_directory(
@@ -1423,7 +1442,9 @@ class TestJsonErrorEnvelope:
     `export --format json` had no envelope at all.  A script piping the JSON
     channel into a parser therefore had to special-case which failure it was.
     Every failure in a --json mode now answers
-    {"error": ..., "exit_code": N} on stdout, with the exit status unchanged.
+    {"error": {"kind", "message", "hint"}} as the last stderr line, with the
+    exit status unchanged. Stdout stays empty so a parser never reads the
+    envelope as data.
     """
 
     MISSING = "coverage not found"
@@ -1433,27 +1454,30 @@ class TestJsonErrorEnvelope:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
         assert result.exit_code == 2
-        payload = json.loads(result.stdout)
-        assert self.MISSING in payload["error"]
-        assert payload["exit_code"] == 2
+        error = _error_body(result)
+        assert self.MISSING in error["message"]
+        assert error["kind"] == "usage"
+        assert result.stdout == ""
 
     def test_stats_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["stats", "--json"])
         assert result.exit_code == 1
-        payload = json.loads(result.stdout)
-        assert self.MISSING in payload["error"]
-        assert payload["exit_code"] == 1
+        error = _error_body(result)
+        assert self.MISSING in error["message"]
+        assert error["kind"] == "failure"
+        assert result.stdout == ""
 
     def test_export_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["export", "--format", "json"])
         assert result.exit_code == 1
-        payload = json.loads(result.stdout)
-        assert self.MISSING in payload["error"]
-        assert payload["exit_code"] == 1
+        error = _error_body(result)
+        assert self.MISSING in error["message"]
+        assert error["kind"] == "failure"
+        assert result.stdout == ""
 
     def test_csv_export_keeps_the_human_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1476,8 +1500,10 @@ class TestJsonErrorEnvelope:
         ):
             result = runner.invoke(app, argv)
             assert result.exit_code == 1, argv
-            payload = json.loads(result.stdout)
-            assert payload == {"error": "target not found: 'no-such-target'", "exit_code": 1}
+            error = _error_body(result)
+            assert error["message"] == "target not found: 'no-such-target'"
+            assert error["kind"] == "failure"
+            assert result.stdout == ""
 
 
 class TestHelpMarkup:
@@ -1547,8 +1573,9 @@ class TestCheckExplicitUntrackedSectionVerdict:
 
         result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
         assert result.exit_code == 1
-        payload = json.loads(result.output)
-        assert payload["error"] == "no tracked sections; nothing was checked"
+        error = _error_body(result)
+        assert error["message"] == "no tracked sections; nothing was checked"
+        assert error["kind"] == "failure"
 
 
 class TestEphemeralPort:

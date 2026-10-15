@@ -5,6 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-10-15
+
+### Changed
+
+- `recoverage schema` prints a clispec 0.3 document and does not read a
+  project. Before a subcommand, `-o`/`--output` selects `auto`, `text`, or
+  `json` (`auto` stays text). `--json` still requests JSON on the commands
+  that already had it, and on the root. A JSON failure is one stderr line,
+  `{"error":{"kind","message","hint"}}`. `stats` and `export` JSON use an
+  `{"items","total"}` envelope. A failing `check` still exits 1 with the
+  verdict document on stdout. Prefer `RECOVERAGE_TOKEN` over `--token`.
+
 ## [8.0.0] - 2026-10-15
 
 ### Breaking

@@ -116,7 +116,9 @@ class TestLiveViewContracts:
         ):
             result = runner.invoke(app, [*args, "--json"])
             assert result.exit_code == 2, result.output
-            assert "invalid-arch" in json.loads(result.stdout)["error"], (args, result.output)
+            error = json.loads(result.stderr.strip().splitlines()[-1])["error"]
+            assert isinstance(error, dict)
+            assert "invalid-arch" in error["message"], (args, result.output)
         assert runner.invoke(app, ["stats", "--target", "good", "--json"]).exit_code == 0
         status, _, body = wsgi_request("GET", "/api/targets/bad/stats")
         assert status.startswith("503"), body

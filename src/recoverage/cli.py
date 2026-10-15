@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import enum
 import io
 import json
@@ -48,6 +49,7 @@ _HELP_EXAMPLES: tuple[tuple[str, str], ...] = (
     ("recoverage regen", "refresh the live view"),
     ("recoverage open", "open the running dashboard"),
     ("recoverage config", "what serve would start with"),
+    ("recoverage schema", "clispec 0.3 document, no project and no network"),
 )
 _HELP_EXAMPLE_WIDTH = max(len(command) for command, _ in _HELP_EXAMPLES)
 
@@ -127,6 +129,80 @@ def _no_color_option() -> Any:
         help="Disable colored output (overrides NO_COLOR and TERM=dumb).",
         callback=_no_color_callback,
     )
+
+
+_OUTPUT_CHOICES = frozenset({"auto", "text", "json"})
+_output_choice: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "recoverage_output", default="auto"
+)
+
+
+def _accept_output_format(value: str) -> str:
+    """Reject anything but auto, text, or json before a command runs."""
+    if value not in _OUTPUT_CHOICES:
+        raise typer.BadParameter("must be one of auto, text, json")
+    _output_choice.set(value)
+    return value
+
+
+def _accept_json_flag(value: bool) -> bool:
+    """Root ``--json`` requests JSON unless ``-o text`` already won."""
+    if value and _output_choice.get() != "text":
+        _output_choice.set("json")
+    return value
+
+
+def _json_on(flag: bool) -> bool:
+    """Whether this run writes JSON. ``-o text`` wins over ``--json``.
+
+    ``auto`` stays text, including when stdout is not a terminal: the pipe
+    contract is text unless the caller asks.
+    """
+    choice = _output_choice.get()
+    if choice == "json":
+        return True
+    if choice == "text":
+        return False
+    return flag
+
+
+def _write_error(kind: str, message: str, hint: str) -> None:
+    """Write one clispec error object as the next stderr line."""
+    payload = {"error": {"kind": kind, "message": message, "hint": hint}}
+    sys.stderr.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stderr.flush()
+
+
+def _dumps(payload: Any) -> str:
+    """One JSON document. A list becomes the items envelope. Compact off a TTY."""
+    if isinstance(payload, list):
+        payload = {"items": payload, "total": len(payload)}
+    if sys.stdout.isatty():
+        return json.dumps(payload, indent=2)
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _install_click_error_hook() -> None:
+    """JSON mode turns Click errors into the stderr envelope. Text mode stays human."""
+    from click.exceptions import ClickException
+    from click.exceptions import UsageError as ClickUsageError
+
+    original = ClickException.show
+    if getattr(original, "_recoverage_hook", False):
+        return
+
+    def show(self: ClickException, file: Any = None) -> None:
+        if _json_on(False):
+            kind = "usage" if isinstance(self, ClickUsageError) else "failure"
+            _write_error(kind, self.format_message(), "")
+            return
+        original(self, file=file)
+
+    show._recoverage_hook = True  # type: ignore[attr-defined]
+    ClickException.show = show  # type: ignore[method-assign]
+
+
+_install_click_error_hook()
 
 
 #: Log line layout, and the stamp it carries.  The date and numeric offset are
@@ -232,6 +308,21 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def _app_callback(
     no_color: bool = _no_color_option(),
+    output_format: str = typer.Option(
+        "auto",
+        "--output",
+        "-o",
+        help="Output mode before the subcommand: auto, text, or json. auto stays text.",
+        callback=_accept_output_format,
+        is_eager=True,
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output results as JSON. Same as -o json; -o text wins.",
+        callback=_accept_json_flag,
+        is_eager=True,
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -246,6 +337,14 @@ def _app_callback(
     # later) turns the opt-out back on, and the next run starts clean.
     global _color_disabled
     _color_disabled = no_color
+    # Eager callbacks stored a choice already. Apply again so -o text beats
+    # --json whichever order click ran those callbacks in.
+    if output_format == "text":
+        _output_choice.set("text")
+    elif output_format == "json" or json_output:
+        _output_choice.set("json")
+    else:
+        _output_choice.set("auto")
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -509,8 +608,7 @@ def _resolve_serve_config(
             client_timeout=config.client_timeout(),
         )
     except config.ConfigError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
+        _fail(f"Error: {exc}", str(exc), 2, False)
     return resolved
 
 
@@ -520,19 +618,20 @@ def _fail(
     exit_code: int,
     json_output: bool,
     fg: str = typer.colors.RED,
+    *,
+    kind: str | None = None,
+    hint: str = "",
 ) -> NoReturn:
     """Report a failure in the caller's output mode, then exit.
 
-    ONE tail for every CLI failure, so the machine channel cannot drift from
-    the human one: with --json the report goes to stdout as
-    ``{"error": ..., "exit_code": ...}``, so a script parses the same shape
-    whether the gate failed, the database is missing or a flag is out of
-    range; without it the human line goes to stderr.  *exit_code* separates
-    a gate failure (1) from a usage or infrastructure error (2), so a script
-    can tell "the build is below threshold" from "I passed a bad flag".
+    JSON mode writes ``{"error": {"kind", "message", "hint"}}`` as one stderr
+    line. Text mode writes *human* to stderr and no JSON. Exit 1 is a failure
+    (a missing target, a refused bind, a check below its threshold). Exit 2
+    is usage. A check that compared sections and failed still prints the
+    verdict document on stdout and does not add this envelope.
     """
-    if json_output:
-        typer.echo(json.dumps({"error": error, "exit_code": exit_code}))
+    if _json_on(json_output):
+        _write_error(kind or ("usage" if exit_code == 2 else "failure"), error, hint)
     else:
         _secho(human, fg=fg, err=True)
     raise typer.Exit(exit_code)
@@ -551,8 +650,7 @@ def _check_env_or_exit() -> None:
         config.check_unknown_vars()
         config.check_snapshot_override()
     except config.ConfigError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
+        _fail(f"Error: {exc}", str(exc), 2, False)
 
 
 def coverage_source_or_exit(*, json_output: bool = False) -> Path:
@@ -747,11 +845,9 @@ def _run_regen(root: Path) -> None:
         # (exit 2) and the same bare message coverage_source_or_exit gives the read
         # commands for this exact file, instead of the class name and the
         # regen-failed 1 the generic arm below reported.
-        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
+        _fail(f"Error: {e}", str(e), 2, False)
     except RegenError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(exc.exit_code) from None
+        _fail(f"Error: {exc}", str(exc), exc.exit_code, False)
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.
         _secho(
@@ -1786,10 +1882,12 @@ def stats(
     """Print coverage stats as a table (or JSON with --json).
 
     Exits 1 when the coverage directory holds no document, or when --target
-    names a target no build has written; the errors go to stderr, or to
-    stdout as a JSON object under --json.
+    names a target no build has written. Text mode writes that error to
+    stderr. JSON mode writes one stderr line, ``{"error":{"kind","message","hint"}}``.
+    A JSON success is ``{"items","total"}``.
     """
     _use_utf8_stdout()
+    json_output = _json_on(json_output)
 
     from rich import box
     from rich.console import Console
@@ -1800,11 +1898,7 @@ def stats(
 
     with _open_targets(target, json_output=json_output) as (snapshots, targets):
         if json_output:
-            typer.echo(
-                json.dumps(
-                    [_get_stats(snapshots, tid, json_output=True) for tid in targets], indent=2
-                )
-            )
+            typer.echo(_dumps([_get_stats(snapshots, tid, json_output=True) for tid in targets]))
             return
 
         # Rich detects NO_COLOR and TERM=dumb on its own, but not the
@@ -1922,7 +2016,7 @@ def export(
 
     if output_format == ExportFormat.json:
         try:
-            typer.echo(json.dumps(all_data, indent=2))
+            typer.echo(_dumps(all_data))
         except BrokenPipeError:
             # `recoverage export | head` is a documented use, and main() owns
             # that contract (devnull, then exit 1).
@@ -2123,6 +2217,7 @@ def check(
     --section named it, which FAILs.
     """
     _use_utf8_stdout()
+    json_output = _json_on(json_output)
     threshold = _checked_min_coverage(min_coverage, json_output)
     if not 0.0 <= threshold <= 100.0:
         # A flag value outside its own documented range is a usage error, the
@@ -2200,13 +2295,12 @@ def check(
         )
     if json_output:
         typer.echo(
-            json.dumps(
+            _dumps(
                 {
                     "passed": not failed,
                     "min_coverage": threshold,
                     "results": verdicts,
-                },
-                indent=2,
+                }
             )
         )
     if failed:
@@ -2271,15 +2365,16 @@ def backup(
 
     _use_utf8_stdout()
     _use_utf8_stderr()
+    as_json = _json_on(as_json)
     _check_env_or_exit()
     if config.snapshot_override() is None:
-        _secho(
+        _fail(
             "Error: select portable exports with RECOVERAGE_SNAPSHOTS. "
             "Project metadata is managed by Rebrew.",
-            fg=typer.colors.RED,
-            err=True,
+            "select portable exports with RECOVERAGE_SNAPSHOTS",
+            2,
+            as_json,
         )
-        raise typer.Exit(2)
     destination = Path(to).expanduser() if to else None
     if to and destination is not None and to.endswith(_PATH_SEPARATORS):
         # "--to backups/" names a directory, but Path drops the separator, and
@@ -2288,16 +2383,19 @@ def backup(
         try:
             destination.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            _secho(f"Error: cannot create {destination}: {exc}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from exc
+            _fail(
+                f"Error: cannot create {destination}: {exc}",
+                f"cannot create {destination}: {exc}",
+                1,
+                as_json,
+            )
     try:
         info = write_backup(coverage_source(), destination)
     except BackupError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
         typer.echo(
-            json.dumps(
+            _dumps(
                 {
                     "path": str(info.path),
                     "created": info.created,
@@ -2306,8 +2404,7 @@ def backup(
                         {"name": name, "size": size, "sha256": digest}
                         for name, size, digest in info.members
                     ],
-                },
-                indent=2,
+                }
             )
         )
         return
@@ -2499,6 +2596,7 @@ def config_cmd(
     """
     _use_utf8_stdout()
     _use_utf8_stderr()
+    as_json = _json_on(as_json)
     resolved = _resolve_serve_config()
     settings = config.active_config(
         port=resolved.port,
@@ -2513,7 +2611,7 @@ def config_cmd(
         client_timeout=resolved.client_timeout,
     )
     if as_json:
-        typer.echo(json.dumps(settings, indent=2))
+        typer.echo(_dumps(settings))
     else:
         for key, value in settings.items():
             typer.echo(f"{key}={value}")
@@ -2527,6 +2625,33 @@ def config_cmd(
     if refusal is not None:
         _secho(refusal, fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
+
+
+@app.command("schema")
+def schema_cmd(
+    command: list[str] | None = typer.Argument(
+        None, help="Command path to include. Other commands are omitted."
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Print the clispec 0.3 JSON document for this CLI.
+
+    The document is JSON even when ``-o text`` is set. It reads no project,
+    no token, and no network.
+    """
+    from recoverage.clispec import build_schema
+
+    path = " ".join(command or [])
+    document = build_schema(path or None)
+    if path and not document["commands"]:
+        _fail(
+            f"Error: no command matches {path!r}.",
+            f"no command matches {path!r}",
+            2,
+            True,
+            kind="usage",
+        )
+    typer.echo(_dumps(document))
 
 
 # Group flags that answer the invocation themselves, so ``recoverage --help``
@@ -2544,17 +2669,28 @@ def _argv_with_default_command(argv: list[str]) -> list[str]:
     ``rebrew`` itself runs its action when no subcommand is named.  The
     subcommand stays the only spelling with flags (``recoverage serve
     --port 9000``), because the flags belong to ``serve`` and a group that
-    declared them too would carry two option tables that can disagree.  Every
-    group flag is a boolean, so a command line carrying only those has a
-    subcommand appended after them (click parses the two in either order) and
-    ``recoverage --no-color`` serves the dashboard.  A flag that ends the
-    invocation on its own, and any non-flag token at all, is left exactly as
-    it came, so ``recoverage --help`` still prints the help and not a server.
+    declared them too would carry two option tables that can disagree.  A
+    command line carrying only group flags has a subcommand appended after
+    them (click parses the two in either order) and ``recoverage --no-color``
+    serves the dashboard.  ``-o``/``--output`` take a value, so that value is
+    not a command.  A flag that ends the invocation on its own, and any real
+    command token, is left exactly as it came, so ``recoverage --help`` still
+    prints the help and not a server.
     """
     args = argv[1:]
     if any(arg in _GROUP_TERMINAL_FLAGS for arg in args):
         return argv
-    if any(not arg.startswith("-") for arg in args):
+    skip_value = False
+    for arg in args:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in {"-o", "--output"}:
+            skip_value = True
+            continue
+        if not arg.startswith("-"):
+            return argv
+    if skip_value:
         return argv
     return [*argv, "serve"]
 

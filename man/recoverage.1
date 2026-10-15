@@ -1,4 +1,4 @@
-.TH RECOVERAGE 1 "2026-10-15" "recoverage 8.0.0" "User Commands"
+.TH RECOVERAGE 1 "2026-10-15" "recoverage 8.1.0" "User Commands"
 .SH NAME
 recoverage \- coverage dashboard for binary-matching decompilation projects
 .SH SYNOPSIS
@@ -127,7 +127,29 @@ cannot recover what a rollback drops. A corrupt archive, a member that is not
 a coverage document and an unreadable file are refused either way. Run
 .B regen
 afterwards, so the served snapshots follow the restored bytes.
+.TP
+.B schema
+Print the clispec 0.3 JSON document. Reads no project, no token, and no network.
+.B schema
+.I command
+limits the
+.B commands
+array to that command.
 .SH OPTIONS
+.TP
+.B \-o " " \fIauto|text|json\fR ", " \-\-output " " \fIauto|text|json\fR
+Select the output mode before the subcommand.
+.B auto
+stays text, including when stdout is not a terminal.
+.B \-\-json
+still requests JSON.
+.B \-o text
+wins over
+.BR \-\-json .
+.TP
+.B \-\-json
+Output results as JSON. Same as
+.BR "\-o json" .
 .TP
 .B \-\-no\-color
 Disable colored output (overrides
@@ -341,7 +363,9 @@ Success. For
 every compared section met the threshold.
 .TP
 .B 1
-Failure. For
+Failure. JSON mode writes one stderr line,
+.BR {"error":{"kind","message","hint"}} .
+For
 .BR check ,
 a section fell below it; for
 .BR stats " and " export ,
@@ -398,6 +422,7 @@ recoverage backup \-\-to /srv/backups/nightly.tar
 recoverage restore /srv/backups/nightly.tar
 recoverage open                      # open a running dashboard
 recoverage config \-\-json            # what serve would start with
+recoverage schema                    # clispec 0.3 document, no project
 .RE
 .fi
 .SH "SEE ALSO"

@@ -54,6 +54,7 @@ _LEVELS: dict[str, int] = {
     "ui": 4,
     "webapp": 5,
     "cli": 6,
+    "clispec": 0,
     "__main__": 7,
 }
 

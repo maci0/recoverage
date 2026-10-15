@@ -31,6 +31,7 @@ Module map (dependencies point one way, left to right):
   every route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports
   server+regen for config and stats helpers)
+- ``clispec``     — clispec 0.3 document for the CLI (no in-package imports)
 - ``__main__``    — ``python -m recoverage``; forwards argv to ``cli.main``
 
 Route modules register on import; there are no cycles.
@@ -39,4 +40,4 @@ and that every module here is named in this map, so a new module has to
 declare where it sits.
 """
 
-__version__ = "8.0.0"
+__version__ = "8.1.0"
