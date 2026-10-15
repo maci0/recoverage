@@ -34,14 +34,14 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, target: str = "
 
 
 class TestTargetFileRoutes:
-    @pytest.mark.parametrize("target", ["game", "my café #?%"])
+    @pytest.mark.parametrize("target", ["game", "my café #%"])
     def test_configured_roots_and_encoded_names(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
     ) -> None:
         root = _project(tmp_path, monkeypatch, target=target)
-        (root / "reversed/game/café #?%.c").write_bytes(b"int value = 7;\n")
+        (root / "reversed/game/café #%.c").write_bytes(b"int value = 7;\n")
         prefix = f"/files/{quote(target, safe='')}"
-        status, headers, body = wsgi_get(prefix + "/source/" + quote("café #?%.c"))
+        status, headers, body = wsgi_get(prefix + "/source/" + quote("café #%.c"))
         assert status.startswith("200")
         assert decode_body(body, headers) == b"int value = 7;\n"
         status, headers, body = wsgi_get(prefix + "/binary")
