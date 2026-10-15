@@ -5,7 +5,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [7.0.0] - 2026-10-15
+## [8.0.0] - 2026-10-15
 
 ### Breaking
 - Removed `recoverage.config::db_override`; use `snapshot_override` only for explicit
@@ -25,7 +25,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stored metadata only; its C-source argument and Potato Mode's private
   `_extract_annotations` reader are removed.
 
-- Rebrew 4.1.0 is the minimum version (was 2.23.0): `rebrew>=4.1.0`. The
+- Rebrew 4.1.0 is the minimum version (was 2.26.0): `rebrew>=4.1.0`. The
   server uses address-only source bindings and canonical format-2 metadata.
   Function and data state lives in the dedicated stores. See
   [UPGRADING.md](docs/UPGRADING.md).
@@ -35,6 +35,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `original/` trees through target-scoped, project-contained file routes. Encode
   target and filename components once; serve project files under inert CSP.
 
+
+## [7.0.1] - 2026-10-14
+
+### Fixed
+
+- The CLI help-layout test checks visible columns with forced terminal color
+  enabled too. Runtime output and the CLI contract are unchanged.
+- The unreadable-document fixture uses an HTML-sensitive filename valid on
+  Windows too. Separate refusal-page assertions retain tag and error escaping.
+
+## [7.0.0] - 2026-10-14
+
+### Breaking
+
+- rebrew 2.26.0 is the minimum version (was 2.23.0): `rebrew>=2.26.0`. The
+  server imports the annotation parser and the function store from
+  `rebrew.metadata`, where 2.26.0 moved them. See
+  [UPGRADING.md](docs/UPGRADING.md).
 
 ## [6.1.0] - 2026-10-08
 

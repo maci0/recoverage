@@ -32,7 +32,7 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
-## [7.0.0]
+## [8.0.0]
 
 ### Live project coverage and optional offline exports
 
@@ -47,7 +47,7 @@ portable exports only. Earlier release notes below describe historical layouts.
 
 ### Rebrew 4.1.0 and canonical metadata bindings are required
 
-Before: recoverage ran against rebrew 2.23.0 or later.
+Before: recoverage ran against Rebrew 2.26.0 or later.
 
 After: it needs Rebrew 4.1.0 or later, with the tested release pinned by
 `tools/ci_clone_rebrew.sh`.
@@ -68,6 +68,20 @@ Target source and binary requests use `/files/<target>/source/<path>` and
 use a supplied `paths.originalDll` for their contained local binary, even beside
 a project config naming different bytes. Config is used only when that snapshot
 field is absent. The browser no longer treats document paths as URLs.
+
+## [7.0.0]
+
+### rebrew 2.26.0 is the floor
+
+Before: recoverage ran against rebrew 2.23.0 or later.
+
+After: it needs rebrew 2.26.0. That release moved the annotation parser to
+`rebrew.metadata.annotation` and the function store to
+`rebrew.metadata.functions` with no aliases, and the server imports both from
+there, so an older rebrew fails at import.
+
+Do: update the sibling rebrew checkout (`make clone-rebrew`), then
+`make setup`. Coverage documents, the HTTP API and the CLI are unchanged.
 
 ## [6.0.0]
 
