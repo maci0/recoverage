@@ -3,18 +3,21 @@
 ## Overview
 
 **recoverage** is a coverage dashboard for binary-matching decompilation projects.
-It serves a Preact dashboard over rebrew's clear-text coverage TOML,
-visualising per-byte match status across PE sections (`.text`, `.data`,
-`.bss`). Two modes: a modern SPA (default) and a retro "Potato Mode" that
-renders entirely in server-side HTML tables.
+Normal mode reads canonical Rebrew project inputs through
+`rebrew.coverage_project.load_project_coverage`; no generated coverage directory
+or `db_dir` setting is needed. Source bindings, binary sections, inventory,
+metadata, link evidence and durable status history feed one immutable model.
 
-This package is a **consumer** of data produced by `rebrew`, which it depends
-on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` + coverage
-directory resolution (stdlib only), `rebrew.coverage_toml` reads the
-`coverage-<target>.toml` documents, and the regen commands call rebrew's
-`write_coverage_toml` in-process (which runs the catalog analysis itself); see
-`src/recoverage/regen.py`. Serving a dashboard needs no project workspace or
-compiler toolchain, only a readable coverage document.
+`RECOVERAGE_SNAPSHOTS` explicitly selects portable/offline exports written by
+`rebrew coverage export --output <directory>`. Only portable mode uses the document
+parse cache and backup/restore. `regen` and `serve --regen` refresh live views
+without writing files; portable exports are read-only. For live services, set the
+working directory inside the project. Metadata writes always use Rebrew owners;
+never hand-edit managed stores or restore snapshots over canonical metadata.
+
+Before retiring old generated snapshots, preview and run
+`rebrew coverage import-history --snapshots <directory> --dry-run`, then repeat
+without `--dry-run`. Preserve configured inventory files even under `db/`.
 
 ## Project Structure
 
@@ -74,7 +77,7 @@ recoverage/
 │   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
-│   ├── test_lifecycle.py     # Lifecycle: regen ordering, the cross-process regen lock, browser-opener reaping
+│   ├── test_lifecycle.py     # Lifecycle: live refresh, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
 │   ├── test_backup.py        # Backup/restore: verification, all-or-nothing, the rollback refusal
@@ -102,14 +105,11 @@ recoverage/
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
-    ├── _paths.py            # Coverage directory resolution (RECOVERAGE_DB, db_dir)
-    ├── documents.py         # Coverage documents read per file; the TOML parse persisted
-    │                        #   as JSON under $XDG_CACHE_HOME/recoverage/documents/
-    ├── backup.py            # Verified backup/restore of the coverage documents, the only
-    │                        #   durable state here: history and verify_results are carried
-    │                        #   forward from the previous document, so a regen cannot
-    │                        #   reproduce them. Tar + sha256 manifest, verified on write
-    │                        #   and on read; atomic, all-or-nothing restore.
+    ├── _paths.py            # Live project or explicit portable snapshot resolution
+    ├── documents.py         # Live-project adapter; portable documents use a persisted XDG parse cache
+    ├── backup.py            # Verified backup/restore of explicitly selected portable exports
+    │                        #   Canonical metadata/history belongs to the Rebrew project;
+    │                        #   archived exports retain only the facts/evidence they contain.
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── devserver.py         # WSGI serving stack serve() binds: threading server + its IPv6
     │                        #   class, keep-alive handlers, admission cap + socket deadline
@@ -122,7 +122,7 @@ recoverage/
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   per-thread Cs per image width (read off the PE/ELF
     │                        #   container header), memo
-    ├── regen.py             # In-process rebrew regen (calls rebrew as a library), cross-process lock
+    ├── regen.py             # Read-only live coverage refresh through Rebrew
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, static files)
     ├── potato.py            # Potato Mode renderer + the /potato route
@@ -233,14 +233,14 @@ uv sync --extra dev --extra capstone
 uv run recoverage                     # same as `serve` (main() appends the subcommand to a bare argv)
 uv run recoverage serve             # start dashboard on :8001
 uv run recoverage serve --port 9000 # custom port
-uv run recoverage serve --regen     # re-run rebrew's catalog analysis first
+uv run recoverage serve --regen     # refresh live project inputs first
 uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
 uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener (same gate as serve)
-uv run recoverage regen             # re-run rebrew's catalog analysis + build-db, no server
-uv run recoverage backup            # verified tar of the coverage documents (the only
-                                   #   durable state; $RECOVERAGE_BACKUP_DIR or --to)
-uv run recoverage restore ARCHIVE   # put a verified archive's documents back
+uv run recoverage regen             # refresh the live view without generating files
+RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage backup
+RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage restore ARCHIVE
+# Archive/restore portable exports; never canonical metadata.
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
 uv run recoverage stats             # print coverage stats
@@ -449,12 +449,14 @@ The release policy is not written down anywhere else, so it is stated here and
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard (the bundle inlined) |
 | `/index.html` | GET | Same document, for a URL that names it |
-| `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
-| `/original/<filepath:path>` | GET | A file under the original binary's tree (`web/app/hooks/useOriginalBinary.ts` reads it) |
+| `/files/<target>/source/<filepath:path>` | GET | A file under the selected target's configured, project-contained source root |
+| `/files/<target>/binary` | GET | The selected target's configured, project-contained binary |
+| `/src/<filepath:path>` | GET | A file under the project's fixed `src/` tree |
+| `/original/<filepath:path>` | GET | A file under the project's fixed `original/` tree |
 | `/<filename:app.js, style.css, print.css, favicon.svg, highlight.js, archivo.woff2, jetbrains-mono.woff2>` | GET | The packaged static assets, `no-cache` with a strong `ETag`. `highlight.js` is the second Vite build: the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets, plus `unreadable`: each document that exists and does not parse, from `server.unreadable_documents` (ETag-revalidating) |
+| `/api/targets` | GET | Configured/readable targets plus `unreadable` entries for failed live targets or unreadable portable documents (ETag-revalidating) |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data. `?section=` narrows the cells (siblings omit the key); `?index=0` omits `search_index`, which the SPA holds already, so a section switch does not re-send it (`index` is a flag: `0`, `1` or absent, anything else a 400) |
 | `/api/targets/<target>/functions` | GET | Paginated function list (`?status=` takes rebrew's status vocabulary; anything else is a 400). ETag-revalidating like `/stats` and `/data`: every parameter that shapes the page is in the validator |
@@ -462,8 +464,8 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail (ETag-revalidating: the tag names the snapshot, the target and the requested spelling) |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone). `?size=` is capped at `_MAX_SLICE_SIZE` AND at what the section holds from `?va=`, so a va at the section's tail cannot read the next section's bytes |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`; `?size=` is capped at `_MAX_SLICE_SIZE` and at what the section holds from `?offset=`) |
-| `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header, replayed from a bounded ledger) |
+| `/api/events` | GET | Server-Sent Events: `db-updated` when the live view or selected portable exports change (SPA auto-refresh) |
+| `/api/regen` | POST | Refresh live project inputs (localhost only, cooldown/single-flight and optional `Idempotency-Key` replay); refuses portable mode and writes no files |
 
 Search folds both sides the same way in Python: `server.fold_text` is NFC
 composition plus `str.casefold`, and `server.fold_match` is the substring test
@@ -516,24 +518,14 @@ simpler and strictly wider.
 
 ## Data Pipeline
 
-1. `rebrew coverage build` → writes `db/coverage-<target>.toml` (via
-   `rebrew.coverage_toml.write_coverage_toml`). It runs the catalog analysis
-   in-process per target (`rebrew.catalog.pipeline.build_catalog_data`), so
-   there is no snapshot file between the analysis and the document and a
-   document cannot describe an older tree than the one that produced it.
-   `recoverage --regen` and `POST /api/regen` call the same function; there is
-   no separate `rebrew coverage catalog` step to run first.
-   - Absorbs jump table / switch data bytes into parent function sizes
-   - Links data and thunk cells to their parent function via `parent_function` field
-   - `rebrew coverage catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
-   - The document stores FACTS only: the sections with their cells, the
-     functions, the globals, the verify results and the history. Every aggregate
-     the SQLite schema used to materialize (`section_cell_stats`,
-     `section_cells_json`, the per-section buckets, the byte coverage) is
-     derived by `rebrew.coverage_toml` at load, in `Section.__post_init__` and
-     `_derive_function_stats`. **Do not port a reader of a stored aggregate**:
-     there is none to read, and a second computation of the same number is
-     exactly the drift the format exists to remove.
+1. Normal project mode calls `rebrew.coverage_project.load_project_coverage`.
+   The shared catalog derives functions/data/grid cells directly from canonical
+   inputs. Input versions invalidate cached views; failures remain target-scoped.
+   Comparison history is stored atomically with STATUS in function metadata.
+   `regen` / `POST /api/regen` force a read-only refresh and generate no files.
+2. `RECOVERAGE_SNAPSHOTS` selects portable exports explicitly; only this mode
+   uses TOML parse persistence and backup/restore. No compiler is needed to read
+   either mode. Export directories are caller-selected, never project config.
    - `server._bucket_row` is the ONE mapping from a section's cells to the
      served bucket dict (`total_cells`, the state counts, and `other`, the
      producer's catch-all, always emitted so the buckets reconcile with
@@ -547,9 +539,9 @@ simpler and strictly wider.
      once per `/stats`, `/data` and Potato render. The counts these read are
      rebrew's, so `tests/test_server.py` (`TestBucketReconciliation`) pins
      them against an independent per-cell walk, and a cell-state vocabulary
-     change lands in `rebrew.coverage_toml._BUCKET_OF_STATE` first, not here.
+     change lands in `rebrew.coverage_toml.BUCKET_OF_STATE` first, not here.
      The byte side reads that same fold rather than re-spelling it:
-     `server._BUCKET_FOLD` is grouped off rebrew's `_BUCKET_OF_STATE`, because
+     `server._BUCKET_FOLD` is grouped off rebrew's `BUCKET_OF_STATE`, because
      `Section.buckets` is keyed by cell STATE and a second hand-written copy of
      the grouping was a vocabulary this package drifted from silently (a state
      rebrew added summed into no counted bucket while `Section.covered_bytes`
@@ -638,8 +630,8 @@ Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=3.0.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
-  release, which ships `rebrew.metadata.bindings`, `rebrew.metadata.functions`, `rebrew coverage build` and `rebrew.metadata.functions.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
+- `rebrew>=4.1.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
+  release, which ships `rebrew.metadata.bindings`, `rebrew.metadata.functions`, `rebrew coverage export --output snapshots/` and `rebrew.metadata.functions.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)
@@ -934,15 +926,10 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   visible to it nor checked by it. A second option table on `config` would be
   the two tables `_argv_with_default_command` refuses to keep in step, so the
   help and the man page name the limit rather than the command growing flags.
-  `cli._db_warnings` joins
-  them: a coverage directory that does not exist, or exists and holds no
-  `coverage-*.toml`, serves an empty target list, and every figure the
-  dashboard renders then reads as a healthy zero. It is a warning and not
-  `config.check_db_override`'s refusal because an unbuilt checkout is a normal
-  state, and because the file case is already a startup error (a warning there
-  would only repeat a refusal `serve` exited on). It reads the override
-  `_ServeConfig.db` carries when there is one, so the banner, the check and
-  the request path name the same directory.
+  `cli._snapshot_warnings` warns only about an explicitly selected absent or
+  empty portable directory. `config.check_snapshot_override` rejects an existing
+  non-directory at startup; `_ServeConfig.snapshots` carries the selection.
+  Live target failures are explicit, not healthy zero coverage.
 - Saturation that answers 503 is a log line and a health field, not a bare
   status code: `/api/events` refuses past `_SSE_MAX_CLIENTS` and logs the count
   that caused it, and `/api/health` reports `streams` (clients, max, whether
@@ -1446,16 +1433,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `--min-coverage inf` was a threshold no percentage satisfies. `--port` goes
   through `_checked_port` and `--min-coverage` through `_checked_min_coverage`;
   a new numeric flag parses its own text the same way.
-- `RECOVERAGE_DB` moves what is READ, and rebrew resolves what a regen WRITES
-  from `rebrew-project.toml` alone (it has no environment override), so the two
-  can name different directories. A regen in that state is refused rather than
-  run: it would rewrite documents no served directory reads and report `Done`
-  while the dashboard stayed exactly as stale, which is worse than a regen that
-  failed loudly. `regen._check_writes_where_the_dashboard_reads` compares
-  `rebrew.workspace.db_dir(root)` against `config.db_override()` before rebrew
-  runs and raises `RegenDbMismatchError`; the CLI exits 2 (misconfiguration,
-  and rebrew never ran) and the API answers the JSON 500 with the refusal. A
-  new consumer of the override is on the read side and inherits the refusal.
+- `RECOVERAGE_SNAPSHOTS` selects read-only portable exports. Refresh refuses this
+  mode with a clear error. Live refresh writes no files and needs no cross-process
+  writer lock; the live reader serializes rebuilds per project in this process.
 - A setting whose value is only meaningful in a narrower form is REJECTED
   there, never dropped: `cli._allowed_origins` refuses a CORS origin that is
   not one a browser could send, and the refusal is a `ConfigError` from inside
@@ -1486,17 +1466,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   answers 401 to every reader while the banner reads `token=set`. The error
   names the class of problem and never the value, because it is printed
   verbatim to stderr.
-- `RECOVERAGE_DB` is resolved on the request path (`_paths._db_path`), so
-  `config.db_override` stays a bare environment read and `config.
-  check_db_override` is the startup-only check that stats the path. A value
-  that exists and is not a directory (the SQLite-era `coverage.db` FILE, which
-  sat beside the documents rather than holding them) resolves to a path no
-  `coverage-*.toml` glob can match, and the dashboard then serves an empty
-  target list that reads as a healthy zero rather than as a wrong path. A value
-  that does not exist is allowed, because a service may start before its first
-  `rebrew coverage build`; only a non-directory is a misconfiguration. `serve` and
-  `recoverage config` reach it through `_resolve_serve_config`, the sibling
-  commands through `_check_env_or_exit`.
+- Portable selection resolves through `_paths.coverage_source` on the request
+  path. `config.snapshot_override` reads the environment;
+  `config.check_snapshot_override` validates its path at startup. A missing
+  portable directory is allowed, but an existing non-directory is refused.
+  Live mode reads the containing project rather than falling back to exports.
+
 - The frontend is linted with oxlint under the `@rikalabs/oxlint-standards`
   strict preset plus the vendored anti-slop rules, and type checked by
   `tsc --noEmit` over `web/tsconfig.json` (`strict` plus
@@ -1706,26 +1681,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   only after the predecessor released, and the cooldown cannot catch that
   window either (it counts from the previous run's START, and a regen runs for
   minutes). Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
-  Every one of those is IN this process. A duplicate the ledger cannot see is
-  a `recoverage regen` at another terminal beside a running dashboard, or a
-  cron job over the same tree, and a rebuild is only convergent when the two
-  runs do not overlap: the writer replaces each `coverage-<target>.toml` whole,
-  so two writers interleave and a reader can land between one truncate and its
-  write. So `regen._exclusive_regen` holds an advisory lock
-  (`.recoverage-regen.lock`, named in the directory `rebrew.workspace.db_dir`
-  resolves, because `[project].db_dir` can point anywhere) around the pipeline,
-  and a holder raises `RegenBusyError`: the CLI exits 1 naming it, the API
-  answers the 429 the in-process lock already sends and counts it under
-  `rejected`. Two properties the choice of lock carries: it is non-blocking,
-  because the second caller is a duplicate and not a queue for a run that takes
-  minutes, and it is taken on an OPEN DESCRIPTOR, so a regen killed mid-run
-  releases it on process exit, which a lock file's mere presence could not do
-  (a stale file wedges every regen after the crash). `msvcrt` is reached
-  through `importlib` because typeshed ships its stub only on Windows, so a
-  direct import is an unresolved-import error on every other platform and its
-  suppression is an unused-ignore error on that one. Pinned at
-  `tests/test_lifecycle.py` (`TestRunRegen`), including a forked second process
-  and the death that frees the lock.
+  Cross-process refreshes only read canonical inputs; no export writer or
+  advisory snapshot lock runs. The API's in-process admission and idempotency
+  ledger still prevent duplicate expensive refresh work from the same service.
   The other in-flight marker, the `/data`
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline

@@ -39,9 +39,7 @@ export const shared = {
   plugins: [preact(), tailwindcss()],
   // `@/` is the alias the components import through; tsconfig carries it for
   // tsc and Vite needs it spelled out for both dev and build.
-  // The source directory is `app/`, not `src/`: the SPA fetches C source over
-  // `/src/<sourceRoot>/...`, so a dev server whose own modules live under `/src`
-  // has its entry shadowed by the API proxy.
+  // Keep development modules separate from the proxied project file trees.
   resolve: { alias: { "@": resolve(import.meta.dirname, "app") } },
   // React ships both branches of every `process.env.NODE_ENV` test, so without
   // this define the development branch survives the build: the bundle measured
@@ -98,6 +96,7 @@ const devServer = {
   // running server's asset rather than this server's.
   proxy: {
     "/api": { target: devApi },
+    "/files": { target: devApi },
     "/src": { target: devApi },
     "/original": { target: devApi },
     "/highlight.js": { target: devApi },

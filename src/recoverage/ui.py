@@ -1,7 +1,8 @@
 """UI routes for the recoverage dashboard.
 
 The SPA shell (``/`` and ``/index.html``), the packaged static assets it pulls
-in, and the two source trees the code panes read (``/src`` and ``/original``).
+in, and target-scoped project files (``/files/<target>/source/...`` and
+``/files/<target>/binary``), plus the fixed ``/src`` and ``/original`` trees.
 Every one of them mounts on ``recoverage.server.app`` at import time and takes
 its containment, compression and validator helpers from there rather than
 restating them; ``/potato`` is mounted by ``recoverage.potato``.
@@ -17,8 +18,10 @@ from typing import NamedTuple
 
 import rcssmin
 from bottle import static_file
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 
 import recoverage.server as _server
+from recoverage import config
 from recoverage.server import (
     CACHE_REVALIDATE,
     SUPPORTED_ENCODINGS,
@@ -356,6 +359,57 @@ def _repo_file_forbidden(reason: str, filepath: str) -> HTTPResponse:
             "detail": "path escapes the project tree",
         },
     )
+
+
+def _target_file_snapshot(target: str) -> CoverageSnapshot:
+    """Resolve a known target and report unreadable coverage without serving a fallback."""
+    try:
+        known = _server.resolve_targets()
+        if not any(_server.target_key(row["id"]) == _server.target_key(target) for row in known):
+            raise _server._json_err(404, {"error": "Not found", "detail": "unknown target"})
+        return _server.coverage_for(target)
+    except CoverageTomlError as exc:
+        raise _server._db_unavailable_err(exc) from None
+
+
+@app.get("/files/<target>/source/<filepath:path>")
+def serve_target_source(target: str, filepath: str) -> bytes | HTTPResponse:
+    """Serve source beneath this target's configured, project-contained source root."""
+    target = _server.path_param(target)
+    snapshot = _target_file_snapshot(target)
+    filepath = _server.path_param(filepath)
+    candidate = _server._contained_source_path(
+        _project_dir(), snapshot.paths, snapshot.target, [filepath]
+    )
+    if candidate is None:
+        return _repo_file_forbidden("source path is outside the target tree", filepath)
+    return _serve_repo_file(candidate.name, candidate, candidate.parent)
+
+
+@app.get("/files/<target>/binary")
+def serve_target_binary(target: str) -> bytes | HTTPResponse:
+    """Serve only this target's configured binary within the serving project."""
+    target = _server.path_param(target)
+    snapshot = _target_file_snapshot(target)
+    binary = snapshot.paths.get("originalDll") if config.snapshot_override() is not None else None
+    candidate = None
+    if binary:
+        # Portable offsets describe the snapshot binary, even beside another project config.
+        if isinstance(binary, str) and "\x00" not in binary and not binary.startswith("//"):
+            relative = Path(binary.removeprefix("/"))
+            if binary and _server.is_plain_relative(relative):
+                root = _project_dir().resolve()
+                try:
+                    resolved = (root / relative).resolve()
+                except (OSError, ValueError):
+                    resolved = None
+                if resolved is not None and resolved.is_relative_to(root):
+                    candidate = resolved
+    else:
+        candidate = _server._find_dll_path(target)
+    if candidate is None:
+        return _server._json_err(404, {"error": "Not found", "detail": "target binary unavailable"})
+    return _serve_repo_file(candidate.name, candidate, candidate.parent)
 
 
 @app.get("/src/<filepath:path>")

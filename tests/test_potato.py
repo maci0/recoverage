@@ -26,7 +26,7 @@ string is present somewhere in the page.
 
 Fixtures: `HAS_DB` cases read the shared synthetic document set; everything
 else writes its own document into `tmp_path` via `_write_doc`, which also
-points `RECOVERAGE_DB` at it. No case reaches a real project or the network.
+points `RECOVERAGE_SNAPSHOTS` at it. No case reaches a real project or the network.
 """
 
 import base64
@@ -46,7 +46,7 @@ from urllib.parse import quote, unquote, urlparse
 import pytest
 from conftest import HAS_DB, decode_body, path_the_filesystem_holds, require_target, wsgi_get
 from coverage_fixture import cell, coverage_dir, known_cell_states, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, load_coverage
+from rebrew.coverage_toml import CoverageSnapshot, load_coverage_from
 
 from recoverage.potato import (
     _MAX_RENDERED_COLUMNS,
@@ -117,8 +117,8 @@ def _write_doc(
     """
     directory = coverage_dir(root)
     write_coverage(directory, target, sections, **kwargs)
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
-    return load_coverage(root, target)
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
+    return load_coverage_from(root / "db", target)
 
 
 def _shared_snapshot() -> CoverageSnapshot:
@@ -128,7 +128,7 @@ def _shared_snapshot() -> CoverageSnapshot:
     ``HAS_DB``-gated assertion exercises the same document the render does.
     """
     target = require_target()
-    return load_coverage(Path.cwd(), target)
+    return load_coverage_from(Path.cwd() / "db", target)
 
 
 @functools.cache
@@ -992,7 +992,7 @@ def _find_cell_idx(target: str, section: str, predicate) -> int | None:
     (_render_panel indexes cells[idx]; grid links carry that position), not by a
     stored id — the document has no id column at all.
     """
-    found = load_coverage(Path.cwd(), target).sections.get(section)
+    found = load_coverage_from(Path.cwd() / "db", target).sections.get(section)
     if found is None:
         return None
     for pos, cell_row in enumerate(found.cells):
@@ -1549,7 +1549,7 @@ class TestDbUpdatedLabel:
     @staticmethod
     def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
         """Point the coverage-directory resolution at a fixture's documents."""
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
     @staticmethod
     def _doc(directory: Path, target: str, mtime_ns: int) -> Path:
@@ -1564,11 +1564,11 @@ class TestDbUpdatedLabel:
     def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
         """Point the coverage-directory resolution at *directory*.
 
-        The footer's read goes through the same `RECOVERAGE_DB` the rest of the
+        The footer's read goes through the same `RECOVERAGE_SNAPSHOTS` the rest of the
         suite redirects, so a test counting that read has to redirect it too or
         it counts a walk of the checkout's own db directory.
         """
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
     def test_missing_db_renders_empty(self) -> None:
         assert _db_updated_label(None) == ""
@@ -1607,7 +1607,7 @@ class TestDbUpdatedLabel:
         directory = tmp_path / "db"
         self._doc(directory, "STALE", old_ns)
         self._doc(directory, "FRESH", new_ns)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         assert _newest_mtime_ns() == new_ns
 
     def test_label_renders_the_instant_it_is_given(self) -> None:
@@ -1681,7 +1681,7 @@ class TestDbUpdatedLabel:
 
         directory = tmp_path / "db"
         self._doc(directory, "ONCE", 1_700_000_000_000_000_000)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         scans = 0
         real = _potato._newest_mtime_ns
@@ -1719,7 +1719,7 @@ class TestDbUpdatedLabel:
         monkeypatch.setattr(_potato, "_newest_mtime_ns", counting)
         directory = tmp_path / "db"
         self._doc(directory, "PAGE", 1_700_000_000_000_000_000)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         page = render_potato_url("/potato?target=PAGE")
         assert "coverage updated" in page
         assert scans == 1
@@ -3878,7 +3878,7 @@ class TestDbUnavailableContract:
     ) -> Path:
         """Point the server at a coverage directory holding no readable document."""
         directory = tmp_path / name
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         return directory
 
     def test_render_potato_raises_503_without_db(
@@ -3896,7 +3896,7 @@ class TestDbUnavailableContract:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The render's coverage_for and the ETag's _snapshot_db_mtime both read
-        # the directory _db_path resolves, so one override redirects both.
+        # the directory coverage_source resolves, so one override redirects both.
         self._point_at_empty_dir(tmp_path, monkeypatch, "nope")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
@@ -3957,7 +3957,7 @@ class TestDbUnavailableContract:
         directory.mkdir()
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
-        assert b"The coverage directory holds no document." in body
+        assert b"No coverage is available." in body
         assert b"could be read" not in body
 
     def test_a_broken_document_beside_a_good_one_is_named_on_the_page(
@@ -3986,8 +3986,8 @@ class TestDbUnavailableContract:
         """The "coverage unavailable" line must not be splittable by a document.
 
         It is the record of a 503, and it is what an operator reads to find the
-        broken document: the directory comes from ``RECOVERAGE_DB`` or a
-        project's ``db_dir``, and the cause quotes the file the reader rejected.
+        broken document: the directory comes from ``RECOVERAGE_SNAPSHOTS`` or a
+        project's working directory, and the cause quotes the rejected inputs.
         Either can carry a line break, and a split here turns one outage into
         two entries, the second of which reads as an unrelated message.  The
         API's twin (``server._db_unavailable_err``) escapes both; this line
@@ -4637,7 +4637,7 @@ class TestRenderIsPinnedToOneSnapshot:
                 },
             )
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path)))
         _doc("exact", 16, 16)
 
         # One snapshot per render: the target is resolved once and the document

@@ -27,23 +27,15 @@ code: 2026-09-29.
 ### Acceptance Criteria
 - `recoverage serve` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
-- Server resolves the coverage directory from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/`. A directory holding no `coverage-<target>.toml` is not a refusal: `serve` warns that the dashboard will list no targets until `rebrew coverage build` writes one, and every figure then reads as a healthy zero. A path that is not a directory is refused at startup
-- `--regen` flag runs rebrew's catalog analysis and coverage-document writer in-process before starting (`rebrew.catalog.cli.run_catalog`, then `rebrew.coverage_toml.write_coverage_toml`); there is no separate `rebrew coverage catalog` step to run first
+- Server finds the containing Rebrew project from the working directory and reads live canonical inputs. Target failures are reported explicitly beside healthy siblings.
+- `--regen` requests an immediate read without generating files. Ordinary reads detect changed inputs automatically. Explicit offline mode uses `RECOVERAGE_SNAPSHOTS` and refuses refresh.
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
 graph TD
-    A["Project directory<br/>with rebrew-project.toml"] --> B{"coverage-*.toml<br/>present?"}
-    B -->|Yes| C["recoverage serve --port 8001"]
-    B -->|No| D["recoverage serve --regen"]
-    D --> E["rebrew coverage build<br/>(catalog analysis runs in-process)"]
-    E --> F["db/coverage-*.toml written<br/>atomically"]
-    F --> C
-    C --> H["Dashboard opens at<br/>http://localhost:8001"]
-
-    style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    style H fill:#d1fae5,stroke:#059669,color:#065f46
-    style B fill:#fef3c7,stroke:#d97706,color:#92400e
+    A["Rebrew project inputs"] --> B["recoverage serve"]
+    B --> C["Shared live reader"]
+    C --> D["Dashboard or explicit target errors"]
 ```
 
 ---
@@ -351,11 +343,11 @@ graph TD
 - Regenerate button in the topbar with a 5-second cooldown to prevent spam
 - The button reads *Regenerating...* and is disabled for the duration of the run, so the click is acknowledged where it was made and a repeat click is a no-op
 - The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
-- `POST /api/regen` runs rebrew's catalog analysis and coverage-document writer in-process
+- `POST /api/regen` refreshes the shared live view without writing files
 - The Regenerate button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
-- ETag-based caching: if the coverage documents are unchanged, API returns `304 Not Modified`
+- ETag-based caching: if the view is unchanged, API returns `304 Not Modified`
 
 ```mermaid
 sequenceDiagram
@@ -369,15 +361,13 @@ sequenceDiagram
     UI->>Server: POST /api/regen
     Server->>Server: Verify localhost origin
 
-    Server->>Rebrew: run_catalog
-    Server->>Rebrew: build_db
-    Rebrew-->>Server: db/coverage-*.toml replaced whole,
-    Note over Server: one document per target,
-    Note over Server: temporary sibling + atomic rename
+    Server->>Rebrew: load_project_coverage(refresh=True)
+    Rebrew-->>Server: Immutable view or target failures
+    Note over Server: Read-only; no generated files
 
     Server-->>UI: 200 OK
     UI->>Server: GET /api/targets/<target>/data
-    Note over Server: New ETag (document mtime changed)
+    Note over Server: ETag follows project inputs
     Server-->>UI: Fresh JSON payload
     UI->>UI: Rebuild grids + progress bar
 ```
@@ -479,19 +469,19 @@ graph TD
 > **As an RE Dev**, I want to click source links in the detail panel to view the original `.c` files so that I can cross-reference the dashboard with the actual decompiled code.
 
 ### Acceptance Criteria
-- Source links in the panel point at `paths.sourceRoot` from the document, falling back to `/src/<target>/<file>.c`
-- Server proxies `/src/*` and `/original/*` from the project directory (path-traversal safe)
-- Original DLL bytes are fetched from `paths.originalDll`, falling back to `/original/<target>.dll`, as an ArrayBuffer cached by `useOriginalBinary` against the resolved path
+- Source links and source fetches use `/files/<target>/source/<file>`; the server resolves the target's source root and rejects paths outside it
+- Server serves configured target files only within the project; fixed `/src/*` and `/original/*` routes are also contained
+- Original binary bytes are fetched from `/files/<target>/binary`, as an ArrayBuffer cached by `useOriginalBinary` against the resolved path
 - A section with no file backing (or a `.bss` cell) has no bytes to slice, and the hex pane says so rather than showing unrelated bytes
 - File offset calculated from VA using section metadata
 
 ```mermaid
 graph TD
-    A["Click source link<br/>in detail panel"] --> B["GET /src/server.dll/<br/>func_10001234.c"]
+    A["Click source link<br/>in detail panel"] --> B["GET /files/server.dll/source/<br/>func_10001234.c"]
     B --> C["Server resolves path<br/>(path-traversal safe)"]
     C --> D["Serve file from<br/>project directory"]
 
-    E["Panel needs hex dump"] --> F["GET /original/<br/>server.dll"]
+    E["Panel needs hex dump"] --> F["GET /files/server.dll/<br/>binary"]
     F --> G["DLL loaded as<br/>ArrayBuffer (cached)"]
     G --> H["Calculate file offset<br/>from VA + section info"]
     H --> I["Slice bytes<br/>format hex dump"]
@@ -579,9 +569,9 @@ Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](
 
 ```mermaid
 graph LR
-    subgraph "Phase 1: Data Generation"
-        A["rebrew coverage build"] --> B["catalog analysis, then<br/>one document per target"]
-        B --> C["db/coverage-*.toml"]
+    subgraph "Phase 1: Project Inputs"
+        A["Canonical metadata and source"] --> B["Binary, inventory and link evidence"]
+        B --> C["Shared live view"]
     end
 
     subgraph "Phase 2: Dashboard Launch"

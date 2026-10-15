@@ -44,16 +44,10 @@ dependencies = [
     "bottle>=0.13",
     "brotli>=1.1",
     "rcssmin>=1.1",
-    # In-process regen (`recoverage regen`, `serve --regen`, POST /api/regen),
-    # the shared rebrew-project.toml + coverage-directory resolution
-    # (rebrew.workspace, stdlib only) and the reader/writer for the coverage
-    # documents (rebrew.coverage_toml), so recoverage does not carry its own
-    # copy of any of it.  Resolved from the sibling checkout by
-    # [tool.uv.sources] below.
-    # 3.0.0 owns address-only bindings and format-2 metadata. The server
-    # imports DATA_KINDS from rebrew.metadata.bindings and reads canonical rows
-    # through rebrew.metadata.functions.
-    "rebrew>=3.0.0",
+    # Shared live project accounting, canonical format-2 metadata/bindings,
+    # and explicit portable coverage documents. The sibling path dependency
+    # below and tools/ci_clone_rebrew.sh pin the same supported release.
+    "rebrew>=4.1.0",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",

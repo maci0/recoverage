@@ -1,4 +1,6 @@
-"""Coverage documents, read per file and with the parse persisted across restarts.
+"""Live project views and portable documents with persisted parse caching.
+
+Live projects bypass the portable persisted-parse cache.
 
 The replacement for ``rebrew.coverage_toml.load_all_coverage_from``'s memo,
 which keys the whole directory on one stat tuple: a rebuild that rewrote one
@@ -14,7 +16,7 @@ two things change here and nothing else does:
   as JSON under ``$XDG_CACHE_HOME/recoverage/documents/``, keyed by the
   document's sha256, so a restart over unchanged documents pays ``json.loads``
   instead of ``tomllib.loads`` (39 ms against 632 ms).  The cached dict goes
-  through rebrew's own ``_snapshot`` exactly as a fresh parse does, so a cache
+  through rebrew's own ``snapshot_from_document`` exactly as a fresh parse does, so a cache
   file is held to the document's schema and is no more trusted than the TOML
   it stands in for.  JSON rather than pickle for the same reason: loading a
   pickle runs code, and the cache directory is not the coverage directory.
@@ -25,9 +27,8 @@ datetime) all fall back to the parse, and the first write failure in a process
 logs one WARNING.  It holds one file per document path, and every write keeps
 the :data:`_CACHE_MAX_SLOTS` most recently used.
 
-``rebrew.coverage_toml._snapshot`` is a private name read deliberately: it is
-the one place the document schema is enforced, a rename fails this import
-loudly, and ``tests/test_documents.py`` holds every snapshot this module builds
+``rebrew.coverage_toml.snapshot_from_document`` is the public shared schema
+validator, and ``tests/test_documents.py`` holds every snapshot this module builds
 equal to the one ``rebrew.coverage_toml.load_coverage_from`` builds.
 """
 
@@ -43,11 +44,14 @@ import os
 import tempfile
 import threading
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, _snapshot
+from rebrew.coverage_project import ProjectCoverageError, ProjectCoverageView, load_project_coverage
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, snapshot_from_document
+from rebrew.workspace import CONFIG_NAME
 
 from recoverage import clock, metrics
 
@@ -99,7 +103,7 @@ _STALE_TMP_SECONDS: Final = 3600
 
 #: ``(name, mtime_ns, size, ino)``: the inode catches a same-size rename-over
 #: inside one mtime tick, which mtime and size alone cannot see.
-_StatKey = tuple[str, int, int, int]
+_StatKey = tuple[str, int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -137,7 +141,7 @@ def _stat_key(db_dir: Path) -> tuple[_StatKey, ...]:
             st = path.stat()
         except OSError:
             continue
-        entries.append((path.name, st.st_mtime_ns, st.st_size, st.st_ino))
+        entries.append((path.name, st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns))
     entries.sort()
     return tuple(entries)
 
@@ -326,7 +330,7 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
     cached = _read_cached(path, digest)
     if cached is not None:
         try:
-            snapshot = _snapshot(path, cached, target)
+            snapshot = snapshot_from_document(path, cached, target)
         except Exception as exc:
             # The cache is not the document.  A slot whose hash matches but whose
             # content rebrew refuses (hand-edited, or written by a build with a
@@ -338,17 +342,32 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
         else:
             metrics.CACHES.hit(metrics.DOCUMENT_CACHE)
             return _Doc(stat, digest, snapshot)
-    return _Doc(stat, digest, _snapshot(path, _parse_toml(path, data, digest), target))
+    return _Doc(stat, digest, snapshot_from_document(path, _parse_toml(path, data, digest), target))
 
 
-def load_all(db_dir: Path) -> dict[str, CoverageSnapshot]:
+def _project_view(source: Path) -> ProjectCoverageView | None:
+    from recoverage.config import snapshot_override
+
+    override = snapshot_override()
+    if (override is not None and override.resolve() == source.resolve()) or not (
+        source / CONFIG_NAME
+    ).exists():
+        return None
+    try:
+        return load_project_coverage(source)
+    except ProjectCoverageError as exc:
+        raise CoverageTomlError(str(exc)) from exc
+
+
+def load_all(db_dir: Path) -> Mapping[str, CoverageSnapshot]:
     """Every readable document in *db_dir*, keyed by target id.
 
     The contract of ``rebrew.coverage_toml.load_all_coverage_from``: ``{}`` for
     a directory with no document, one unreadable document skipped with a
     warning naming it, and THE SAME mapping for an unchanged directory.
     """
-    return _current(db_dir)[3]
+    project = _project_view(db_dir)
+    return project.snapshots if project is not None else _current(db_dir)[3]
 
 
 def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
@@ -361,6 +380,12 @@ def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
     payload names.  It is document-derived text (a parse error can quote a
     value), so a caller renders it as text, never as markup.
     """
+    project = _project_view(db_dir)
+    if project is not None:
+        return tuple(
+            ("rebrew-project.toml", target, reason)
+            for target, reason in sorted(project.failures.items())
+        )
     return tuple(
         (name, name[len(_PREFIX) : -len(_SUFFIX)], reason)
         for name, reason in sorted(_current(db_dir)[4].items())
@@ -378,11 +403,14 @@ def versions(db_dir: Path) -> tuple[tuple[str, str, int], ...]:
     answer.  Read off the same state :func:`load_all` returns, so a version
     and the snapshot built from those bytes cannot come from two reads.
     """
+    project = _project_view(db_dir)
+    if project is not None:
+        return project.versions
     _dir, key, docs, _snapshots, _unreadable = _current(db_dir)
     out: list[tuple[str, str, int]] = []
-    for name, mtime_ns, size, ino in key:
+    for name, mtime_ns, size, ino, ctime_ns in key:
         doc = docs.get(name)
-        out.append((name, doc.digest if doc else f"stat:{mtime_ns}:{size}:{ino}", size))
+        out.append((name, doc.digest if doc else f"stat:{mtime_ns}:{size}:{ino}:{ctime_ns}", size))
     return tuple(out)
 
 

@@ -22,7 +22,6 @@ import {
   hex,
   isolate,
   plural,
-  sameOriginPath,
   toVa,
   trimSearch,
 } from "@/lib/format";
@@ -227,10 +226,6 @@ export function App() {
   );
 
   const coverage = useCoverage(target, section);
-  // The fallback carries the target id verbatim: rebrew names the tree
-  // `src/<target>` with the target's own spelling, and a lowercased request
-  // only resolves on a case-insensitive filesystem (macOS, Windows).
-  const sourceRoot = sameOriginPath(coverage.paths.sourceRoot ?? "", `/src/${target}`);
   // The original binary is the largest thing this page will ever download —
   // a built PE of several megabytes — and only the byte pane and the
   // inspector read it, through useSelection, which runs for a SELECTION. It
@@ -239,7 +234,7 @@ export function App() {
   // pane shows MSG.LOADING while the fetch is in flight, so the one visit
   // that does need the bytes waits a moment longer and no other notice moves.
   const dll = useOriginalBinary(
-    originalDllPath(coverage.paths.originalDll, target),
+    originalDllPath(target),
     selectedIndex !== null,
     coverage.reloadToken,
   );
@@ -247,7 +242,6 @@ export function App() {
     target,
     section,
     sections: coverage.sections,
-    sourceRoot,
     cellIndex: selectedIndex,
     dll,
   });
@@ -892,7 +886,7 @@ export function App() {
   }, [coverage, loadError, loadTargets]);
 
   /** What a rebuild refreshes: the target list as well as the map. A rebuild
-   * can add a target, and the first `rebrew coverage build` beside an empty
+   * can add a target, and the first live read beside an empty
    * dashboard (or a Regenerate pressed on its empty state) adds every one: a
    * list read once at load kept the empty state up over the new documents
    * until the page was reloaded by hand. The stream is opened once the list
@@ -1354,7 +1348,7 @@ export function App() {
             section={active}
             cellIndex={selectedIndex}
             panes={panes}
-            sourceRoot={sourceRoot}
+            target={target}
             parentVaFor={parentVaFor}
             onJumpToAddress={jumpToAddress}
             hiddenWhenStacked={mapPending}
@@ -1446,9 +1440,8 @@ function MapArea({
         </p>
         <UnreadableList documents={unreadable} />
         <p className="m-0 max-w-prose">
-          Fix or remove {one ? "it" : "them"}, or rebuild {one ? "it" : "them"} with{" "}
-          <code className="font-mono text-micro text-text">rebrew coverage build</code> or
-          Regenerate. The map opens as soon as a document reads.
+          Fix the reported project inputs or selected offline snapshots.
+          The map opens when coverage can be read.
         </p>
       </div>
     );
@@ -1456,12 +1449,10 @@ function MapArea({
   if (noTargets) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
-        <p className="m-0 text-intro font-semibold text-text">No coverage documents yet</p>
+        <p className="m-0 text-intro font-semibold text-text">No coverage available</p>
         <p className="m-0 max-w-prose">
-          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> in the
-          project to write <code className="font-mono text-micro text-text">db/coverage-*.toml</code>,
-          or press Regenerate to run it from here. The map opens as soon as the first document is
-          written.
+          Check the project configuration and target binaries, or the selected offline
+          snapshots. Project input changes refresh the view automatically.
         </p>
       </div>
     );
@@ -1483,9 +1474,7 @@ function MapArea({
         </p>
         <UnreadableList documents={[targetUnreadable]} />
         <p className="m-0 max-w-prose">
-          Fix or remove it, or rebuild it with{" "}
-          <code className="font-mono text-micro text-text">rebrew coverage build</code> or
-          Regenerate.
+          Fix the reported project inputs or selected offline snapshot.
         </p>
       </div>
     );
@@ -1497,9 +1486,7 @@ function MapArea({
           No coverage data for <span className="font-mono">{target}</span>
         </p>
         <p className="m-0 max-w-prose">
-          Run <code className="font-mono text-micro text-text">rebrew coverage build</code> to write{" "}
-          <code className="font-mono text-micro text-text">db/coverage-{target}.toml</code>, or press
-          Regenerate to run it from here.
+          Check this target’s configuration, binary and inventory, or its selected offline snapshot.
         </p>
       </div>
     );
@@ -1570,7 +1557,7 @@ function describeMapArea(
   filters: ReadonlySet<string>,
 ): string {
   if (noTargets) {
-    return unreadable ? "Coverage documents could not be read." : "No coverage documents yet.";
+    return unreadable ? "Coverage documents could not be read." : "No coverage available.";
   }
   if (active === null) {
     return failure === null ? "Loading coverage data." : "Coverage data unavailable.";

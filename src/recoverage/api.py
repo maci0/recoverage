@@ -31,7 +31,7 @@ from recoverage import __version__, clock
 from recoverage import config as _config
 from recoverage import metrics as _metrics
 from recoverage import server as _server
-from recoverage._paths import _db_path
+from recoverage._paths import coverage_source
 from recoverage.disasm import (
     capstone_unavailable_reason,
     clear_disassembly_cache,
@@ -40,9 +40,6 @@ from recoverage.disasm import (
     get_disassembly,
 )
 from recoverage.regen import (
-    RegenBusyError,
-    RegenDbMismatchError,
-    RegenDbUnresolvableError,
     RegenError,
     run_regen,
 )
@@ -921,7 +918,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """Push a db-updated SSE frame to every connected client queue.
 
     Also invalidates every derived cache (see :func:`_clear_derived_caches`)
-    — an external ``rebrew coverage build`` (the documented workflow) must refresh
+    — an external metadata edit or portable ``rebrew coverage export`` must refresh
     the target dropdown, any cached data, and the disassembly derived from
     the original binary, not just the in-app /api/regen path.
     """
@@ -930,7 +927,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         "event": "db-updated",
         # Basename only — the absolute path leaks the user's home-directory
         # layout to any LAN/browser client (docs/THREAT_MODEL.md).
-        "db": {"path": _db_path().name},
+        "db": {"path": coverage_source().name},
         "timestamp": clock.wall_time(),
     }
     if snapshot is not None:
@@ -939,7 +936,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         # it as wall-clock data.
         payload["db"]["fingerprint"] = snapshot[0]
         payload["db"]["size_bytes"] = snapshot[1]
-    # The payload carries ``_db_path().name``, a filename read with
+    # The payload carries ``coverage_source().name``, a filename read with
     # os.fsdecode, so a coverage directory whose name holds a byte that is not
     # valid UTF-8 (legal on ext4, and what a checkout, an archive or a copy
     # from a Windows tool produces) hands this line a lone U+DCFF surrogate.
@@ -1302,7 +1299,7 @@ def handle_api_health() -> bytes:
     Every reason the probe found is named in one log line per transition
     (:func:`_log_health_status`), not one line per probe.
     """
-    db = _db_path()
+    db = coverage_source()
     db_info: dict[str, Any] = {"path": db.name, "exists": db.is_dir()}
     reasons: list[str] = []
     # Freshness is the newest mtime across the directory's documents: a rebuild
@@ -1351,7 +1348,7 @@ def handle_api_health() -> bytes:
             )
     else:
         reasons.append(f"no coverage-*.toml document in {db}")
-    if mtime_ns is not None:
+    if mtime_ns is not None and _config.snapshot_override() is not None:
         # The one fault every other signal here stays quiet through: the
         # documents parse, every route answers 200, the caches hit and no
         # counter moves, so a regen that stopped running days ago reads
@@ -1576,7 +1573,9 @@ def handle_api_targets() -> bytes | HTTPResponse:
         _log_targets_fallback(exc)
         targets_list = [
             {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
-            for tid, t_info in _server._get_targets_config().items()
+            for tid, t_info in (
+                {} if _config.snapshot_override() is not None else _server._get_targets_config()
+            ).items()
         ]
     else:
         _clear_targets_fallback()
@@ -2792,17 +2791,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | HTTPResponse:
-    """Re-run catalog analysis and coverage writing for the project workspace.
+    """Refresh the project view without writing source, metadata or snapshots.
 
-    Duplicate execution: a rebuild is convergent, so a second run ends in the
-    same state as the first, but it is minutes of work and a second write of
-    the coverage documents.  Two runs at the SAME time are worse than that: they
-    interleave, and a reader can land between one writer's truncate and its
-    write.  ``_REGEN_LOCK`` and the ledger below are this process's, so neither
-    sees a ``recoverage regen`` at another terminal or a cron job over the same
-    tree; ``regen.run_regen`` takes an advisory lock in the coverage directory
-    for that, and the refusal arrives here as the same 429 the in-process lock
-    gives.
+    Expensive refreshes are admitted once per process. Independent processes
+    read the same canonical inputs and need no shared writer lock.
 
     Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered by the pipeline itself, before the success line and
@@ -2892,8 +2884,8 @@ def handle_regen() -> bytes | HTTPResponse:
 
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
-    # check and run coverage regeneration in parallel, tearing the data_*.json /
-    # documents (TOCTOU).  Non-blocking acquire: a second POST while a regen
+    # check and repeat expensive analysis in parallel. Non-blocking acquire:
+    # a second POST while a refresh
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
     if not _REGEN_LOCK.acquire(blocking=False):
@@ -3017,38 +3009,6 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
         root = _project_dir()
         _log.info("Regen started from %s", remote, extra=_regen_log_fields("started"))
         run_regen(root)
-    except (RegenDbMismatchError, RegenDbUnresolvableError) as e:
-        # A setting this package reads and rebrew cannot honour, or a coverage
-        # directory neither could resolve: the regen was refused before it
-        # ran, so the operator has to change configuration or fix the path
-        # before a rebuild can mean anything. 500 would read as a broken
-        # pipeline; the message is a path pair the operator has to see.
-        _regen_failed(started_at, "%s: %s", type(e).__name__, e)
-        return _json_err(
-            500,
-            {
-                "error": "Regen refused",
-                "detail": str(e),
-            },
-        )
-    except RegenBusyError as e:
-        # Another PROCESS holds this project's regen lock: a `recoverage regen`
-        # at a terminal beside this server, or a cron job over the same tree.
-        # `_REGEN_LOCK` cannot see either, so this is the one duplicate the
-        # handler's own serialization does not already answer. It gets the same
-        # answer the in-process lock gives, so a client has one shape for "a
-        # regen is already running", and it is counted as the refusal it is
-        # rather than a pipeline that broke.
-        _regen_rejected(started_at, "%s: %s", type(e).__name__, e)
-        return _json_err(
-            429,
-            {
-                "error": "Rate limited: regeneration already running",
-                "detail": str(e),
-                "retry_after": int(_REGEN_COOLDOWN_SECONDS),
-            },
-            Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
-        )
     except RegenError as e:
         # rebrew's error_exit reported the failure and its status is carried
         # here.  Map it to the JSON 500 contract instead of letting it escape

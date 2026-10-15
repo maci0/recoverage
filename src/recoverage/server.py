@@ -1,9 +1,9 @@
 """Recoverage server — coverage dashboard for binary-matching projects.
 
-Bottle WSGI app serving the dashboard over rebrew's clear-text coverage
-TOML.  The ``coverage-*.toml`` documents are read from the directory resolved
-by ``recoverage._paths._db_path()``, which honours ``rebrew-project.toml
-[project] db_dir`` when present and falls back to ``./db`` otherwise.
+Bottle WSGI app reading canonical project inputs through Rebrew's live model.
+``recoverage._paths.coverage_source()`` resolves the serving project, or an
+explicit ``RECOVERAGE_SNAPSHOTS`` directory for portable coverage exports.
+Project ``db_dir`` settings have no role in either mode.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import brotli
 import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
 from rebrew.coverage_toml import (
-    _BUCKET_OF_STATE,
+    BUCKET_OF_STATE,
     Cell,
     CoverageSnapshot,
     CoverageTomlError,
@@ -45,14 +45,15 @@ from rebrew.workspace import (
     CONFIG_NAME,
     MATCHED_STATUSES,
     WorkspaceConfigError,
+    WorkspaceNotFound,
     parse_va_candidates,
     read_config,
     target_binary,
     targets_table,
 )
 
-from recoverage import clock, metrics
-from recoverage._paths import _db_path, config_fingerprint
+from recoverage import clock, config, metrics
+from recoverage._paths import config_fingerprint, coverage_source
 from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
@@ -547,10 +548,13 @@ def _contained_source_path(
     # trivially. An empty root is refused for the same reason: base would
     # become the whole project directory, and any files[0] would be read out of it.
     source_root = str(source_root).lstrip("/")
-    if not source_root or not is_plain_relative(Path(source_root)):
+    if not source_root or "\x00" in source_root or not is_plain_relative(Path(source_root)):
         _log.debug("Source root %r is not contained in the project", source_root)
         return None
-    base = (project_dir / source_root).resolve()
+    try:
+        base = (project_dir / source_root).resolve()
+    except (OSError, ValueError):
+        return None
     # The plain-relative rule above is lexical: it holds "src/evil" whatever
     # src/evil is, and resolve() follows a symlink. A base that leaves the
     # project makes every is_relative_to below pass trivially, because they
@@ -571,7 +575,10 @@ def _contained_source_path(
     # composed and a macOS tree holds it decomposed, so the composed path
     # opened no file at all.
     raw = match_filesystem_spelling(base, raw)
-    c_path = (base / raw).resolve()
+    try:
+        c_path = (base / raw).resolve()
+    except (OSError, ValueError):
+        return None
     if not c_path.is_relative_to(base):
         return None
     return c_path
@@ -999,8 +1006,16 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     vanishes between the listing and the stat is skipped, and the next call's
     differing key catches the miss.
     """
+    source = coverage_source()
+    if config.snapshot_override() is None and (source / "rebrew-project.toml").exists():
+        from rebrew.coverage_project import load_project_coverage
+
+        return tuple(
+            (Path(path).name, mtime, size)
+            for path, mtime, size in load_project_coverage(source).input_stats
+        )
     entries: list[tuple[str, int, int]] = []
-    for path in _db_path().glob(COVERAGE_GLOB):
+    for path in source.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
         except OSError:
@@ -1037,7 +1052,7 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     EVERY coverage-derived cache key and ETag must be built on this snapshot,
     not raw ``st_mtime`` on one file.
     """
-    entries = versions(_db_path())
+    entries = versions(coverage_source())
     if not entries:
         return None
     # The name is length-prefixed, so a target id carrying a colon or a NUL
@@ -1142,10 +1157,11 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     dashboard.  One unreadable document beside readable ones is skipped by the
     reader with a warning naming the file, and the other targets keep serving.
     """
-    snapshots = load_all(_db_path())
+    snapshots = load_all(coverage_source())
     if not snapshots:
         raise CoverageTomlError(
-            f"{_db_path()}: no coverage-*.toml document; run 'rebrew coverage build'"
+            f"{coverage_source()}: no readable coverage targets; "
+            "inspect project inputs or offline snapshots"
         )
     return snapshots
 
@@ -1159,7 +1175,7 @@ def db_target_ids() -> list[str]:
     because this is also what the config-only fallback target list is built
     from.
     """
-    return sorted(load_all(_db_path()))
+    return sorted(load_all(coverage_source()))
 
 
 def unreadable_documents() -> list[dict[str, str]]:
@@ -1173,7 +1189,7 @@ def unreadable_documents() -> list[dict[str, str]]:
     """
     return [
         {"file": name, "target": target, "error": reason}
-        for name, target, reason in unreadable(_db_path())
+        for name, target, reason in unreadable(coverage_source())
     ]
 
 
@@ -1227,7 +1243,7 @@ def coverage_for(target: str) -> CoverageSnapshot:
     miss: a target id that IS the document's own spelling, which is every
     request on a case-sensitive host, never pays for it.
     """
-    snapshots = load_all(_db_path())
+    snapshots = load_all(coverage_source())
     snapshot = snapshots.get(target)
     if snapshot is None:
         wanted = target_key(target)
@@ -1237,6 +1253,12 @@ def coverage_for(target: str) -> CoverageSnapshot:
         )
     if snapshot is not None:
         return snapshot
+    failed = next(
+        (row for row in unreadable_documents() if target_key(row["target"]) == target_key(target)),
+        None,
+    )
+    if failed is not None:
+        raise CoverageTomlError(f"{target}: {failed['error']}")
     return CoverageSnapshot(
         target=target,
         version=0,
@@ -1293,7 +1315,7 @@ def known_schema_versions() -> list[str]:
     Pinned by ``tests/test_server.py::TestCoverageVersionGate``, which fails if
     a version the reader refuses can ever reach this list.
     """
-    return sorted({str(snap.version) for snap in load_all(_db_path()).values()})
+    return sorted({str(snap.version) for snap in load_all(coverage_source()).values()})
 
 
 def _if_none_match_matches(raw: str, etag: str) -> bool:
@@ -1411,14 +1433,14 @@ def _is_data_marker(fn: Any) -> bool:
 #: stopped reconciling with no error anywhere.  Reading the owner makes that
 #: state unreachable — a rebrew that renames the mapping fails this import
 #: loudly, where the copy failed quietly.
-#: ``_BUCKET_OF_STATE`` is underscore-named on rebrew's side and is read
+#: ``BUCKET_OF_STATE`` is underscore-named on rebrew's side and is read
 #: deliberately: it is the one place the fold exists, and
 #: ``tests/test_server.py`` (``TestBucketReconciliation``) pins what it holds
 #: against a literal written in the test.
 _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
     bucket: tuple(state for state, _ in grouped)
     for bucket, grouped in itertools.groupby(
-        sorted(_BUCKET_OF_STATE.items(), key=lambda pair: (pair[1], pair[0])),
+        sorted(BUCKET_OF_STATE.items(), key=lambda pair: (pair[1], pair[0])),
         key=itemgetter(1),
     )
 }
@@ -1651,7 +1673,12 @@ def _assets_dir() -> Path:
 
 
 def _project_dir() -> Path:
-    return Path.cwd().resolve()
+    from rebrew.workspace import WorkspaceNotFound, find_root
+
+    try:
+        return find_root()
+    except WorkspaceNotFound:
+        return Path.cwd().resolve()
 
 
 # ── DLL loading ────────────────────────────────────────────────────
@@ -1663,14 +1690,14 @@ DLL_LOCK = threading.Lock()
 #: state entries get cached under).  The rebuild broadcast empties DLL_DATA
 #: under the same lock and deliberately leaves this alone: the config did not
 #: change, so the next request reloads under a fingerprint that still matches.
-_DLL_CONFIG_MTIME: tuple[int, int] | None = None
+_DLL_CONFIG_MTIME: tuple[int, int, int, int] | None = None
 #: ``(mtime_ns, size, ino)`` of the binary each DLL_DATA entry was read from.
 #: A target in DLL_DATA with no entry here (a test filling the memo directly,
 #: or a cached "no binary") is never invalidated by a stamp.
-_DLL_STAMPS: dict[str, tuple[int, int, int]] = {}
+_DLL_STAMPS: dict[str, tuple[int, int, int, int]] = {}
 
 
-def _stamp_current(target: str, stamp: tuple[int, int, int] | None) -> bool:
+def _stamp_current(target: str, stamp: tuple[int, int, int, int] | None) -> bool:
     """Whether DLL_DATA's entry for *target* still describes the binary at *stamp*.
 
     Only a DIFFERENT stamp invalidates.  A binary that cannot be stat'ed (a
@@ -1683,7 +1710,7 @@ def _stamp_current(target: str, stamp: tuple[int, int, int] | None) -> bool:
     return stamp is None or recorded is None or recorded == stamp
 
 
-def binary_stamp(target: str) -> tuple[int, int, int] | None:
+def binary_stamp(target: str) -> tuple[int, int, int, int] | None:
     """``(mtime_ns, size, ino)`` of *target*'s original binary, None without one.
 
     The binary is an input of ``/asm``, ``/bytes`` and Potato's panels that no
@@ -1699,7 +1726,7 @@ def binary_stamp(target: str) -> tuple[int, int, int] | None:
         st = path.stat()
     except (OSError, ValueError):
         return None
-    return st.st_mtime_ns, st.st_size, st.st_ino
+    return st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns
 
 
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
@@ -1710,7 +1737,7 @@ _TOML_CONFIG_CACHE: dict[str, Any] | None = None
 #: coverage-document snapshot, the two inputs of the merge, so the memo
 #: self-invalidates on either.  The document half the rebuild broadcast
 #: already covered; the config half nothing did (see :func:`resolve_targets`).
-_ResolvedTargetsKey = tuple[tuple[int, int] | None, tuple[int, int] | None]
+_ResolvedTargetsKey = tuple[tuple[int, int, int, int] | None, tuple[int, int] | None]
 _RESOLVED_TARGETS_CACHE: tuple[_ResolvedTargetsKey, list[dict[str, str]]] | None = None
 _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
@@ -1792,7 +1819,7 @@ def request_log_fields(
     return {LOG_FIELDS_ATTR: context}
 
 
-_TOML_CACHE_MTIME: tuple[int, int] | None = None
+_TOML_CACHE_MTIME: tuple[int, int, int, int] | None = None
 
 #: The config-read failure this process last reported, or None while the config
 #: reads.  Set on the first failure and cleared on the first success, so a
@@ -1806,7 +1833,7 @@ _CONFIG_ERROR_LOCK = threading.Lock()
 _config_error_reported: str | None = None
 
 
-def _config_read_ok(fingerprint: tuple[int, int] | None) -> bool:
+def _config_read_ok(fingerprint: tuple[int, int, int, int] | None) -> bool:
     """Whether the project config was read successfully at *fingerprint*.
 
     True exactly when :data:`_TOML_CONFIG_CACHE` holds the memoized parse for
@@ -1882,11 +1909,11 @@ def _get_targets_config() -> dict[str, Any]:
 
         try:
             config = read_config(root)
-        except WorkspaceConfigError as exc:
+        except (WorkspaceConfigError, WorkspaceNotFound) as exc:
             # A present file that is not readable UTF-8 TOML. The shared
             # reader raises rather than returning {}: the defaults that
             # would fill in name a different workspace. Targets contributed
-            # by the file are dropped; an explicit RECOVERAGE_DB still serves.
+            # by the file are dropped; an explicit RECOVERAGE_SNAPSHOTS still serves.
             _log_config_error(_log_safe(str(exc)))
             return {}
         if toml_path.is_file() and not config:
@@ -1972,8 +1999,9 @@ def resolve_targets() -> list[dict[str, str]]:
     # ``clear_target_cache`` has already run never comes back to clear it: the
     # next build's target is missing from /api/targets, the dropdown and Potato
     # until the build after that.
+    portable = config.snapshot_override() is not None
     key: _ResolvedTargetsKey = (
-        config_fingerprint(_project_dir()),
+        None if portable else config_fingerprint(_project_dir()),
         _snapshot_db_mtime(),
     )
     with _RESOLVED_TARGETS_CACHE_LOCK:
@@ -1997,7 +2025,7 @@ def resolve_targets() -> list[dict[str, str]]:
         if cached is not None and cached[0] == key:
             return cached[1]
 
-        targets_info = _get_targets_config()
+        targets_info = {} if portable else _get_targets_config()
 
         # Config-declared targets come first and are always addressable, even
         # before their first build — "declared in the project config" is what
@@ -2018,7 +2046,7 @@ def resolve_targets() -> list[dict[str, str]]:
             {"id": tid, "name": tid} for tid in sorted(snapshots) if target_key(tid) not in declared
         ]
 
-        if _snapshot_db_mtime() == key[1] and _config_read_ok(key[0]):
+        if _snapshot_db_mtime() == key[1] and (portable or _config_read_ok(key[0])):
             _RESOLVED_TARGETS_CACHE = (key, targets_list)
         return targets_list
 
@@ -2080,8 +2108,8 @@ def _find_dll_path(target: str) -> Path | None:
 
 def _cache_dll_unavailable(
     target: str,
-    config_fp: tuple[int, int] | None,
-    stamp: tuple[int, int, int] | None,
+    config_fp: tuple[int, int, int, int] | None,
+    stamp: tuple[int, int, int, int] | None,
     warning: str,
     *args: object,
 ) -> bytes | None:
@@ -3888,13 +3916,15 @@ def _reject_broken_project_config() -> None:
     """Refuse a request when the project file is present but unreadable.
 
     Registered after the auth hook, so a missing token still answers 401.
-    ``_db_path`` raises ``WorkspaceConfigError`` for a present file that is
+    ``coverage_source`` raises ``WorkspaceConfigError`` for a present file that is
     not UTF-8 TOML; serving anyway would read ``db/``, which may be a
-    different project's coverage than the one the file named. ``RECOVERAGE_DB``
+    different project's coverage than the one the file named. ``RECOVERAGE_SNAPSHOTS``
     is applied first, so an explicit coverage directory still serves.
     """
     try:
-        _db_path()
+        coverage_source()
+    except WorkspaceNotFound:
+        return
     except WorkspaceConfigError as exc:
         _log.warning("recoverage: %s", exc)
         # "error" is the human message and every other 503 spells it the same
@@ -3903,7 +3933,7 @@ def _reject_broken_project_config() -> None:
             503,
             {
                 "error": "Database unavailable",
-                "detail": f"{CONFIG_NAME} cannot be read; fix the file or set RECOVERAGE_DB",
+                "detail": f"{CONFIG_NAME} cannot be read; fix the file or set RECOVERAGE_SNAPSHOTS",
             },
         ) from None
 
@@ -3939,8 +3969,8 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         503,
         {
             "error": "Database unavailable",
-            "detail": f"{type(exc).__name__}: run 'rebrew coverage build' to create or "
-            "rebuild the coverage documents; the server log names the file and the cause",
+            "detail": f"{type(exc).__name__}: inspect project inputs or explicit snapshots; "
+            "the server log names the cause",
         },
     )
 
@@ -3962,7 +3992,7 @@ def _handle_unexpected_error(error: Any) -> HTTPResponse:
     error page — while UI routes keep Bottle's HTML error page.
     """
     exc = getattr(error, "exception", None)
-    if isinstance(exc, CoverageTomlError):
+    if isinstance(exc, (CoverageTomlError, WorkspaceNotFound)):
         _reclassify_request(503)
         return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error
@@ -4043,7 +4073,7 @@ _CSP = (
 
 #: The two route prefixes whose responses are files out of the PROJECT tree
 #: rather than the dashboard's own documents (see ``recoverage.ui.serve_repo_file``).
-_REPO_FILE_PREFIXES: tuple[str, ...] = ("/src/", "/original/")
+_REPO_FILE_PREFIXES: tuple[str, ...] = ("/src/", "/original/", "/files/")
 
 #: Policy for a served project file.  It exists because those files carry a
 #: content type guessed from their own suffix, so an ``.html`` or an ``.svg``

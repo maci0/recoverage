@@ -628,18 +628,7 @@ export function encodePathSegments(path: string): string {
   return path.split("/").map((segment) => encodeUrlValue(segment)).join("/");
 }
 
-/** The URL of one file under an accepted `sourceRoot`. Both halves are encoded,
- * segment by segment, so a slash or a space survives the round trip and a
- * separator stays a separator.
- *
- * The root is encoded for the same reason the file is, and a `#` is what makes
- * that visible: a document whose `paths.sourceRoot` is `src/a#b` reached the
- * fetch as `src/a#b/a.c`, and the browser resolved the fragment away, so the
- * request went to `/src/a` and the source pane 404'd a file that is sitting on
- * disk. The same `#` inside a file name was already encoded to `%23`. One
- * encoder over the whole value is what stops the two halves disagreeing again;
- * a caller handing in a root it has already encoded double-encodes it, so the
- * fallback roots in `App.tsx` and `originalDllPath` are spelled raw. */
-export function sourceFileUrl(sourceRoot: string, file: string): string {
-  return `${encodePathSegments(sourceRoot)}/${encodePathSegments(file)}`;
+/** Target-scoped source URL; filesystem roots are resolved by the server. */
+export function sourceFileUrl(target: string, file: string): string {
+  return `/files/${encodeUrlValue(target)}/source/${encodePathSegments(file)}`;
 }

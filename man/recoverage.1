@@ -1,4 +1,4 @@
-.TH RECOVERAGE 1 "2026-10-08" "recoverage 6.1.0" "User Commands"
+.TH RECOVERAGE 1 "2026-10-08" "recoverage 7.0.0" "User Commands"
 .SH NAME
 recoverage \- coverage dashboard for binary-matching decompilation projects
 .SH SYNOPSIS
@@ -15,17 +15,18 @@ Any argument at all, including
 keeps its own meaning.
 .SH DESCRIPTION
 .B recoverage
-serves a local web dashboard that visualises per-byte match status across the
-sections of a decompilation target, reading rebrew's clear-text coverage
-documents
-.RI ( db/coverage\-<target>.toml ).
-The documents are written by
-.BR "rebrew coverage build" ,
-which
-.B recoverage regen
-and
-.B "recoverage serve \-\-regen"
-also run.
+serves a local dashboard from canonical Rebrew project metadata, source bindings,
+inventory, binaries and link evidence. Run inside the project; no generated
+coverage files or database configuration are required.
+.PP
+For portable offline viewing, set
+.B RECOVERAGE_SNAPSHOTS
+to the directory created by
+.BR "rebrew coverage export --output snapshots/" .
+Preserve old exported history with
+.B "rebrew coverage import-history --snapshots db/ --dry-run"
+and repeat without --dry-run before retiring exports. Status history lives in
+canonical function metadata. Keep configured inventory files even under db/.
 .PP
 .B serve
 stops on
@@ -62,19 +63,9 @@ Export coverage data to stdout as JSON, CSV or Markdown.
 Check coverage against a threshold (CI gate).
 .TP
 .B regen
-Rebuild the coverage documents in process, as
-.B "rebrew coverage build"
-does.
-Writes nothing to stdout: the progress line, the completion line and every
-error are status and go to stderr, so a script reads the outcome from the exit
-code.
-Exits 1 without running when another regen of the same project is already
-under way, in this process or another: two writers of one coverage document
-interleave rather than converge. Exits 2 when
-.I rebrew\-project.toml
-is missing or not readable as a project file: rebrew reads it before any of
-its own work, so nothing is rebuilt and the operator has to change something
-first.
+Refresh the live project view without generating files. Progress and errors go to
+stderr. Portable snapshots are read-only; unset RECOVERAGE_SNAPSHOTS to refresh a
+project. Normal reads detect input changes automatically.
 .TP
 .B open
 Open the dashboard in a browser. The address opened is the one the listener
@@ -319,14 +310,10 @@ A level name, or one of the numbers
 Any other number is refused at startup: a threshold no record clears would
 log nothing at all.
 .TP
-.B RECOVERAGE_DB
-The coverage directory to read, instead of resolving rebrew-project.toml from
-the working directory. A path that exists and is not a directory is refused at
-startup rather than resolving to a directory holding no coverage documents.
-rebrew resolves what a regen
-.B writes
-from rebrew-project.toml alone, so a regen under an override naming another
-directory is refused rather than run.
+.B RECOVERAGE_SNAPSHOTS
+Explicit portable/offline snapshot directory. Leave unset for live project reads;
+live services set their working directory inside the project. A file path is a
+configuration error. Backup and restore operate only on explicit portable exports.
 .TP
 .B RECOVERAGE_MAX_CONNECTIONS
 Cap on concurrent client connections. There is no flag for it: it sizes the
@@ -385,7 +372,7 @@ one that is not readable as a project file.
 .TP
 .I db/coverage\-<target>.toml
 The coverage documents, resolved through rebrew-project.toml unless
-.B RECOVERAGE_DB
+.B RECOVERAGE_SNAPSHOTS
 names another directory.
 They are the only durable state
 .B recoverage

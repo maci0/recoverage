@@ -463,7 +463,7 @@ def test_a_map_wider_than_the_screen_says_so(page: Any):
 
 
 def test_an_empty_project_shows_one_empty_state(page: Any):
-    """A project with no documents is one card, not a dashboard of dead parts.
+    """A project with no coverage is one card, not a dashboard of dead parts.
 
     The empty state used to sit among the filter pills, the legend, an empty
     section-tab frame and a detail panel offering Copy VA and Copy Symbol, all
@@ -476,7 +476,7 @@ def test_an_empty_project_shows_one_empty_state(page: Any):
         ),
     )
     page.goto(f"{BASE_URL}/")
-    expect(page.locator("#section-panel")).to_contain_text("No coverage documents yet")
+    expect(page.locator("#section-panel")).to_contain_text("No coverage available")
     expect(page.locator(".filter-btn")).to_have_count(0)
     expect(page.locator(".legend")).to_be_hidden()
     expect(page.locator(".tabs")).to_be_hidden()
@@ -502,7 +502,7 @@ def test_a_corrupt_only_document_is_named_not_an_empty_project(page: Any):
     card = page.locator("#section-panel [role=alert]")
     expect(card).to_contain_text("The coverage document could not be read")
     expect(card).to_contain_text("coverage-GAME.toml: malformed TOML (at line 3, column 11)")
-    expect(page.locator("#section-panel")).not_to_contain_text("No coverage documents yet")
+    expect(page.locator("#section-panel")).not_to_contain_text("No coverage available")
 
 
 def test_a_broken_document_beside_good_ones_is_named_over_the_map(page: Any):

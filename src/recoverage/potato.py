@@ -28,7 +28,7 @@ from bottle import HTTPResponse, SimpleTemplate
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 
 from recoverage import __version__
-from recoverage._paths import _db_path
+from recoverage._paths import coverage_source
 from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
@@ -1329,13 +1329,12 @@ def _db_unavailable_page(broken: Sequence[Mapping[str, str]]) -> HTTPResponse:
         )
         cause = (
             f"<p>No coverage document could be read:</p><ul>{items}</ul>"
-            "<p>Fix or remove the broken documents, or rebuild them with "
-            "'rebrew coverage build', then "
+            "<p>Fix the reported project inputs or selected offline snapshots, then "
         )
     else:
         cause = (
-            "<p>The coverage directory holds no document. Run "
-            "'rebrew coverage build' to write them, then "
+            "<p>No coverage is available. Check the project configuration and target binaries "
+            "or the selected offline snapshots, then "
         )
     return HTTPResponse(
         status=503,
@@ -1366,13 +1365,12 @@ def _no_data_page(target: str, error: str | None) -> str:
     no document: the two need different fixes, so the page names the one that
     applies.
     """
-    document = f"coverage-{target}.toml"
     if error is None:
-        cause = f"Run 'rebrew coverage build' to write <code>{_esc(document)}</code>, or pick"
+        cause = "Check the target configuration and binary, or pick"
     else:
         cause = (
-            f"<code>{_esc(document)}</code> cannot be read: {_esc(error)}. Fix it or "
-            "rebuild it with 'rebrew coverage build', or pick"
+            f"Coverage inputs for {_esc(target)} cannot be read: {_esc(error)}. "
+            "Fix the reported inputs, or pick"
         )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
@@ -1469,12 +1467,12 @@ def render_potato(parsed_url: ParseResult) -> str:
         _log.warning(
             "Potato mode: coverage unavailable at %s: %s: %s",
             # Both values are as untrusted as a request path: the directory
-            # comes from RECOVERAGE_DB or a project's db_dir, and the cause
+            # comes from RECOVERAGE_SNAPSHOTS or the working directory, and the cause
             # quotes a document the reader rejected.  This line mirrors
             # server._db_unavailable_err, which escapes both for the same
             # reason: a name carrying a newline would split the one entry an
             # operator reads to find the broken document.
-            _log_safe(str(_db_path())),
+            _log_safe(str(coverage_source())),
             type(exc).__name__,
             _log_safe(str(exc)),
             extra=request_log_fields(503, route="/potato"),
@@ -1486,7 +1484,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     # ONE frozen snapshot for the whole render.  A Potato page reads metadata,
     # sections, cells, functions, globals and (for the detail panels)
     # verify_results, and takes long enough doing it — the grid is the most
-    # expensive render in the package — that a `rebrew coverage build` committing
+    # expensive render in the package — that a metadata update or portable export committing
     # midway is a real window.  The snapshot's immutability is the pin the read
     # transaction used to provide: the page cannot pair one build's section rows
     # with the next build's cells.

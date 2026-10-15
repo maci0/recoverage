@@ -95,6 +95,7 @@ from conftest import (
     wsgi_request,
 )
 from coverage_fixture import (
+    TARGET,
     build_synthetic_coverage,
     cell,
     coverage_bytes,
@@ -102,7 +103,7 @@ from coverage_fixture import (
     render_coverage,
     write_coverage,
 )
-from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
+from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
 from typer.testing import CliRunner
 
 from recoverage import cli, config, devserver, potato
@@ -2013,7 +2014,7 @@ POTATO_FIELDS = (
 #: pattern, ``sort`` is matched against a whitelist dict, and ``view`` selects
 #: a whole render path, so each needs a seed that exercises its own parser.
 POTATO_QUERY_SEEDS: list[bytes] = [
-    b"target=" + (get_first_target().encode() or b"demo") + b"&section=.text&view=functions",
+    b"target=" + TARGET.encode() + b"&section=.text&view=functions",
     b"target=demo&section=.text&view=functions&status=EXACT&sort=name:ASC&page=2",
     b"target=demo&section=.data&view=functions&search=func",
     b"target=demo&section=.text&filter=E,M&view=functions",
@@ -2390,10 +2391,10 @@ def search_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSn
         },
         functions=_SEARCH_FUNCTIONS,
     )
-    # RECOVERAGE_DB names the coverage directory itself, which is what lets the
+    # RECOVERAGE_SNAPSHOTS names the coverage directory itself, which is what lets the
     # corpus live outside a rebrew project.
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
-    return load_coverage(tmp_path, SEARCH_TARGET)
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
+    return load_coverage_from(tmp_path / "db", SEARCH_TARGET)
 
 
 def _fold(value: str | None) -> str:
@@ -3938,7 +3939,7 @@ class TestCoverageDocumentContents:
     def _install(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         directory = tmp_path / "db"
         directory.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         return directory / f"coverage-{_DOC_TARGET}.toml"
 
     def _assert_response(
@@ -4173,7 +4174,7 @@ class TestFunctionVaSegment:
             globals_=VA_GLOBALS,
             verify_results=[{"va": 0x10001000, "match": True, "similarity": 0.5}],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         _clear_derived_caches()
 
     def test_a_va_spelling_resolves_to_the_documented_row(self) -> None:
@@ -4321,7 +4322,7 @@ class TestCliRendersHostileDocumentValues:
                 # there can carry this target name.
                 continue
             rounds_run += 1
-            monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+            monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
             self._install(directory, target, section)
             for argv in CLI_COMMANDS:
                 try:
@@ -4566,7 +4567,7 @@ class TestProjectConfigDocument:
     def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         """A project directory holding a build and nothing else.
 
-        ``RECOVERAGE_DB`` names the documents so the coverage half of every
+        ``RECOVERAGE_SNAPSHOTS`` names the documents so the coverage half of every
         memo is stable across rounds; the config under test is the file the
         campaign rewrites, and ``_project_dir`` is what rebrew's reader resolves
         it against.
@@ -4574,7 +4575,7 @@ class TestProjectConfigDocument:
         monkeypatch.chdir(tmp_path)
         root = tmp_path.resolve()
         monkeypatch.setattr(srv, "_project_dir", lambda: root)
-        monkeypatch.setenv("RECOVERAGE_DB", str(root / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(root / "db"))
         build_synthetic_coverage(root / "db")
         _clear_derived_caches()
         return root
@@ -4632,7 +4633,7 @@ class TestProjectConfigDocument:
             label="TestProjectConfigDocument.test_a_corrupt_config_never_crashes_a_reader",
         )
 
-    def test_a_declared_target_reaches_every_reader_intact(
+    def test_offline_targets_ignore_project_config_and_binary_paths_stay_contained(
         self, project: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The pair assertions, both sides of the config boundary.
@@ -4685,13 +4686,9 @@ class TestProjectConfigDocument:
         assert isinstance(served, list), f"/api/targets: no target list: {payload!r}"
         served_ids = {entry.get("id") for entry in served if isinstance(entry, dict)}
         if int(status.split()[0]) == 200:
-            # A config the reader accepted declares these; the payload is where
-            # the SPA's every link resolves the id.
-            for tid in ids:
-                assert tid in served_ids, (
-                    f"a declared target id is missing from /api/targets: {tid!r} "
-                    f"in {sorted(map(str, served_ids))!r}"
-                )
+            assert served_ids == {TARGET}, (
+                f"offline targets changed with incidental config: {served_ids!r}"
+            )
         for entry in served:
             if not isinstance(entry, dict):
                 continue
@@ -5663,7 +5660,7 @@ class TestPersistedParseCache:
 
         directory = tmp_path / "db"
         directory.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         document = write_coverage(directory, _CACHE_TARGET, _DOC_SECTIONS)
         trusted = load_coverage_from(directory, _CACHE_TARGET)
 

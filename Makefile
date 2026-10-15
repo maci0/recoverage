@@ -95,9 +95,8 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it has no
-# rebrew.metadata.bindings or rebrew.metadata.functions, which the server
-# imports (source bindings and the function store moved there in 3.0.0).
-REBREW_FLOOR ?= 3.0.0
+# rebrew.coverage_project, which owns live accounting and canonical history.
+REBREW_FLOOR ?= 4.1.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and

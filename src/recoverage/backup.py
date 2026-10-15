@@ -1,16 +1,11 @@
 """Verified backup and restore of the coverage documents.
 
-The coverage directory is the only durable state this package has.  Everything
-else is derived: the parse cache under ``$XDG_CACHE_HOME`` is rebuilt from a
-document on first read, the in-process memos die with the process, and rebrew's
-catalog outputs are recomputed by the next ``regen``.  The documents themselves
-are NOT derivable, because rebrew's ``write_coverage_toml`` is a read-modify-
-write over the previous document: ``history`` carries the cumulative status
-delta chain forward from the last build, and ``verify_results`` carries the
-measured verdicts forward.  Both come from the file being overwritten, not from
-the source tree, so a regen over a directory whose documents were lost rebuilds
-the current facts and loses both arrays for good.  That makes the document set
-the thing to back up, and it is what this module backs up.
+These helpers archive explicitly selected portable exports. Canonical project
+identities, verdicts, history and verification belong to Rebrew's metadata owners
+and project backups; these helpers never overwrite those stores. Archives retain
+only their exported facts and evidence, not the original source/binary inputs.
+Preserve old exported history through ``rebrew coverage import-history`` before
+retiring exports. Portable parse caches and process memos are derived data.
 
 Four properties the format has, and why each is here:
 
@@ -28,8 +23,8 @@ Four properties the format has, and why each is here:
 * **A restore will not roll coverage backwards silently.**  It refuses, before
   writing anything, when a document already in the coverage directory differs
   from the one the archive holds unless the caller passes ``force``.  Restoring
-  a month-old archive over a tree that has been rebuilt since throws away every
-  status transition since, and ``regen`` cannot bring them back.
+  an old archive replaces differing offline facts; canonical live verdicts and
+  history are outside this operation.
 * **The archive is plain tar.**  Documents and manifest, uncompressed, member
   order fixed, POSIX ``PAX`` format, so ``tar -tf`` lists it and an operator
   reaches into it with the tools they already have.
@@ -300,7 +295,8 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     if not members:
         raise BackupError(
             f"no {COVERAGE_GLOB} document in {db_dir}; nothing to back up. "
-            "Run 'rebrew coverage build' (or 'recoverage regen') first."
+            "Run 'rebrew coverage export --output <directory>' first, then select that "
+            "directory with RECOVERAGE_SNAPSHOTS."
         )
     created = _created_stamp()
     manifest = _manifest(members, created)

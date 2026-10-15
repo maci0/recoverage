@@ -25,7 +25,7 @@ from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
 
 from recoverage import clock, config
-from recoverage._paths import _db_path
+from recoverage._paths import coverage_source
 from recoverage.devserver import (
     _KeepAliveRequestHandler,
     _server_class_for,
@@ -45,7 +45,7 @@ _HELP_EXAMPLES: tuple[tuple[str, str], ...] = (
     ("recoverage stats", "coverage per section, as a table"),
     ("recoverage export -f csv > cov.csv", "the same rows as CSV"),
     ("recoverage check --min-coverage 50", "CI gate: exit 1 below 50%"),
-    ("recoverage regen", "rebuild the coverage documents"),
+    ("recoverage regen", "refresh the live view"),
     ("recoverage open", "open the running dashboard"),
     ("recoverage config", "what serve would start with"),
 )
@@ -67,10 +67,9 @@ app = typer.Typer(
             for command, comment in _HELP_EXAMPLES
         )
         + "\n\n[bold]Prerequisites:[/bold]\n\n"
-        "  Run [dim]rebrew coverage build[/dim] first to create "
-        "db/coverage-*.toml.\n\n"
-        f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "
-        f"for every command). Serves the dashboard at "
+        "  Run inside a Rebrew project to read canonical metadata directly.\n\n"
+        f"[dim]RECOVERAGE_SNAPSHOTS selects portable offline exports. "
+        f"Serves the dashboard at "
         f"http://localhost:{config.DEFAULT_PORT}.[/dim]"
     ),
 )
@@ -293,7 +292,7 @@ _MD_PIPE = "\\|"
 
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
-_REBUILD_HINT = "(run 'rebrew coverage build' to rebuild it)"
+_REBUILD_HINT = "(inspect project inputs or RECOVERAGE_SNAPSHOTS)"
 
 #: The spellings a path argument ends with to name a directory.
 _PATH_SEPARATORS = tuple(sep for sep in (os.sep, os.altsep, "/") if sep)
@@ -442,7 +441,7 @@ class _ServeConfig(NamedTuple):
     #: is not installed.
     cors_origins_requested: list[str]
     token: str | None
-    db: Path | None
+    snapshots: Path | None
     log_level: int
     max_connections: int
     client_timeout: int
@@ -476,10 +475,10 @@ def _resolve_serve_config(
         # the server will run with rather than in a second pass beside it.
         resolved_cors = config.cors() if cors is None else cors
         requested_origins = config.cors_origins() if cors_origin is None else list(cors_origin)
-        # A RECOVERAGE_DB that is not a directory is a startup error, not a
+        # A RECOVERAGE_SNAPSHOTS that is not a directory is a startup error, not a
         # resolved path: the coverage glob matches nothing, and the dashboard
         # then serves an empty target list that reads as a healthy zero.
-        config.check_db_override()
+        config.check_snapshot_override()
         resolved = _ServeConfig(
             port=config.port() if port is None else _checked_port(port),
             # validate_bind, not the raw flag: one setting, two sources, and
@@ -494,11 +493,11 @@ def _resolve_serve_config(
                 if token is None
                 else config.validate_token(token, "--token")
             ),
-            # Read for validation only; _db_path() resolves the value again.
-            # check_db_override, not db_override alone: a RECOVERAGE_DB naming
+            # Read for validation only; coverage_source() resolves the value again.
+            # check_snapshot_override, not snapshot_override alone: a RECOVERAGE_SNAPSHOTS naming
             # a file resolves to a path no glob can match, which serves an
             # empty target list rather than an error.
-            db=config.db_override(),
+            snapshots=config.snapshot_override(),
             log_level=(
                 config.log_level() if log_level is None else config.parse_log_level(log_level)
             ),
@@ -543,20 +542,20 @@ def _check_env_or_exit() -> None:
     """Validate the RECOVERAGE_* environment, exiting 2 on the first bad value.
 
     `serve` runs the full merge through :func:`_resolve_serve_config`; the
-    other commands read the environment directly (through `_db_path`), where
-    a misspelled name is a silent no-op and an empty ``RECOVERAGE_DB`` escapes
+    other commands read the environment directly (through `coverage_source`), where
+    a misspelled name is a silent no-op and an empty ``RECOVERAGE_SNAPSHOTS`` escapes
     as a raw ConfigError traceback.  Both are the same fail-fast contract,
     so every command applies it before it consumes a setting.
     """
     try:
         config.check_unknown_vars()
-        config.check_db_override()
+        config.check_snapshot_override()
     except config.ConfigError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
 
 
-def _db_path_or_exit(*, json_output: bool = False) -> Path:
+def coverage_source_or_exit(*, json_output: bool = False) -> Path:
     """Resolve the coverage directory, exiting 2 when the project file is broken.
 
     A missing ``rebrew-project.toml`` still resolves to ``db/``.  A file that is
@@ -564,11 +563,11 @@ def _db_path_or_exit(*, json_output: bool = False) -> Path:
     that from becoming a traceback, and from silently reading a different
     project's coverage.
     """
-    from rebrew.workspace import WorkspaceConfigError
+    from rebrew.workspace import WorkspaceConfigError, WorkspaceNotFound
 
     try:
-        return _db_path()
-    except WorkspaceConfigError as exc:
+        return coverage_source()
+    except (WorkspaceConfigError, WorkspaceNotFound) as exc:
         _fail(f"Error: {exc}", str(exc), 2, json_output)
 
 
@@ -585,13 +584,14 @@ def _load_coverage_or_exit(
     from recoverage.server import _log_safe, coverage_snapshots, unreadable_documents
 
     _check_env_or_exit()
-    p = _db_path_or_exit(json_output=json_output)
-    if not any(p.glob(COVERAGE_GLOB)):
+    p = coverage_source_or_exit(json_output=json_output)
+    if config.snapshot_override() is not None and not any(p.glob(COVERAGE_GLOB)):
         _fail(
             # The fix, not only the fault: the two ways a directory comes to
             # hold no document are an unbuilt project and a wrong directory.
             f"Error: coverage not found at {p} (no coverage-*.toml there). Run "
-            "'rebrew coverage build' in the project, or set RECOVERAGE_DB to the "
+            "'rebrew coverage export --output snapshots/' in the project, or set "
+            "RECOVERAGE_SNAPSHOTS to the "
             "directory that holds the documents.",
             f"coverage not found at {p}",
             missing_exit_code,
@@ -612,7 +612,7 @@ def _load_coverage_or_exit(
             it = "it" if len(broken) == 1 else "them"
             _fail(
                 f"Error: no coverage document in {p} could be read:\n{lines}\n"
-                f"Fix or remove {it}, or rebuild {it} with 'rebrew coverage build'.",
+                f"Fix the reported inputs or selected offline snapshots ({it}).",
                 f"cannot read coverage: {exc}",
                 2,
                 json_output,
@@ -628,7 +628,7 @@ def _load_coverage_or_exit(
         )
 
 
-def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
+def _select_targets(target: str | None, known: list[str], *, json_output: bool) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
     Named apart from ``server.resolve_targets`` (the webapp's coverage+config
@@ -648,9 +648,8 @@ def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
     then names the target by the id the coverage data carries, which is the one
     that names the file it came from.
     """
-    from recoverage.server import db_target_ids, target_key
+    from recoverage.server import target_key
 
-    known = db_target_ids()
     if target is None:
         return known
     wanted = target_key(target)
@@ -677,7 +676,22 @@ def _open_targets(
     keep their historical 1.
     """
     snapshots = _load_coverage_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
-    targets = _select_targets(target, json_output=json_output)
+    from recoverage.server import target_key, unreadable_documents
+
+    failed = [
+        row
+        for row in unreadable_documents()
+        if target is None or target_key(row["target"]) == target_key(target)
+    ]
+    if failed:
+        details = "; ".join(f"{row['target']}: {row['error']}" for row in failed)
+        _fail(
+            f"Error: coverage inputs could not be read: {details}",
+            f"coverage inputs could not be read: {details}",
+            2,
+            json_output,
+        )
+    targets = _select_targets(target, sorted(snapshots), json_output=json_output)
     if not targets:
         # Same class as "no document": the coverage set is there and yields no
         # target, so it is the infrastructure error *missing_exit_code* names,
@@ -711,14 +725,11 @@ def _get_stats(
         )
 
 
-def _run_regen(root: Path) -> list[Path]:
+def _run_regen(root: Path) -> None:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
     from rebrew.config import ConfigError as RebrewConfigError
 
     from recoverage.regen import (
-        RegenBusyError,
-        RegenDbMismatchError,
-        RegenDbUnresolvableError,
         RegenError,
         run_regen,
     )
@@ -726,39 +737,21 @@ def _run_regen(root: Path) -> list[Path]:
     # Progress, not data: stderr, like every failure this function reports, so
     # `recoverage regen` in a pipeline and `serve --regen`'s banner keep stdout
     # for the data they do carry.
-    _secho("Regenerating coverage documents...", err=True)
+    _secho("Refreshing live coverage...", err=True)
     try:
         return run_regen(root)
     except RebrewConfigError as e:
         # A missing or malformed rebrew-project.toml.  rebrew's load_config
         # runs before any of its own work, so the pipeline never started and
         # the operator has to change something first: the same misconfiguration
-        # (exit 2) and the same bare message _db_path_or_exit gives the read
+        # (exit 2) and the same bare message coverage_source_or_exit gives the read
         # commands for this exact file, instead of the class name and the
         # regen-failed 1 the generic arm below reported.
         _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
-    except (RegenDbMismatchError, RegenDbUnresolvableError) as e:
-        # A setting this package reads and rebrew cannot honour (the mismatch),
-        # or a coverage directory neither could resolve (the sibling), which is
-        # the same answer from here: rebrew never ran and the operator has to
-        # change something first. Exit 2, the misconfiguration code `config`
-        # uses, not the regen-failed 1.
-        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
-    except RegenBusyError as e:
-        # Another PROCESS is rebuilding the same documents (a dashboard
-        # running beside this terminal, a cron job over the same tree). Not
-        # misconfiguration and not a rebrew failure, so it is the regen-failed
-        # 1, but with a message saying the work is already under way: a second
-        # writer of one document interleaves with the first rather than
-        # producing the same bytes, so this one is refused rather than run.
-        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
-    except RegenError:
-        # rebrew's error_exit reported the failure itself; run_regen carried
-        # that across as RegenError.  Keep the exit-1 contract.
-        raise typer.Exit(1) from None
+    except RegenError as exc:
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(exc.exit_code) from None
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.
         _secho(
@@ -1217,18 +1210,18 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
     return warnings
 
 
-def _db_warnings(db: Path | None) -> list[str]:
+def _snapshot_warnings(db: Path | None) -> list[str]:
     """The coverage directory this process will read nothing from, as warnings.
 
     Not fatal, and deliberately not the same rule as
-    :func:`config.check_db_override`: a directory that does not exist yet is a
+    :func:`config.check_snapshot_override`: a directory that does not exist yet is a
     normal state for a checkout that has not been built, while one that is a
     file can never hold documents and is refused before the listener binds.
     What both share is the consequence, and it is silent: ``db_target_ids``
     answers an empty list for an absent or empty directory, so the dashboard
     renders zero targets and every served figure reads as a healthy zero. The
     likeliest cause is a service started from a directory that is not the
-    project root (``RECOVERAGE_DB`` names the right one), and the only clue
+    project root (``RECOVERAGE_SNAPSHOTS`` names the right one), and the only clue
     today is a map with nothing on it.
 
     Returned rather than printed so ``serve`` and ``recoverage config`` warn
@@ -1238,31 +1231,15 @@ def _db_warnings(db: Path | None) -> list[str]:
     request path already answers it as a 503 naming the file, and this runs
     before any of that.
     """
-    from rebrew.workspace import WorkspaceConfigError
-
-    from recoverage._paths import _db_path
-
-    try:
-        path = db if db is not None else _db_path()
-    except (OSError, WorkspaceConfigError):
+    if db is None:
         return []
-    if not path.exists():
-        state = f"the coverage directory {path} does not exist"
-    elif not path.is_dir():
-        # config.check_db_override refuses this one at startup; a warning here
-        # would only repeat a refusal `serve` has already exited on.
-        return []
-    elif any(path.glob(COVERAGE_GLOB)):
+    if not db.exists():
+        state = f"the snapshot directory {db} does not exist"
+    elif not db.is_dir() or any(db.glob(COVERAGE_GLOB)):
         return []
     else:
-        state = f"no coverage-*.toml in {path}"
-    return [
-        (
-            f"warning: {state}; the dashboard will list no targets until 'rebrew coverage build' "
-            "writes one. If this is a service, check RECOVERAGE_DB and the directory serve "
-            "was started from."
-        )
-    ]
+        state = f"no coverage-*.toml in {db}"
+    return [f"warning: {state}; check RECOVERAGE_SNAPSHOTS."]
 
 
 def _ack_warnings(bind: str, allow_remote: bool) -> list[str]:
@@ -1438,7 +1415,7 @@ def serve(
     ),
     no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser automatically"),
     regen: bool = typer.Option(
-        False, "--regen", help="Regenerate the coverage documents before starting"
+        False, "--regen", help="Refresh the live coverage view before starting"
     ),
     cors: bool | None = typer.Option(
         None,
@@ -1477,7 +1454,7 @@ def serve(
     Every setting flag also reads a RECOVERAGE_* environment variable, used as
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
-    RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage directory,
+    RECOVERAGE_LOG_LEVEL and RECOVERAGE_SNAPSHOTS (an explicit coverage directory,
     instead of resolving rebrew-project.toml from the working directory, and
     read by every command rather than by serve alone), plus
     RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
@@ -1556,7 +1533,7 @@ def serve(
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _ack_warnings(bind, allow_remote):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
-    for warning in _db_warnings(resolved.db):
+    for warning in _snapshot_warnings(resolved.snapshots):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     # IPv6 hosts need brackets in any URL spelling (a bare "::1" leaves
     # urlsplit with no hostname and a ".port" that raises).
@@ -1617,7 +1594,7 @@ def serve(
         cors=cors,
         cors_origin=resolved.cors_origins,
         token=token,
-        db=resolved.db,
+        snapshots=resolved.snapshots,
         log_level=resolved.log_level,
         max_connections=resolved.max_connections,
         client_timeout=resolved.client_timeout,
@@ -1632,7 +1609,7 @@ def serve(
     )
     # The coverage directory is resolved now, so a bad one still fails before
     # the bind; the banner itself waits for the listener (devserver.on_listening).
-    coverage = _db_path_or_exit()
+    coverage = coverage_source_or_exit()
     on_listening(
         lambda: _echo_banner(
             url=url,
@@ -2238,40 +2215,18 @@ def check(
 
 @app.command()
 def regen(no_color: bool = _no_color_option()) -> None:
-    """Regenerate coverage documents from the project.
+    """Refresh the live project view without generating files.
 
-    Writes nothing to stdout: the progress line, the completion line and every
-    error are status, and status goes to stderr, so a caller reads the report
-    from the exit code alone. Exits 2 when RECOVERAGE_DB names a directory
-    rebrew would not write to (the mismatch is refused rather than reported
-    as a done regen that left the dashboard stale) or when
-    rebrew-project.toml is missing or not readable as a project file (rebrew
-    reads it before any of its own work, so nothing is rebuilt), 1 when
-    rebrew fails or another process already holds this project's regen lock,
-    and 0 when it succeeds, whether or not it had a built target to write.
+    Progress and errors go to stderr. Portable snapshots are read-only;
+    unset RECOVERAGE_SNAPSHOTS to refresh a project.
     """
     from recoverage.server import _project_dir
 
     _use_utf8_stdout()
-    # `_run_regen` prints its failures to stderr and they carry the coverage
-    # directory, so this command needs the stderr arm `serve` and
-    # `recoverage config` both take before the logging filter is installed.
     _use_utf8_stderr()
     _check_env_or_exit()
-    written = _run_regen(_project_dir())
-    if written:
-        _secho(
-            f"Done: {_counted(len(written), 'coverage document', 'coverage documents')} "
-            f"written to {written[0].parent}.",
-            fg=typer.colors.GREEN,
-            err=True,
-        )
-    else:
-        _secho(
-            "Done: rebrew wrote no coverage documents (no built targets).",
-            fg=typer.colors.GREEN,
-            err=True,
-        )
+    _run_regen(_project_dir())
+    _secho("Done: live coverage refreshed.", fg=typer.colors.GREEN, err=True)
 
 
 @app.command()
@@ -2291,12 +2246,10 @@ def backup(
 ) -> None:
     """Copy every coverage document into one archive, then read it back.
 
-    The coverage documents are this package's only durable state, and two of
-    the arrays inside them cannot be rebuilt: rebrew carries the cumulative
-    status history and the verify results forward from the previous document
-    on every write, so a regen over a directory whose documents were lost
-    produces the current facts and nothing else. This command is the backup
-    those documents had no other way to get.
+    Requires RECOVERAGE_SNAPSHOTS to select portable exports. Canonical project
+    metadata and history belong to Rebrew and are never backed up or overwritten
+    by this command. Preserve older exported history with coverage import-history
+    before retiring its original snapshots.
 
     Every archive is verified before this command reports success: each
     member's bytes are read back and checked against the manifest, so a
@@ -2319,6 +2272,14 @@ def backup(
     _use_utf8_stdout()
     _use_utf8_stderr()
     _check_env_or_exit()
+    if config.snapshot_override() is None:
+        _secho(
+            "Error: select portable exports with RECOVERAGE_SNAPSHOTS. "
+            "Project metadata is managed by Rebrew.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
     destination = Path(to).expanduser() if to else None
     if to and destination is not None and to.endswith(_PATH_SEPARATORS):
         # "--to backups/" names a directory, but Path drops the separator, and
@@ -2330,7 +2291,7 @@ def backup(
             _secho(f"Error: cannot create {destination}: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from exc
     try:
-        info = write_backup(_db_path(), destination)
+        info = write_backup(coverage_source(), destination)
     except BackupError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
@@ -2395,22 +2356,29 @@ def restore(
     refusal only: a corrupt archive, a member that is not a coverage document
     and an unreadable file are refused either way.
 
-    Run 'recoverage regen' (or restart the server) after a restore, so the
-    served snapshots and ETags follow the restored bytes.
+    Requires RECOVERAGE_SNAPSHOTS. Offline readers detect restored files
+    automatically; regen is a live-project operation and refuses offline mode.
     """
     from recoverage.backup import BackupError, restore_backup
 
     _use_utf8_stdout()
     _use_utf8_stderr()
     _check_env_or_exit()
+    if config.snapshot_override() is None:
+        _secho(
+            "Error: select portable exports with RECOVERAGE_SNAPSHOTS.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
     try:
-        written = restore_backup(Path(archive).expanduser(), _db_path(), force=force)
+        written = restore_backup(Path(archive).expanduser(), coverage_source(), force=force)
     except BackupError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
     _secho(
         f"Restored {_counted(len(written), 'document', 'documents')} to "
-        f"{written[0].parent if written else _db_path()}.",
+        f"{written[0].parent if written else coverage_source()}.",
         fg=typer.colors.GREEN,
         err=True,
     )
@@ -2539,7 +2507,7 @@ def config_cmd(
         cors=resolved.cors,
         cors_origin=resolved.cors_origins,
         token=resolved.token,
-        db=resolved.db,
+        snapshots=resolved.snapshots,
         log_level=resolved.log_level,
         max_connections=resolved.max_connections,
         client_timeout=resolved.client_timeout,
@@ -2553,7 +2521,7 @@ def config_cmd(
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _ack_warnings(resolved.bind, resolved.allow_remote):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
-    for warning in _db_warnings(resolved.db):
+    for warning in _snapshot_warnings(resolved.snapshots):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
     if refusal is not None:

@@ -40,7 +40,7 @@ def _sections(size: int) -> dict[str, dict[str, Any]]:
 @pytest.fixture
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = coverage_dir(tmp_path)
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
     monkeypatch.setattr(documents, "_STATE", None)
     metrics.CACHES.reset()
     write_coverage(directory, "GAME", _sections(64))
@@ -206,7 +206,7 @@ def test_the_cache_keeps_the_most_recently_used_slots(
     directories = [coverage_dir(tmp_path, name) for name in ("a", "b", "c")]
     for directory in directories:
         write_coverage(directory, "GAME", _sections(64))
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         server.coverage_snapshots()
         # Age every slot already written, so recency is ordered even on a
         # filesystem whose mtime is coarser than this loop.
@@ -220,7 +220,7 @@ def test_the_cache_keeps_the_most_recently_used_slots(
 
     # The oldest directory's slot is the one that went: its next start parses.
     _restart(monkeypatch)
-    monkeypatch.setenv("RECOVERAGE_DB", str(directories[0]))
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directories[0]))
     server.coverage_snapshots()
     assert _document_cache() == {"hits": 0, "misses": 1}
 

@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 from conftest import HAS_DB, decode_body, wsgi_get, wsgi_post
-from rebrew.coverage_toml import _snapshot as rebrew_snapshot
+from rebrew.coverage_toml import snapshot_from_document as rebrew_snapshot
 
 from recoverage import api, documents, metrics
 from recoverage import server as _server

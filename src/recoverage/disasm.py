@@ -38,7 +38,7 @@ _DEFAULT_WIDTH_BITS = 32
 #: disassembly memo is keyed on so a rebuilt binary that changed architecture is
 #: decoded at the new one's width rather than the previous one's.
 _WIDTH_LOCK = threading.Lock()
-_WIDTH_MEMO: dict[tuple[int, int, int], int] = {}
+_WIDTH_MEMO: dict[tuple[int, int, int, int], int] = {}
 _WIDTH_MEMO_MAX = 64
 
 #: How much of the file the container headers live in.  ELF is trivially
@@ -314,7 +314,7 @@ _DISASSEMBLY_MEMO_MAX = 128
 
 @functools.lru_cache(maxsize=_DISASSEMBLY_MEMO_MAX)
 def _disassemble_loaded(
-    va: int, size: int, file_offset: int, target: str, stamp: tuple[int, int, int] | None
+    va: int, size: int, file_offset: int, target: str, stamp: tuple[int, int, int, int] | None
 ) -> str:
     """Cached disassembly; :func:`get_disassembly` verified the DLL loads.
 

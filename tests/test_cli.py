@@ -130,8 +130,8 @@ class TestColorOptOut:
             (["open", "--port", "99999"], {}),
             (["serve", "--port", "99999"], {}),
             # `stats` validates the environment through _check_env_or_exit;
-            # an empty RECOVERAGE_DB is the one setting every command reads.
-            (["stats"], {"RECOVERAGE_DB": ""}),
+            # an empty RECOVERAGE_SNAPSHOTS is the one setting every command reads.
+            (["stats"], {"RECOVERAGE_SNAPSHOTS": ""}),
         ],
         ids=["open-port", "serve-config", "bad-environment"],
     )
@@ -269,12 +269,12 @@ class TestRebuildAdvice:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         prerequisites = result.output.split("Prerequisites:")[1]
-        assert "rebrew coverage build" in prerequisites
+        assert "canonical metadata" in " ".join(prerequisites.split())
         assert "rebrew catalog" not in prerequisites
 
     def test_the_database_error_hint_names_only_build_db(self) -> None:
         assert "rebrew catalog" not in cli._REBUILD_HINT
-        assert "rebrew coverage build" in cli._REBUILD_HINT
+        assert "project inputs" in cli._REBUILD_HINT
 
 
 class TestBareInvocationServes:
@@ -775,7 +775,7 @@ class TestRegenCommand:
         assert result.exit_code == 0
         assert result.stdout_bytes == b""
         err = result.stderr_bytes.decode()
-        assert "Regenerating coverage documents" in err
+        assert "Refreshing live coverage" in err
         assert "Done" in err
 
 
@@ -805,7 +805,7 @@ def _write_sections(
     reads rebrew's ``coverage-*.toml`` now, so a test-local fixture is a
     directory of documents rather than a scratch ``coverage.db``.  *directory*
     comes from :func:`_coverage_dir`, and the caller points the CLI at it with
-    ``monkeypatch.setenv("RECOVERAGE_DB", str(directory))``.
+    ``monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))``.
     """
     definitions: dict[str, dict[str, Any]] = {
         name: {"size": 100, "unitBytes": 16, "columns": 8, "cells": []} for name in sections
@@ -859,7 +859,7 @@ class TestCheckCommand:
             [".text"],
             [(".text", 0, 999_997, "exact"), (".text", 999_997, 1_000_000, "none")],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(near))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(near))
         result = runner.invoke(app, ["check", "--min-coverage", "100", "--json"])
         assert result.exit_code == 1
         payload = json.loads(result.output)
@@ -875,7 +875,7 @@ class TestCheckCommand:
             [".text"],
             [(".text", 0, 875, "exact"), (".text", 875, 1_000, "none")],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(exact))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(exact))
         result = runner.invoke(app, ["check", "--min-coverage", "87.5", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
@@ -934,7 +934,7 @@ class TestCheckCommand:
             [(".text", 0, 50, "exact"), (".text", 50, 100, "none"), (".data", 0, 100, "none")],
         )
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         # Untracked .data must be skipped; .text (50%) is still evaluated.
         result = runner.invoke(app, ["check", "--min-coverage", "50"])
         assert result.exit_code == 0
@@ -949,7 +949,7 @@ class TestCheckCommand:
         untracked = _coverage_dir(tmp_path, "untracked")
         _write_sections(untracked, [".text"], [(".text", 0, 100, "none")])
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(untracked))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(untracked))
         result = runner.invoke(app, ["check", "--min-coverage", "0"])
         assert result.exit_code == 1
         assert "nothing was checked" in result.output
@@ -961,6 +961,7 @@ class TestCheckCommand:
 class TestExportNoDb:
     def test_export_missing_db_exits(self, tmp_path, monkeypatch) -> None:
         """Running export from a directory without coverage.db should fail gracefully."""
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["export", "--format", "json"])
         assert result.exit_code == 1
@@ -999,7 +1000,7 @@ class TestExportCsvFormulaInjection:
         """Export a one-section document as CSV; return the parsed rows."""
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [section], [(section, 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
@@ -1066,7 +1067,7 @@ class TestExportCsvStdoutEncoding:
 
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [section], [(section, 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         sink = io.BytesIO()
         real_stdout = sys.stdout
@@ -1093,7 +1094,7 @@ class TestExportCsvStdoutEncoding:
         section = "sec\ntion"
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [section], [(section, 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         sink = io.BytesIO()
         wrapper = io.TextIOWrapper(sink, encoding="utf-8", newline="\r\n")
         monkeypatch.setattr(sys, "stdout", wrapper)
@@ -1149,7 +1150,7 @@ class TestExportCsvStdoutEncoding:
 
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         buffer = self._FailingBuffer()
         real_stdout = sys.stdout
@@ -1184,7 +1185,7 @@ class TestExportCsvStdoutEncoding:
 
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         buffer = self._FailingBuffer()
         real_stdout = sys.stdout
@@ -1214,7 +1215,7 @@ class TestExportCsvStdoutEncoding:
 
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         real_stdout = sys.stdout
         wrapper = io.TextIOWrapper(self._ClosedPipe(), encoding="utf-8", errors="strict")
@@ -1271,7 +1272,7 @@ class TestStatsNullSectionSize:
         # .bss shape: a cell to report and no va/size/fileOffset at all.
         write_coverage(directory, FIXTURE_TARGET, {".bss": {"cells": [cell(0, 16, "none")]}})
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
         assert ".bss" in result.output
@@ -1299,10 +1300,10 @@ class TestUnreadableCoverageCleanExit:
             'version = 1\ntarget = "T"\nsections = "not a table"\n', encoding="utf-8"
         )
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 2
-        assert "rebuild" in result.output
+        assert "Fix the reported inputs" in result.output
         # The unreadable document must surface as the clean exit 2 above, not
         # as a leaked reader error riding out through the runner.
         assert "Traceback" not in result.output
@@ -1313,6 +1314,7 @@ class TestBrokenProjectFile:
     """A present but invalid rebrew-project.toml must not select another database."""
 
     def test_stats_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
         result = runner.invoke(app, ["stats"])
@@ -1324,6 +1326,7 @@ class TestBrokenProjectFile:
     def test_stats_json_reports_the_parse_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
         result = runner.invoke(app, ["stats", "--json"])
@@ -1341,13 +1344,14 @@ class TestCheckMissingDbExitCode:
         """A missing coverage set is an infrastructure error: README documents
         exit 2 for `check` (coverage missing/unreadable), distinct from the
         gate-failure exit 1 a CI consumer acts on."""
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check", "--min-coverage", "60"])
         assert result.exit_code == 2
         assert "coverage not found" in result.output
         # The plain line names the two ways out: build, or point elsewhere.
-        assert "rebrew coverage build" in result.output
-        assert "RECOVERAGE_DB" in result.output
+        assert "rebrew coverage export --output" in result.output
+        assert "RECOVERAGE_SNAPSHOTS" in result.output
 
 
 class TestUnreadableCoverageNamesTheDocument:
@@ -1363,7 +1367,7 @@ class TestUnreadableCoverageNamesTheDocument:
         directory = tmp_path / "db"
         directory.mkdir()
         (directory / "coverage-GAME.toml").write_text("version = [\n", encoding="utf-8")
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         return directory
 
     def test_the_error_names_each_file_and_its_parse_error(
@@ -1373,8 +1377,8 @@ class TestUnreadableCoverageNamesTheDocument:
         result = runner.invoke(app, ["check", "--min-coverage", "60"])
         assert result.exit_code == 2
         assert "could be read:\n  coverage-GAME.toml: malformed TOML (" in result.stderr
-        assert "no coverage-*.toml document" not in result.stderr
-        assert result.stderr.count("rebrew coverage build") == 1
+        assert "no readable coverage targets" not in result.stderr
+        assert result.stderr.count("Fix the reported inputs") == 1
 
     def test_the_json_error_is_unchanged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1385,7 +1389,7 @@ class TestUnreadableCoverageNamesTheDocument:
         assert result.exit_code == 2
         payload = json.loads(result.stdout)
         assert payload["error"].startswith("cannot read coverage: ")
-        assert "no coverage-*.toml document" in payload["error"]
+        assert "no readable coverage targets" in payload["error"]
 
 
 def test_backup_to_a_path_ending_in_a_separator_writes_into_that_directory(
@@ -1399,7 +1403,7 @@ def test_backup_to_a_path_ending_in_a_separator_writes_into_that_directory(
     directory = tmp_path / "db"
     directory.mkdir()
     write_coverage(directory, "GAME", {".text": {"va": 0x1000, "size": 1, "cells": []}})
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
     target = tmp_path / "backups"
     result = runner.invoke(app, ["backup", "--to", f"{target}/"])
     assert result.exit_code == 0, result.output
@@ -1424,6 +1428,7 @@ class TestJsonErrorEnvelope:
     MISSING = "coverage not found"
 
     def test_check_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
         assert result.exit_code == 2
@@ -1432,6 +1437,7 @@ class TestJsonErrorEnvelope:
         assert payload["exit_code"] == 2
 
     def test_stats_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["stats", "--json"])
         assert result.exit_code == 1
@@ -1440,6 +1446,7 @@ class TestJsonErrorEnvelope:
         assert payload["exit_code"] == 1
 
     def test_export_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["export", "--format", "json"])
         assert result.exit_code == 1
@@ -1453,6 +1460,7 @@ class TestJsonErrorEnvelope:
         """A non-JSON format has no machine channel to fill, so its failure
         stays a stderr line and stdout carries nothing a parser could
         misread as data."""
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 1
@@ -1507,7 +1515,7 @@ class TestCheckExplicitUntrackedSectionVerdict:
             [".text", ".rdata"],
             [(".text", 0, 100, "exact"), (".rdata", 0, 100, "none")],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         result = runner.invoke(
             app, ["check", "--min-coverage", "60", "--section", ".rdata", "--json"]
@@ -1534,7 +1542,7 @@ class TestCheckExplicitUntrackedSectionVerdict:
         # .text carries no cell at all (the SQLite version dropped the one it
         # had), so only .rdata's untracked 'none' cell is left to evaluate.
         _write_sections(directory, [".text", ".rdata"], [(".rdata", 0, 100, "none")])
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
         result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
         assert result.exit_code == 1
@@ -2770,12 +2778,12 @@ class TestRegenFailures:
         import recoverage.regen as regen
 
         def boom(root: Path) -> None:
-            raise regen.RegenError(2)
+            raise regen.RegenError("refresh failed", exit_code=2)
 
         monkeypatch.setattr(regen, "run_regen", boom)
 
         result = runner.invoke(app, ["regen"])
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "Traceback" not in result.output
 
     def test_a_project_config_rebrew_cannot_read_is_a_misconfiguration(
@@ -2785,7 +2793,7 @@ class TestRegenFailures:
 
         rebrew's ``load_config`` runs before any of its own work, so nothing was
         rebuilt and the operator has to change something first: the same code
-        ``_db_path_or_exit`` gives the read commands for this exact file.  The
+        ``coverage_source_or_exit`` gives the read commands for this exact file.  The
         generic arm used to report it as "rebrew regen failed: ConfigError: ..."
         and exit 1, which both named an internal class and filed a
         misconfiguration as a pipeline failure.
@@ -2803,27 +2811,6 @@ class TestRegenFailures:
         assert result.exit_code == 2, result.output
         assert "is not valid TOML" in result.output
         assert "ConfigError" not in result.output
-        assert "Traceback" not in result.output
-
-    def test_a_regen_running_elsewhere_exits_cleanly(self, monkeypatch: Any) -> None:
-        """A second regen of the same tree is refused, not run alongside the first.
-
-        Nothing in this process is holding a lock in that case: the duplicate is
-        a `recoverage regen` at another terminal, or a cron job over the same
-        documents, and two writers of one `coverage-<target>.toml` interleave
-        rather than converge.  Exit 1 (the regen did not happen) with a message
-        saying why, and never a traceback.
-        """
-        import recoverage.regen as regen
-
-        def busy(root: Path) -> None:
-            raise regen.RegenBusyError("another regen is already writing /proj/db")
-
-        monkeypatch.setattr(regen, "run_regen", busy)
-
-        result = runner.invoke(app, ["regen"])
-        assert result.exit_code == 1
-        assert "another regen is already writing" in result.output
         assert "Traceback" not in result.output
 
 
@@ -2934,7 +2921,7 @@ class TestExportStdoutEncoding:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         directory = _unicode_dir(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         buffer = self._ascii_stdout(monkeypatch)
         # Called directly, not through CliRunner: the runner swaps in its own
         # UTF-8 stdout, which is exactly the codec under test.
@@ -2946,7 +2933,7 @@ class TestExportStdoutEncoding:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         directory = _unicode_dir(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         buffer = self._ascii_stdout(monkeypatch)
         cli.export(output_format=cli.ExportFormat.md, json_flag=False, target=None)
         sys.stdout.flush()
@@ -2959,7 +2946,7 @@ class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
     """A coverage directory whose NAME is not UTF-8 must still be printable.
 
     ``os.environ`` is decoded with ``surrogateescape`` like every filename, so
-    ``RECOVERAGE_DB=/mnt/db\\xff`` (a volume mounted, or an archive extracted,
+    ``RECOVERAGE_SNAPSHOTS=/mnt/db\\xff`` (a volume mounted, or an archive extracted,
     with a byte outside UTF-8 in the name) reaches the CLI holding U+DCFF.  The
     banner, the db warning and the config check all print that path, and a
     stdout pinned to UTF-8 with ``strict`` refused it: ``recoverage config``
@@ -2970,7 +2957,7 @@ class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
     """
 
     @staticmethod
-    def _db_path_with_a_foreign_byte(tmp_path: Path) -> Path:
+    def coverage_source_with_a_foreign_byte(tmp_path: Path) -> Path:
         directory = path_the_filesystem_holds(tmp_path, b"db\xff")
         if directory is None:
             pytest.skip("the filesystem cannot name a directory with a byte outside UTF-8")
@@ -2984,8 +2971,8 @@ class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
 
         from recoverage.cli import app
 
-        directory = self._db_path_with_a_foreign_byte(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        directory = self.coverage_source_with_a_foreign_byte(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0, result.output
         assert "no coverage-*.toml" in result.output

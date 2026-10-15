@@ -58,7 +58,7 @@ import pytest
 import zstandard as zstd
 from conftest import WSGI_PEER, path_the_filesystem_holds
 from coverage_fixture import TOML_VERSION, cell, coverage_dir, known_cell_states, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
 
 from recoverage import clock
 from recoverage.server import (
@@ -69,13 +69,13 @@ from recoverage.server import (
     MIN_COMPRESS_BYTES,
     SUPPORTED_ENCODINGS,
     _best_encoding,
-    _db_path,
     _find_dll_path,
     _load_dll,
     _project_dir,
     clear_target_cache,
     compress_payload,
     compress_static_bodies,
+    coverage_source,
     fold_can_match_decimal,
     fold_can_match_hex,
     fold_match,
@@ -109,7 +109,7 @@ def _coverage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     setting the variable and hoping the two readers land in the same place.
     """
     directory = coverage_dir(tmp_path)
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
     return directory
 
 
@@ -124,7 +124,7 @@ def _snapshot_for(sections: dict[str, dict[str, Any]], **kwargs: Any) -> Coverag
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         write_coverage(root / "db", "T", sections, **kwargs)
-        return load_coverage(root, "T")
+        return load_coverage_from(root / "db", "T")
 
 
 def _cell_section(
@@ -429,15 +429,15 @@ class TestPathHelpers:
     def test_project_dir_is_absolute(self) -> None:
         assert _project_dir().is_absolute()
 
-    def test_db_path_is_the_coverage_directory(self) -> None:
+    def testcoverage_source_is_the_coverage_directory(self) -> None:
         """The storage layer names a DIRECTORY now: one document per target.
 
-        ``RECOVERAGE_DB`` used to name ``coverage.db`` itself; the name is kept
+        ``RECOVERAGE_SNAPSHOTS`` used to name ``coverage.db`` itself; the name is kept
         and names the directory that file used to live in, so every consumer
         that wants "where does the coverage live" still has one answer.
         """
-        assert _db_path().name == "db"
-        assert _db_path().parent == Path.cwd()
+        assert coverage_source().name == "db"
+        assert coverage_source().parent == Path.cwd()
 
     def test_find_dll_path_none_for_unconfigured_target(self) -> None:
         """A target with no [targets.<tid>].binary must return None, not a
@@ -2199,7 +2199,7 @@ class TestSnapshotIndexHoldsOneSnapshotsWorkingSet:
         import recoverage.server as srv
 
         write_coverage(tmp_path / "db", "T", {".text": _cell_section(["exact"])})
-        snapshot = load_coverage(tmp_path, "T")
+        snapshot = load_coverage_from(tmp_path / "db", "T")
 
         kinds = sorted(srv._SNAPSHOT_INDEX_KINDS)
         assert kinds, "the kind list went empty, so the bound under it means nothing"
@@ -2631,14 +2631,22 @@ class TestSecurityHeaders:
         assert "'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
 
-    @pytest.mark.parametrize("path", ["/src/foo.c", "/original/target.dll"])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/src/foo.c",
+            "/original/target.dll",
+            "/files/FAKEDLL/source/x.html",
+            "/files/FAKEDLL/binary",
+        ],
+    )
     def test_project_files_are_answered_inert(self, path: str) -> None:
         """A file out of the project tree must not be a same-origin document.
 
         ``/src`` and ``/original`` are served with the content type guessed from
         the file's own suffix, so an ``.html`` or ``.svg`` there is a document
         the browser renders at the dashboard's origin, under a policy that allows
-        inline script.  The hook answers those two prefixes with a policy that
+        inline script.  The hook answers project file prefixes with a policy that
         scripts nothing and denies every subresource, so a file the project tree
         happens to carry cannot run with the dashboard's authority (or ride the
         auth cookie onto /api/*).  The path is enough here: the answer is the
@@ -2661,7 +2669,7 @@ class TestSecurityHeaders:
         assert headers.get("X-Content-Type-Options") == "nosniff"
 
     def test_the_dashboard_documents_keep_the_owning_policy(self) -> None:
-        """The narrower policy is scoped to the two file routes: the SPA shell,
+        """The narrower policy is scoped to project file routes: the SPA shell,
         Potato Mode and the API are the documents the dashboard's own scripts run
         in, so a change that reached them would break the app rather than harden
         it."""
@@ -3776,7 +3784,7 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         with pytest.raises(CoverageTomlError) as excinfo:
             srv.coverage_snapshots()
         message = str(excinfo.value)
-        assert "rebrew coverage build" in message
+        assert "inspect project inputs or offline snapshots" in message
         assert "rebrew catalog" not in message
 
     def test_the_endpoint_answers_the_db_unavailable_contract(
@@ -5801,11 +5809,13 @@ class TestSpaLayoutAndFeedback:
         server_py = (REPO_ROOT / "src" / "recoverage" / "server.py").read_text(encoding="utf-8")
         assert 'query_param("token")' in server_py
 
-    def test_the_same_origin_guard_wraps_both_db_supplied_paths(self) -> None:
+    def test_file_consumers_use_target_scoped_routes(self) -> None:
         app = _web("App.tsx")
-        binary = _web("hooks/useOriginalBinary.ts")
-        assert "sameOriginPath(" in app and "coverage.paths.sourceRoot" in app
-        assert "sameOriginPath(" in binary and "documentPath" in binary
+        assert "originalDllPath(target)" in app
+        assert "coverage.paths.sourceRoot" not in app
+        assert "coverage.paths.originalDll" not in app
+        assert "sourceFileUrl(target, file)" in _web("hooks/useSelection.ts")
+        assert "sourceFileUrl(target, file)" in _web("components/CoveragePanel.tsx")
 
     def test_the_remembered_target_seeds_the_selection_before_the_list_lands(self) -> None:
         """`/data` and `/stats` must not wait a round trip behind `/api/targets`.
@@ -6339,6 +6349,8 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         import recoverage.server as srv
 
         monkeypatch.setattr(srv, "_project_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "coverage_source", lambda: tmp_path / "db")
+        monkeypatch.setattr(srv.config, "snapshot_override", lambda: None)
         clear_target_cache()
         with srv.DLL_LOCK:
             srv.DLL_DATA.clear()
@@ -6356,7 +6368,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         # The built half of the merge is the coverage directory now, so the
         # target has to exist as a document for the memo to have two inputs.
         write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
 
         assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
 
@@ -6386,7 +6398,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         import recoverage.server as srv
 
         write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         clear_target_cache()
 
         tokens = iter([(1, 1), (2, 2)])
@@ -6409,7 +6421,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         import recoverage.server as srv
 
         write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         clear_target_cache()
 
         calls: list[int] = []
@@ -6474,7 +6486,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         (project / "rebrew-project.toml").write_text(
             '[targets.CONFIGTARGET]\nbinary = "bin/c.dll"\n', encoding="utf-8"
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         clear_target_cache()
 
         fingerprint = srv.config_fingerprint(project)
@@ -6516,7 +6528,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         import recoverage.server as srv
 
         write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         clear_target_cache()
 
         real = srv.read_config
@@ -6561,7 +6573,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         import recoverage.server as srv
 
         write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         (project / "rebrew-project.toml").write_text(
             '[targets.CONFIGTARGET]\nbinary = "bin/c.dll"\n', encoding="utf-8"
         )
@@ -6612,6 +6624,8 @@ class TestTargetIdentityFoldsCase:
         import recoverage.server as srv
 
         monkeypatch.setattr(srv, "_project_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "coverage_source", lambda: tmp_path / "db")
+        monkeypatch.setattr(srv.config, "snapshot_override", lambda: None)
         clear_target_cache()
         with srv.DLL_LOCK:
             srv.DLL_DATA.clear()
@@ -6630,7 +6644,7 @@ class TestTargetIdentityFoldsCase:
         (project / "rebrew-project.toml").write_text(
             '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
 
         ids = [t["id"] for t in srv.resolve_targets()]
         assert ids == ["game"], (
@@ -6648,7 +6662,7 @@ class TestTargetIdentityFoldsCase:
         (project / "rebrew-project.toml").write_text(
             '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
 
         snap = srv.coverage_for("game")
         assert snap.sections, (
@@ -6664,7 +6678,7 @@ class TestTargetIdentityFoldsCase:
         import recoverage.server as srv
 
         write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         assert srv.coverage_for("GAME").sections
 
     def test_an_unknown_target_is_still_an_empty_snapshot(
@@ -6674,7 +6688,7 @@ class TestTargetIdentityFoldsCase:
         import recoverage.server as srv
 
         write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
         assert not srv.coverage_for("OTHER").sections
 
     def test_the_configured_spelling_finds_its_binary(
@@ -6688,7 +6702,7 @@ class TestTargetIdentityFoldsCase:
         (project / "rebrew-project.toml").write_text(
             '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(project / "db"))
 
         assert srv._find_dll_path("game") == project / "bin" / "game.dll", (
             "/asm refused a target whose coverage the same id was rendering"
@@ -6794,72 +6808,36 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         expected = [want for _value, want in self.CASES]
         assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
 
-    def test_both_db_path_consumers_go_through_the_guard(self) -> None:
-        """Wiring: neither consumer may read a document path without the guard.
 
-        The binary path reaches fetch() completely unencoded, and the source root
-        feeds both the C-source fetch and the Source href, so a bypass on either
-        is the vulnerability the guard exists for.
-        """
-        binary = _web("hooks/useOriginalBinary.ts")
-        assert "sameOriginPath(" in binary
-        assert "documentPath" in binary
-        app = _web("App.tsx")
-        assert "sameOriginPath(" in app
-        assert "coverage.paths.sourceRoot" in app
+class TestSpaTargetFileUrlsArePercentEncoded:
+    """Target and source names reach same-origin routes as encoded components."""
 
-
-class TestSpaDocumentPathsArePercentEncoded:
-    """A document-supplied path must be encoded before it becomes a URL.
-
-    ``paths.sourceRoot`` and ``paths.originalDll`` arrive raw from a coverage
-    document and go straight into a ``fetch`` and an ``href``.  ``sameOriginPath``
-    answers a question about ORIGIN and hands the value back untouched, so every
-    character a URL treats as structure still means structure: a
-    ``paths.sourceRoot`` of ``src/a#b`` reached the browser as
-    ``src/a#b/main.c``, the fragment was resolved away, and the request went to
-    ``/src/a``.  The same ``#`` inside a file name was already encoded to
-    ``%23``, which is the asymmetry these cases pin.
-
-    Executed through bun against the shipped TypeScript, so the assertion is the
-    URL a browser resolves rather than the string the helper happened to build.
-    """
-
-    #: (sourceRoot, file, expected pathname + search after resolution).
+    #: (target, file, expected pathname + search after resolution).
     CASES: ClassVar[list[tuple[str, str, str]]] = [
-        ("src/FAKEDLL", "main.c", "/src/FAKEDLL/main.c"),
-        ("/src/FAKEDLL", "main.c", "/src/FAKEDLL/main.c"),
-        # The failing inputs: a fragment, a query and a bare percent sign in the
-        # ROOT, each of which the browser reads as structure rather than as a
-        # character of the path.  The same characters in the file half already
-        # survived, which is what made the two halves disagree.
-        ("src/a#b", "main.c", "/src/a%23b/main.c"),
-        ("src/a?b", "main.c", "/src/a%3Fb/main.c"),
-        ("src/100%", "main.c", "/src/100%25/main.c"),
-        ("src/a#b", "a#b/c d.c", "/src/a%23b/a%23b/c%20d.c"),
-        # Non-ASCII and spaces: encoded, and still resolving to the same path the
-        # filesystem holds.
-        ("src/café", "main.c", "/src/caf%C3%A9/main.c"),
-        ("src/my dir", "main.c", "/src/my%20dir/main.c"),
+        ("FAKEDLL", "main.c", "/files/FAKEDLL/source/main.c"),
+        ("a/b", "main.c", "/files/a%2Fb/source/main.c"),
+        ("a#b", "a#b/c d.c", "/files/a%23b/source/a%23b/c%20d.c"),
+        ("a?b", "main.c", "/files/a%3Fb/source/main.c"),
+        ("100%", "100%.c", "/files/100%25/source/100%25.c"),
+        ("café", "main.c", "/files/caf%C3%A9/source/main.c"),
+        ("my target", "main.c", "/files/my%20target/source/main.c"),
+        ("//evil.example", "main.c", "/files/%2F%2Fevil.example/source/main.c"),
     ]
 
-    #: (document originalDll, target, expected fetch pathname).
-    DLL_CASES: ClassVar[list[tuple[str | None, str, str]]] = [
-        (None, "FAKEDLL", "/original/FAKEDLL.dll"),
-        ("", "FAKEDLL", "/original/FAKEDLL.dll"),
-        ("/original/a#b.dll", "FAKEDLL", "/original/a%23b.dll"),
-        ("/original/café.dll", "FAKEDLL", "/original/caf%C3%A9.dll"),
-        # The guard still owns the origin: an off-origin value is not encoded
-        # into a request, it falls back to the target's own binary.
-        ("//evil.example/x.dll", "FAKEDLL", "/original/FAKEDLL.dll"),
-        ("https://evil.example/x.dll", "FAKEDLL", "/original/FAKEDLL.dll"),
+    DLL_CASES: ClassVar[list[tuple[str, str]]] = [
+        ("FAKEDLL", "/files/FAKEDLL/binary"),
+        ("a/b", "/files/a%2Fb/binary"),
+        ("a#b", "/files/a%23b/binary"),
+        ("a?b", "/files/a%3Fb/binary"),
+        ("100%", "/files/100%25/binary"),
+        ("café", "/files/caf%C3%A9/binary"),
+        ("my target", "/files/my%20target/binary"),
     ]
 
-    def test_document_paths_are_encoded_into_the_url(self) -> None:
+    def test_names_are_encoded_into_the_url(self) -> None:
         bun = shutil.which("bun")
         if bun is None:
             pytest.skip("bun not on PATH")
-
         driver = (
             "import { sourceFileUrl } from "
             + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
@@ -6870,10 +6848,11 @@ class TestSpaDocumentPathsArePercentEncoded:
             "const payload = JSON.parse(await Bun.file(process.argv[2]).text());\n"
             "const BASE = 'http://dashboard.invalid/';\n"
             "const resolve = (u) => { const p = new URL(u, BASE); "
+            "if (p.origin !== new URL(BASE).origin) throw Error('off-origin'); "
             "return p.pathname + p.search; };\n"
             "console.log(JSON.stringify([\n"
-            "  ...payload.source.map(([root, file]) => resolve(sourceFileUrl(root, file))),\n"
-            "  ...payload.dll.map(([doc, target]) => resolve(originalDllPath(doc, target))),\n"
+            "  ...payload.source.map(([target, file]) => resolve(sourceFileUrl(target, file))),\n"
+            "  ...payload.dll.map(([target]) => resolve(originalDllPath(target))),\n"
             "]));\n"
         )
         payload = {"source": self.CASES, "dll": self.DLL_CASES}
@@ -6890,22 +6869,16 @@ class TestSpaDocumentPathsArePercentEncoded:
                 check=False,
             )
         assert proc.returncode == 0, f"path harness failed to run: {proc.stderr}"
-        expected = [want for _root, _file, want in self.CASES] + [
-            want for _doc, _target, want in self.DLL_CASES
+        expected = [want for _target, _file, want in self.CASES] + [
+            want for _target, want in self.DLL_CASES
         ]
-        assert json.loads(proc.stdout) == expected, (
-            "a document path reached the URL unencoded, or the fallback was encoded twice"
-        )
+        assert json.loads(proc.stdout) == expected
 
-    def test_fallback_roots_are_spelled_raw(self) -> None:
-        """Wiring: an already-encoded fallback would be encoded a second time.
-
-        ``sourceFileUrl`` encodes both halves, so a fallback that pre-encodes the
-        target id lands as ``my%2520target`` for a target spelled with a space.
-        """
+    def test_consumers_pass_raw_target_names_once(self) -> None:
         app = _web("App.tsx")
-        assert "`/src/${target}`" in app
+        assert "originalDllPath(target)" in app
         assert "encodeURIComponent(target)" not in app
+        assert "target={target}" in app
 
 
 class TestHljsThemeFollowsAppTokens:

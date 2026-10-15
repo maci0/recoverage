@@ -71,7 +71,7 @@ from conftest import (
     wsgi_request,
 )
 from coverage_fixture import cell, coverage_dir, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
 
 from recoverage import api, clock, webapp
 from recoverage import server as _server
@@ -138,7 +138,7 @@ def _snapshot_mapping(
     have read.
     """
     write_coverage(coverage_dir(root), target, sections, **kwargs)
-    return {target: load_coverage(root, target)}
+    return {target: load_coverage_from(root / "db", target)}
 
 
 def _alternating_reader(
@@ -535,10 +535,10 @@ class TestApiHealth:
         import recoverage.server as server_mod
 
         missing = Path("/nonexistent/coverage-dir")
-        monkeypatch.setattr(api, "_db_path", lambda: missing)
+        monkeypatch.setattr(api, "coverage_source", lambda: missing)
         # The freshness probes read server's own binding, so the health answer
         # is only about a directory both halves of the read path agree on.
-        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
+        monkeypatch.setattr(server_mod, "coverage_source", lambda: missing)
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -615,8 +615,8 @@ class TestHealthDbMtime:
             "FRESH",
             {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
         )
-        monkeypatch.setattr(api, "_db_path", lambda: directory)
-        monkeypatch.setattr(server_mod, "_db_path", lambda: directory)
+        monkeypatch.setattr(api, "coverage_source", lambda: directory)
+        monkeypatch.setattr(server_mod, "coverage_source", lambda: directory)
         return directory
 
     def test_mtime_follows_the_newest_document(
@@ -915,7 +915,7 @@ class TestApiFunctions:
             {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
             functions=[{"va": 0x1000, "name": "_only", "vaStart": "0x1000", "size": 16}],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "one")))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path / "one")))
         _alternating_reader(monkeypatch, [first, second])
         api._clear_list_total_cache()
 
@@ -1367,7 +1367,7 @@ class TestApiBytes:
         offset shape rebrew never writes (no VA, or a negative fileOffset)."""
         directory = coverage_dir(tmp_path)
         write_coverage(directory, "T", {name: {**definition, "cells": []}})
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
 
     def test_happy_path_serves_slice_as_hex_and_raw(self) -> None:
         status, headers, body = self._get("offset=0&size=16")
@@ -1567,7 +1567,9 @@ class TestRegenFailureMapping:
     def test_rebrew_error_exit_is_500_not_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from recoverage.regen import RegenError
 
-        status, headers, body = self._post_regen(monkeypatch, RegenError(2))
+        status, headers, body = self._post_regen(
+            monkeypatch, RegenError("refresh failed", exit_code=2)
+        )
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
         assert data["detail"] == "rebrew exited with status 2"
@@ -1603,43 +1605,6 @@ class TestRegenFailureMapping:
         )
         self._post_regen(monkeypatch, ValueError("corrupt JSON"))
         assert "after regen" in cleared
-
-    def test_a_regen_running_in_another_process_is_the_same_429(self, monkeypatch) -> None:
-        """A duplicate this process cannot see still gets the answer a client
-        already handles.
-
-        `_REGEN_LOCK` and the idempotency ledger live in this process's memory,
-        so a `recoverage regen` at another terminal is a duplicate run neither
-        can dedup. `run_regen` refuses it and this endpoint has to answer with
-        the shape the in-process lock already sends, not with a 500: the
-        pipeline did not break, the work is simply already under way, and a
-        reader who sees "Regen failed" presses the button again.
-        """
-        import recoverage.api as api
-        from recoverage.regen import RegenBusyError
-
-        before = api._metrics.REGEN.snapshot()
-        status, headers, body = self._post_regen(
-            monkeypatch, RegenBusyError("another regen is already writing /p/db")
-        )
-        assert status.startswith("429")
-        assert headers.get("Retry-After") == str(int(api._REGEN_COOLDOWN_SECONDS))
-        data = json.loads(decode_body(body, headers))
-        assert data["error"] == "Rate limited: regeneration already running"
-        assert data["code"] == "rate_limited"
-        assert "already writing" in data["detail"]
-        after = api._metrics.REGEN.snapshot()
-        # A refusal, not a pipeline that broke, and the gauge the health
-        # endpoint reads is back where it was.  Nothing was written and
-        # nothing raised past the lock, so `failures` (the count of runs that
-        # RAN and failed) stays put; the run is counted as the rejection it
-        # is.  Filing it under `failures` put a red "Regen failed" on the one
-        # line that means the pipeline broke every time a cron job overlapped
-        # a dashboard's own regenerate.
-        assert after["failures"] - before["failures"] == 0
-        assert after["rejected"] - before["rejected"] == 1
-        assert after["in_flight"] == before["in_flight"]
-        assert after["last_ok"] is None
 
 
 class TestRegenIdempotencyKey:
@@ -2578,7 +2543,7 @@ class TestSseEvents:
     ) -> None:
         """A coverage directory whose name holds a byte outside UTF-8 still broadcasts.
 
-        ``_db_path().name`` is read with ``os.fsdecode``, so a directory whose
+        ``coverage_source().name`` is read with ``os.fsdecode``, so a directory whose
         name holds a byte above 0x7f that is not valid UTF-8 - legal on ext4,
         and what a checkout, an archive or a copy from a Windows tool produces -
         reaches the broadcast holding a lone U+DCFF surrogate. ``.encode()`` on
@@ -2608,7 +2573,7 @@ class TestSseEvents:
         q: queue.Queue[bytes] = queue.Queue()
         api._SSE_CLIENTS[q] = "test-peer"
         try:
-            monkeypatch.setattr(api, "_db_path", lambda: Path(os.fsdecode(raw_name)))
+            monkeypatch.setattr(api, "coverage_source", lambda: Path(os.fsdecode(raw_name)))
             api._broadcast_db_updated((1, 2))
             frame = q.get_nowait()
             assert frame.isascii(), "frame is not ASCII; the encode can raise on a surrogate"
@@ -2673,7 +2638,7 @@ class TestSseEvents:
             "GAME",
             {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         before = api._snapshot_db_mtime()
         assert before is not None
         (directory / "coverage.db-shm").write_bytes(b"z" * 100)
@@ -3765,7 +3730,7 @@ class TestUnknownTarget:
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-class TestConfiguredUnbuiltTarget:
+class TestOfflineIgnoresConfiguredTargets:
     """A target declared in rebrew-project.toml but absent from coverage.db
     must stay addressable: _require_target counts config membership as valid
     (a never-built target must not 404), and /api/targets lists config-only
@@ -3788,19 +3753,17 @@ class TestConfiguredUnbuiltTarget:
         yield
         clear_target_cache()
 
-    def test_unbuilt_target_functions_list_is_200_not_404(self) -> None:
+    def test_incidental_target_functions_list_is_404(self) -> None:
         status, headers, body = wsgi_get(f"/api/targets/{self.NEW_TARGET}/functions")
-        assert status.startswith("200")
-        data = json.loads(decode_body(body, headers))
-        assert data["total"] == 0
-        assert data["functions"] == []
+        assert status.startswith("404")
+        assert json.loads(decode_body(body, headers))["error"] == "Target not found"
 
-    def test_unbuilt_target_listed_in_targets_endpoint(self) -> None:
+    def test_incidental_target_is_not_listed(self) -> None:
         """Config-declared targets come first and DB targets are still listed."""
         status, headers, body = wsgi_get("/api/targets")
         assert status.startswith("200")
         ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
-        assert ids[0] == self.NEW_TARGET
+        assert self.NEW_TARGET not in ids
         assert get_first_target() in ids
 
     def test_db_down_still_lists_config_only_targets(self, monkeypatch: Any) -> None:
@@ -3816,7 +3779,7 @@ class TestConfiguredUnbuiltTarget:
         status, headers, body = wsgi_get("/api/targets")
         assert status.startswith("200")
         ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
-        assert self.NEW_TARGET in ids
+        assert self.NEW_TARGET not in ids
 
 
 class TestServeBindGuard:
@@ -4058,7 +4021,7 @@ def _fake_request(query: dict[str, str] | None = None) -> Any:
 def _point_app_at_coverage(monkeypatch: pytest.MonkeyPatch, directory: Path) -> Any:
     """Point the app at a coverage directory and return the mock request.
 
-    ``RECOVERAGE_DB`` names the directory, which is the one seam both halves of
+    ``RECOVERAGE_SNAPSHOTS`` names the directory, which is the one seam both halves of
     the read path resolve through: ``server``'s freshness stats and ``api``'s
     target list.
     """
@@ -4066,7 +4029,7 @@ def _point_app_at_coverage(monkeypatch: pytest.MonkeyPatch, directory: Path) -> 
     import recoverage.server as server_mod
 
     req = _fake_request()
-    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
     # Both modules bind `request` at import time, and every header read goes
     # through server._header, so a fake that patched only api.request left the
     # real (empty) request answering Accept-Encoding.
@@ -4183,8 +4146,10 @@ class TestDataSectionBuckets:
         import recoverage.api as api
 
         directory = self._doc(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
-        payload = json.loads(api._build_data_raw(load_coverage(tmp_path, "GAME"), "GAME", None))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
+        payload = json.loads(
+            api._build_data_raw(load_coverage_from(tmp_path / "db", "GAME"), "GAME", None)
+        )
         assert set(payload["section_cell_stats"]) == {".text", ".data"}
         assert payload["section_cell_stats"][".text"]["total_cells"] == 1
 
@@ -4247,7 +4212,7 @@ class TestDataPayloadMemo:
         assert len(api._DATA_CACHE) == 1
         # Simulate a rebuild that changed the document: the token keys on
         # the bytes, so the rewrite has to move them.
-        doc = api._db_path() / "coverage-GAME.toml"
+        doc = api.coverage_source() / "coverage-GAME.toml"
         doc.write_text(doc.read_text(encoding="utf-8") + "# rebuilt\n", encoding="utf-8")
         api.handle_api_data("GAME")
         # A constant fingerprint would still hold ONE key; two keys prove
@@ -4264,7 +4229,7 @@ class TestDataPayloadMemo:
         and the old validator still answers 304."""
         import recoverage.api as api
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(self._make_db(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(self._make_db(tmp_path)))
         api._clear_data_cache()
         status, headers, _ = wsgi_get("/api/targets/GAME/data")
         assert status.startswith("200")
@@ -4273,7 +4238,7 @@ class TestDataPayloadMemo:
 
         # A new file renamed over the old one, as rebrew's atomic write does:
         # new inode, new mtime, same bytes.
-        doc = api._db_path() / "coverage-GAME.toml"
+        doc = api.coverage_source() / "coverage-GAME.toml"
         tmp = doc.with_name(doc.name + ".tmp")
         tmp.write_bytes(doc.read_bytes())
         st = doc.stat()
@@ -4904,7 +4869,7 @@ class TestFunctionListPaging:
         import recoverage.api as api
 
         directory = _game_coverage(tmp_path, functions=tuple(self._rows()))
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         api._clear_list_total_cache()
         status, headers, body = wsgi_get(f"/api/targets/GAME/functions?{query}")
         assert status.startswith("200")
@@ -4957,7 +4922,7 @@ class TestFunctionListPaging:
         import recoverage.api as api
 
         directory = _game_coverage(tmp_path, functions=tuple(self._rows()))
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         api._clear_list_total_cache()
         status, headers, body = wsgi_get(
             "/api/targets/GAME/functions?search=fn_0&sort=name:desc&limit=3&offset=2"
@@ -5542,7 +5507,7 @@ class TestKnownSchemaContract:
         # Read the document independently of `known_schema_versions`, which is
         # the call the handler makes: comparing the two is true by
         # construction, and an empty list would pass it.
-        document = load_coverage_from(server_mod._db_path(), target)
+        document = load_coverage_from(server_mod.coverage_source(), target)
         assert data["known_schema"] == [str(document.version)]
         assert data["known_schema"], "the payload tells the SPA it knows no schema"
         for sec in data["sections"].values():
@@ -5615,8 +5580,8 @@ class TestServedCellsComeFromTheSnapshot:
         import recoverage.server as srv
 
         directory = self._doc(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
-        snap = load_coverage(tmp_path, "GAME")
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
+        snap = load_coverage_from(tmp_path / "db", "GAME")
         status, headers, body = wsgi_get("/api/targets/GAME/data")
         assert status.startswith("200")
         sections = json.loads(decode_body(body, headers))["sections"]
@@ -5637,7 +5602,7 @@ class TestServedCellsComeFromTheSnapshot:
         import recoverage.server as srv
 
         directory = self._doc(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         api._clear_data_cache()
         monkeypatch.setattr(srv, "cells_json", lambda cells: "[]")
 
@@ -6982,7 +6947,7 @@ class TestUnicodeUrlComponents:
                 }
             ],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -7109,7 +7074,7 @@ class TestSearchCaseFolding:
                 }
             ],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -7247,7 +7212,7 @@ class TestLookupSnapshotsArePinned:
         return {tuple(build[key] for key in ("name", "size", "byte_delta")) for build in cls.BUILDS}
 
     def test_single_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "build0")))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path / "build0")))
         _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
         status, headers, body = wsgi_get("/api/targets/GAME/functions/0x1000")
@@ -7259,7 +7224,7 @@ class TestLookupSnapshotsArePinned:
         assert served in self._expected(), served
 
     def test_batch_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "build0")))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path / "build0")))
         _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
         status, headers, body = wsgi_post(
@@ -7292,8 +7257,8 @@ class TestHealthLogging:
 
         missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: missing)
-        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
+        monkeypatch.setattr(api, "coverage_source", lambda: missing)
+        monkeypatch.setattr(server_mod, "coverage_source", lambda: missing)
         with caplog.at_level(logging.WARNING, logger="recoverage"):
             for _ in range(5):
                 status, headers, body = wsgi_get("/api/health")
@@ -7309,16 +7274,16 @@ class TestHealthLogging:
         import recoverage.api as api
         import recoverage.server as server_mod
 
-        real_api_db_path = api._db_path
-        real_server_db_path = server_mod._db_path
+        real_apicoverage_source = api.coverage_source
+        real_servercoverage_source = server_mod.coverage_source
         missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: missing)
-        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
+        monkeypatch.setattr(api, "coverage_source", lambda: missing)
+        monkeypatch.setattr(server_mod, "coverage_source", lambda: missing)
         with caplog.at_level(logging.INFO, logger="recoverage"):
             wsgi_get("/api/health")
-            monkeypatch.setattr(api, "_db_path", real_api_db_path)
-            monkeypatch.setattr(server_mod, "_db_path", real_server_db_path)
+            monkeypatch.setattr(api, "coverage_source", real_apicoverage_source)
+            monkeypatch.setattr(server_mod, "coverage_source", real_servercoverage_source)
             status, headers, body = wsgi_get("/api/health")
             assert status.startswith("200")
             assert json.loads(decode_body(body, headers))["status"] == "healthy"
@@ -7335,8 +7300,8 @@ class TestHealthLogging:
 
         missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: missing)
-        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
+        monkeypatch.setattr(api, "coverage_source", lambda: missing)
+        monkeypatch.setattr(server_mod, "coverage_source", lambda: missing)
         monkeypatch.setattr(
             api, "_stream_stats", lambda: {"clients": 1, "max": 4, "watcher_alive": False}
         )
@@ -7542,7 +7507,7 @@ class TestSectionFilterKeepsDocumentWhitespace:
                 }
             },
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()

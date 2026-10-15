@@ -184,6 +184,7 @@ def running_server(project_dir: Path) -> Iterator[tuple[int, subprocess.Popen[by
         proc = subprocess.Popen(
             [sys.executable, "-m", "recoverage", "serve", "--no-open", "--port", str(port)],
             cwd=str(project_dir),
+            env={**os.environ, "RECOVERAGE_SNAPSHOTS": str(project_dir / "db")},
             stdout=subprocess.DEVNULL,
             stderr=log,
         )

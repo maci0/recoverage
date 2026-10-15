@@ -364,14 +364,14 @@ REQUESTS = RequestStats()
 
 
 class RegenStats:
-    """Outcome and duration counters for the catalog/build-db pipeline.
+    """Outcome and duration counters for explicit read-only coverage refresh.
 
-    A regen is the one request that runs for minutes, so the per-request
+    A refresh can run expensive project analysis, so the per-request
     latency numbers say little about it: one sample, and none at all while it
     is still running.  A hung regen is the failure an operator most needs to
     see and the one the request counters cannot show, so the run's state is
     tracked on its own: ``in_flight`` says a run is going, ``last_duration_ms``
-    says how long the previous one took, and ``failures`` separates a pipeline
+    says how long the previous one took, and ``failures`` separates a refresh
     that will not run from one nobody asked to run.
     """
 

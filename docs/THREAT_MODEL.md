@@ -2,11 +2,12 @@
 
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
-a file reference so a later pass can re-verify it. Last reviewed: 2026-10-03,
-against `__version__ = "6.1.0"` (`src/recoverage/__init__.py:42`) as of commit
-`5fe9ea7`.
+a file reference so a later pass can re-verify it. Coverage authority and
+source/refresh boundaries reviewed: 2026-10-15, against
+`__version__ = "7.0.0"` (`src/recoverage/__init__.py:42`) during release preparation.
+The historical whole-surface review below was recorded against commit `5fe9ea7` on 2026-10-03.
 
-**This pass re-derived every `file:line` reference below against the tree at
+**The historical 2026-10-03 pass re-derived `file:line` references against the tree at
 `5fe9ea7`,** by resolving each cited line to the symbol it named at the
 previously-reviewed commit (`8b7d923`) and re-locating that symbol here. Of the
 58 distinct references the previous pass made, 26 had drifted — by between one
@@ -133,13 +134,17 @@ The commits before those, since the previous full pass (`91e4f1a`), were:
 A change landing after `8b7d923` is unreviewed until this model names it, and a
 per-commit read of the lists above is this pass's own.
 
-What ReCoverage is: a read-mostly web dashboard over the clear-text coverage
-documents (`db/coverage-<target>.toml`) that rebrew's pipeline prints, served by
-Bottle on a threaded `wsgiref` whose transport half lives in `src/recoverage/devserver.py`
-(`src/recoverage/devserver.py`, wired at `src/recoverage/cli.py`). The intended audience is a
-single developer on their own machine, viewing a decompilation project they
-control. Everything below is scoped to that deployment, plus the explicitly
-supported LAN case (`--allow-remote`).
+Normal mode is a read-only view of canonical Rebrew project inputs through
+`rebrew.coverage_project.load_project_coverage`. `RECOVERAGE_SNAPSHOTS` explicitly
+selects portable/offline exports. Changed inputs can cause requests to derive
+fresh views; reads and refreshes do not compile, mutate canonical metadata or
+write exports. Bottle runs on the threaded listener in `devserver.py`, or a
+separately configured WSGI host. The deployment scope is a developer's own project
+and the explicitly acknowledged LAN case.
+
+Coverage authority and filesystem/refresh boundaries were re-reviewed on
+2026-10-15. The dated commit-review narrative above describes historical versions;
+this update does not claim to refresh every older file/line reference below.
 
 ## Risk-ranked summary
 
@@ -149,17 +154,17 @@ supported LAN case (`--allow-remote`).
 | 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recovery/server.py:2810` and `:2756`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 6, so `_SNAPSHOT_INDEX_MAX` is 12 (`src/recoverage/server.py:2753` and `:2743`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all six kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:607`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:607`) since the last pass. |
 | 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3376`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
-| 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `src/recoverage/_paths.py`, `src/recoverage/server.py`, `src/recoverage/ui.py` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
+| 5 | Project configuration controls live analysis inputs, which may extend outside HTTP-served file subtrees | `_paths.coverage_source`, `coverage_project.load_project_coverage`, `ui.serve_repo_file` | Operator trust and input validation; route containment does not sandbox project analysis |
 | 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection, so a flood of ordinary requests, or a set of idle keep-alive connections, spends a thread each while they are held | `src/recoverage/devserver.py` | Connections are admitted against `_MAX_CONNECTIONS` (128, `src/recoverage/devserver.py`) and refused at the cap with a 503 and a `Retry-After`, before a thread is created (`src/recoverage/devserver.py`); a 120 s per-socket deadline on every read and write in flight (`src/recoverage/devserver.py`) and a 15 s idle deadline between requests (`src/recoverage/devserver.py`); `/api/events` carries its own lower cap (`src/recoverage/api.py`) |
-| 7 | Any local process can trigger a full re-catalog and coverage rebuild (disk and CPU), repeatedly within the cooldown | `src/recoverage/api.py` | Loopback peer check, same-origin (`server.origin_is_this_dashboard`) and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`src/recoverage/api.py`) |
+| 7 | Requests may trigger expensive read-only analysis of changed project inputs | `regen.run_regen`, `coverage_project.load_project_coverage` | POST loopback/origin checks, cooldown, single-flight and idempotency; GET analysis cost is outside those POST controls |
 | 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `src/recoverage/server.py`, `src/recoverage/api.py` | Tracebacks never reach a response body (`src/recoverage/server.py`); only the one-line exception class and a rebuild hint do |
 | 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `src/recoverage/server.py`, `src/recoverage/api.py` | `_MAX_DLL_SIZE` (512 MiB, `src/recoverage/server.py`) checked on `stat()` (`src/recoverage/server.py`) and again post-read (`src/recoverage/server.py`); a file that grows inside that window is fully read into RAM first. On the decode side, a negative VA, file offset or size is refused before a byte is sliced (`disasm._disassemble_loaded`, `src/recoverage/disasm.py:316`), so a negative index cannot count back from the end of the buffer into unrelated bytes, and the image width comes from a range-checked container header rather than a constant (unmitigated 10) |
 | 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `src/recoverage/server.py` | Rejected-token and rejected-Host events are logged with the peer address (`src/recoverage/server.py`); regen start, replay, completion and failure are logged (`src/recoverage/api.py`) |
-| 11 | FOURTEEN `RECOVERAGE_*` environment variables are accepted under the prefix. Ten select the bind address, the token, the coverage directory, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project; `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected. FOUR of the fourteen are read by nothing `serve` resolves and are accepted only so an operator or a tool that exported one can still run a command: `RECOVERAGE_FUZZ_SEED` and `RECOVERAGE_FUZZ_ITERATIONS` (the test suite), `RECOVERAGE_DEV_API` (the origin `web/vite.config.ts` proxies `/api`, `/src` and `/original` to in `make web-dev`, which also accepts a `host:port` form that Vite parses), and `RECOVERAGE_BACKUP_DIR` (where `recoverage backup` writes, `src/recoverage/backup.py`). Membership in `config.KNOWN_VARS` (`src/recoverage/config.py:599`) is therefore NOT a claim that a name is a server setting, and a reader who treats the set as the settings table will miscount the environment. A FIFTEENTH environment input, `XDG_CACHE_HOME`, selects where a copy of every parsed document is written, and it sits outside the set entirely: no startup validation, no banner line, and a parse cache in whatever directory the parent environment names | `src/recoverage/config.py`, `src/recoverage/cli.py`, `src/recoverage/backup.py`, `web/vite.config.ts` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.check_unknown_vars`, `src/recoverage/config.py:59`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose; the four tool knobs are validated nowhere because nothing `serve` resolves reads them. `RECOVERAGE_BACKUP_DIR` was accepted by name but REFUSED by the same gate until `86ef853`, which is the one case where the set and the reader disagreed: a deployment whose crontab exported it had every command exit non-zero as a misspelling |
-| 12 | **A restore WRITES the authoritative read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage build` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`) | Every refusal happens before the first write: the archive is verified in full — every member read, size and digest checked against `manifest.json` — and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked |
-| 13 | **A backup archive is a second, unreviewed copy of the whole project's reverse-engineering output, written outside the project tree** (default `../backups/`, or `$RECOVERAGE_BACKUP_DIR`) with no encryption, and its exposure is a directory mode rather than a control | `src/recoverage/backup.py` (`write_backup`, `default_backup_dir`, `backup_dir_from_env`), `src/recoverage/cli.py` (`backup`) | Members are written `mode=0o600` and the manifest too (`tarfile.TarInfo.mode`), so the archive is not world-readable on creation; the default lands beside the coverage directory rather than inside it, so the glob a restore reads cannot grow a member that is not a document. A restore verifies every member against the manifest, and `write_backup` reads its own output back through `verify_backup` before reporting success. There is no encryption and no at-rest integrity beyond the manifest digests, so an archive that reaches a shared or backed-up location is a readable copy of the project's symbol table |
+| 11 | FOURTEEN `RECOVERAGE_*` environment variables are accepted under the prefix. Ten select the bind address, the token, the snapshot selection, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project; `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected. FOUR of the fourteen are read by nothing `serve` resolves and are accepted only so an operator or a tool that exported one can still run a command: `RECOVERAGE_FUZZ_SEED` and `RECOVERAGE_FUZZ_ITERATIONS` (the test suite), `RECOVERAGE_DEV_API` (the origin `web/vite.config.ts` proxies `/api`, `/files`, `/src` and `/original` to in `make web-dev`, which also accepts a `host:port` form that Vite parses), and `RECOVERAGE_BACKUP_DIR` (where `recoverage backup` writes, `src/recoverage/backup.py`). Membership in `config.KNOWN_VARS` (`src/recoverage/config.py:599`) is therefore NOT a claim that a name is a server setting, and a reader who treats the set as the settings table will miscount the environment. A FIFTEENTH environment input, `XDG_CACHE_HOME`, selects where a copy of every parsed document is written, and it sits outside the set entirely: no startup validation, no banner line, and a parse cache in whatever directory the parent environment names | `src/recoverage/config.py`, `src/recoverage/cli.py`, `src/recoverage/backup.py`, `web/vite.config.ts` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.check_unknown_vars`, `src/recoverage/config.py:59`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose; the four tool knobs are validated nowhere because nothing `serve` resolves reads them. `RECOVERAGE_BACKUP_DIR` was accepted by name but REFUSED by the same gate until `86ef853`, which is the one case where the set and the reader disagreed: a deployment whose crontab exported it had every command exit non-zero as a misspelling |
+| 12 | **An offline restore WRITES the selected portable read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage export --output <directory>` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`) | Every refusal happens before the first write: the archive is verified in full — every member read, size and digest checked against `manifest.json` — and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked |
+| 13 | Portable backup archives copy exported reverse-engineering facts outside their snapshot directory, without encryption | `backup.write_backup`, `default_backup_dir`, `backup_dir_from_env` | File modes and verified manifest; filesystem access and retention remain deployment controls |
 
-| 14 | `XDG_CACHE_HOME` relocates a persisted parse cache holding every document's full parsed contents, and it is the one environment input with no startup validation, no banner line and no membership in `KNOWN_VARS`. Nothing chooses it wrongly on purpose and nothing chooses it at all: the default is `$HOME/.cache/recoverage/documents/`, so a process started under a service account, a container with no home, or a shared runner writes a readable copy of the project's reverse-engineering output wherever that account's cache directory resolves, and a second user on the same host reaches it | `src/recoverage/documents.py` (`_write_cached`, `cache_dir`), `src/recoverage/documents.py:253` | The cache directory is created `0o700` and each entry lands by renaming a `NamedTemporaryFile`, so the copy is not world-readable on creation. The exposure is a directory mode rather than a control, though: it holds the most sensitive copy of the coverage data on a host, it survives `rm db/coverage-*.toml`, and the backup does not cover it. It is a correctness hazard in its own right, because a cache keyed on a document's stat is served in preference to a document that has since been rewritten |
+| 14 | Portable-mode parsed-document caches copy exported facts under an operator-selected XDG cache location | `documents._load`, `_read_cached`, `_write_cached` | Content-digest association, schema revalidation, private new directory and best-effort slot pruning. Live reads bypass this cache; existing directory permissions are not rechecked |
 Owner and review cadence: not stated in the repository.
 
 The classes below the table are the ones this tree has already fixed once; start a review from that section rather than from a generic checklist.
@@ -216,8 +221,11 @@ Network (all on the single Bottle app, all threaded):
 - `GET /potato` - `src/recoverage/potato.py`, which owns both the route and the
   renderer (`render_potato`, `src/recoverage/potato.py`). Full server-side HTML of the
   entire coverage map.
-- `GET /src/<path>`, `GET /original/<path>` - `src/recoverage/ui.py`. Proxies the
-  project's source tree and original binaries to the browser.
+- `GET /files/<target>/source/<path>`, `GET /files/<target>/binary` -
+  `src/recoverage/ui.py`. Validates the target and resolves its source root or
+  configured binary, refusing paths outside the project and source paths outside
+  that target's root. `GET /src/<path>` and `GET /original/<path>` also serve
+  their fixed project subtrees. Every project file response carries inert CSP.
 - `GET /<asset>` (allowlist regex) - `src/recoverage/ui.py:620`. Package-shipped
   JS/CSS/SVG. The matched set is `app.js`, `style.css`, `print.css`,
   `favicon.svg`, `highlight.js`, `archivo.woff2` and `jetbrains-mono.woff2`;
@@ -278,7 +286,7 @@ Non-network entry points:
   a second command rather than one only `serve` reads.
 - Environment: the ten `serve` settings `RECOVERAGE_PORT`, `RECOVERAGE_BIND`,
   `RECOVERAGE_ALLOW_REMOTE`, `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`,
-  `RECOVERAGE_TOKEN`, `RECOVERAGE_DB`, `RECOVERAGE_LOG_LEVEL`,
+  `RECOVERAGE_TOKEN`, `RECOVERAGE_SNAPSHOTS`, `RECOVERAGE_LOG_LEVEL`,
   `RECOVERAGE_MAX_CONNECTIONS` and `RECOVERAGE_CLIENT_TIMEOUT`
   (`src/recoverage/config.py`), plus the three names the prefix also accepts for
   a TOOL rather than for the server: `RECOVERAGE_FUZZ_SEED`,
@@ -313,15 +321,15 @@ Non-network entry points:
   (`src/recoverage/_paths.py`, `src/recoverage/server.py`).
 - The target binary named by `[targets.*].filename`, resolved by
   `_target_filename` / `_find_dll_path` (`src/recoverage/server.py`).
-- Filesystem: `db/coverage-<target>.toml` (read as UTF-8 text through
+- Filesystem: configured live inputs or explicitly selected portable
+  `coverage-<target>.toml` (read as UTF-8 text through
   `rebrew.coverage_toml`, `rebrew/coverage_toml.py`, reached at
   `src/recoverage/server.py`; nothing is held open between requests), `<project>/src`,
   `<project>/original`, and the function source files Potato Mode reads directly
   through its own resolve-and-contain check (`src/recoverage/potato.py`).
 - **A backup archive, as both a writer and a reader of the coverage directory.**
   `recoverage backup` and `recoverage restore` (`src/recoverage/cli.py`, the two
-  commands added in 4.3) are the only commands here that WRITE the authoritative
-  read path, and `restore` is the only entry point in this list whose bytes were
+  commands added in 4.3) read/write explicitly selected portable exports, and `restore` is the only entry point in this list whose bytes were
   not produced by this package or by rebrew. The untrusted input is a whole tar
   — member names, member sizes and payload — named by the operator (`restore`'s
   positional `ARCHIVE`, expanded with `~` and taken as a path, so a value with a
@@ -430,10 +438,10 @@ describe, not a wrong one.
    a request with neither is answered 401 and a bad Host on an unauthenticated
    deployment is answered 400. The third hook is a data-source check rather
    than a credential one: a present `rebrew-project.toml` that does not parse
-   answers 503 for every route, because the alternative is serving a `db/`
-   directory the file never named (`server._reject_broken_project_config`,
-   `src/recoverage/server.py`). `RECOVERAGE_DB` is resolved first, so an
-   explicit coverage directory keeps serving an unreadable project file.
+   answers 503 for every route, because the alternative is reporting broken live inputs as healthy emptiness (`server._reject_broken_project_config`,
+   `src/recoverage/server.py`). `RECOVERAGE_SNAPSHOTS` is resolved first, so an
+   explicit portable selection can serve exported facts without readable project
+   configuration. It never claims those are live facts.
    The one request `_require_auth` passes without a credential is a browser CORS
    preflight (`server._is_cors_preflight`: `OPTIONS` carrying both `Origin` and
    `Access-Control-Request-Method`), because a browser sends no credential on
@@ -452,167 +460,69 @@ describe, not a wrong one.
    already tells it. The fetch neither charges nor clears the failed-token
    window, and every other static asset (`style.css`, `app.js`, `print.css`,
    `favicon.svg`) stays gated.
-2. **App to coverage documents.** `db/coverage-<target>.toml` is printed by
-   `rebrew coverage build` and read here, never written (`server.coverage_snapshots`,
-   `src/recoverage/server.py`; the reader is `rebrew.coverage_toml`,
-   `rebrew/coverage_toml.py`). The documents are attacker-supplied in
-   the same sense the database file was: whoever can write into the coverage
-   directory decides what every dashboard shows, and the values are trusted as
-   data, never as code. Parsing is `tomllib`, so a malformed document raises
-   instead of executing; the reader validates the format version, the shape of
-   every array and table, and that the document's `target` matches its filename,
-   and every failure is one `CoverageTomlError`.
-   The parse is cached as JSON under `$XDG_CACHE_HOME/recoverage/documents/`
-   (`documents.cache_dir`, `src/recoverage/documents.py:142`), and a cached parse
-   goes through the same validation as a fresh one, and an entry that validation
-   refuses is discarded for a parse of the document itself, so whoever can write
-   that directory can do no more than whoever can write the coverage directory.
-   It is JSON, not pickle, because loading a pickle runs code. Three properties
-   of that directory are the whole of its exposure, and each is in the code
-   rather than in an assumption:
-   - the slot name is the sha256 of the document's own absolute path
-     (`documents._slot`, `src/recoverage/documents.py:160`), so a slot cannot be
-     reached for a document path the writer did not name, and the entry carries
-     the document's own sha256, so a slot serving a different document's content
-     is a miss rather than a substitute;
-   - the write is a temp file plus an atomic replace, and the directory is
-     created `mode=0o700` (`documents._write_cached`, `src/recoverage/documents.py:253`),
-     which is the bound that matters on a multi-user host: the cached parse is
-     the project's own reverse-engineering output in a second copy on disk, and
-     that copy is readable by whoever can read the directory. `$XDG_CACHE_HOME`
-     is read from the environment with no validation beyond "absolute"
-     (`documents.cache_dir`, `src/recoverage/documents.py:142`), so a parent
-     environment that points it at a shared path relocates that copy; nothing
-     here refuses it, because `XDG_CACHE_HOME` is not one of the `RECOVERAGE_*`
-     variables and reaches no startup gate (`config.KNOWN_VARS`,
-     `src/recoverage/config.py:56`);
-   - the directory is pruned to `_CACHE_MAX_SLOTS` (64) most-recently-used slots
-     (`documents._prune`, `src/recoverage/documents.py:210`), so the directory is
-     bounded near half a gigabyte of JSON rather than growing with every
-     coverage directory the account has ever served. The 64 is a count of slots,
-     and the ceiling that matters on a shared host is the byte total. That bound
-     is now CONDITIONAL: a slot that will not delete, and a directory that will
-     not list, are both reported at DEBUG and skipped
-     (`documents._unlink_quiet`, `src/recoverage/documents.py:193`; the listing arm
-     of `documents._prune`) rather than raised, because a delete failing in the
-     write's `finally` would replace the exception the operator needs. So a cache
-     directory on a full or read-only filesystem grows until it can be pruned
-     again, which makes the byte total rather than the slot count the real
-     ceiling. Two notes for the next pass: `documents._prune`'s own docstring
-     still says "Only the directory walk itself propagates", which the code no
-     longer does, so read the arms rather than the docstring; and the only
-     surviving loud signal is `_write_cached`'s one-shot WARNING
-     (`src/recovery/documents.py:253`), which fires on the write path and not
-     on the prune.
-   **Since `f19169f` the target id is FOLDED, not byte-compared, at every join
-   between a request and a document** (`server.target_key`,
-   `src/recovery/server.py`), which changes this boundary in both directions and
-   is recorded here rather than left to the search paragraph below. It widened
-   what a request string can reach: `/api/targets/<target>/…` and `?target=` now
-   resolve a document through a case-folded comparison rather than the exact
-   spelling, so the id that reaches a document is not necessarily the one the
-   request carried. It is the same fold the search path uses for names, so it
-   inherits that path's two properties: it is a comparison and not an authority
-   (every document it reaches was validated by the reader below first), and it
-   widens neither the `Host` allowlist nor the token gate, which are checked
-   before any route sees a target. What it fixed is the availability half: a
-   project whose `rebrew-project.toml` and whose document disagreed on the case
-   of one target id used to answer HTTP 200 with every figure zero, so a reader
-   could not tell a target that had never been built from one whose coverage was
-   on disk and unreachable.
-   Unreadable is not empty, and the two answers stay distinguishable. A document
-   that exists and does not parse raises `CoverageTomlError`, which is the 503
-   `db_unavailable` contract (`server._db_unavailable_err`, `src/recoverage/server.py`);
-   a target `rebrew-project.toml` declares that no build has written is served
-   from an empty snapshot (`server.coverage_for`, `src/recoverage/server.py`), which is
-   what the SQLite reader got from an empty table set. Collapsing the first into
-   the second would show a truncated or hostile document as a project with no
-   sections, with nothing in the response or the log to say the read had failed
-   (`tests/test_server.py`, `TestUnreadableDocumentIsNotAnEmptyTarget`).
-   Nothing JSON-decodes a stored blob any more, so the SQLite-era 1 MiB
-   metadata-value cap is gone with the metadata row it guarded. What a document
-   costs is therefore one of two things, and the persisted cache changed which:
-   a `tomllib` parse of the document (a hit whose slot the validation refuses
-   also takes it), or a JSON read of the cached parse
-   (`documents._read_cached`, `src/recoverage/documents.py:166`). Both are
-   bounded by the size of documents the project's own pipeline wrote, and the
-   parse is the expensive arm the cache exists to avoid, so the DoS entry below
-   is about a COLD document set, not about every request.
-   The documents are also liveness: a rewritten one is picked up live (each
-   document is memoized on its own stat, and the directory token folds each
-   document's content digest rather than its mtime, `documents.versions` at
-   `src/recoverage/documents.py:351` and `server._snapshot_db_mtime` at
-   `src/recoverage/server.py:812`), and the SSE watcher
-   (`api._db_watcher_loop`, `src/recoverage/api.py:946`) pushes `db-updated` so
-   the SPA re-reads it. The token is CONTENT rather than the directory's
-   mtime because rebrew replaces every document on every build, so a
-   stat-keyed token moved every ETag and broadcast a rebuild for a build that
-   changed nothing. The original binary is outside that token, which is why it
-   keys itself (boundary 3).
-3. **App to project filesystem.** `/src` and `/original` are served from the
-   project directory with an explicit resolve-and-contain check, because
-   Bottle's own prefix check does not resolve symlinks (`ui.serve_repo_file`,
-   `src/recoverage/ui.py:339`, whose `resolve()` + `is_relative_to` check and
-   whose NUL and `is_plain_relative` refusals are all in that function; the
-   refusal itself is `ui._repo_file_forbidden`, `src/recoverage/ui.py:330`).
-   Potato Mode's source panel repeats the
-   containment check independently (`src/recoverage/potato.py`).
-   The same boundary carries the BUILD's output, not only the operator's own
-   files: the target binary is read into the process and parsed in-process by
-   capstone (`server._load_dll`, `src/recoverage/server.py:1899`, and
-   `src/recoverage/disasm.py`). It is the one input here that is
-   attacker-shaped by construction, because a reverse-engineering project's
-   binary is a sample. Giving the binary its own stamp (`server.binary_stamp`,
-   `src/recoverage/server.py:1421`) closed a staleness hole, not an
-   authorization one: a replaced binary is still served to every client that
-   could already read the project.
+2. **App to coverage inputs.** Live reads use Rebrew's shared project reader,
+   which validates configured binary, source, inventory, metadata and link inputs
+   and isolates failed targets (`coverage_project.load_project_coverage`,
+   `server.coverage_snapshots`). Project analysis runs with the process's OS read
+   permissions; HTTP path containment does not sandbox that analysis.
+   Offline reads require explicit `RECOVERAGE_SNAPSHOTS` selection and validate
+   `coverage-<target>.toml` through `snapshot_from_document`. Corrupt inputs are
+   reported separately from absent targets. Portable exports contain facts and
+   evidence, not the referenced source or binary files.
+   Only portable reads use the persisted JSON parse cache in
+   `$XDG_CACHE_HOME/recoverage/documents/` (`documents._load`, `_read_cached`,
+   `_write_cached`). A slot is tied to the document path and content digest;
+   cached shapes are revalidated through `snapshot_from_document`, and invalid
+   entries fall back to parsing the document. This is derived data, not a signed
+   source of truth. A writable cache is an input trust boundary, not executable
+   code storage. New cache directories use mode 0700; existing directory access
+   and an operator-selected shared XDG location remain deployment responsibilities.
+   Pruning is best effort and limits slots rather than bytes. Live projects
+   bypass that persisted cache. Target lookup retains the existing case-folded
+   identity comparison; authentication precedes target resolution.
+
+3. **App to project filesystem.** `ui.serve_repo_file` maps `/src/*` to
+   `<serving-project>/src/*` and `/original/*` to `<serving-project>/original/*`,
+   with resolved-path containment and plain-relative/NUL checks. The target-scoped `/files/<target>/source/*` route and Potato source reads
+   contain `paths.sourceRoot` beneath the project (`_contained_source_path`).
+   `/files/<target>/binary` uses the same configured, contained binary resolver
+   as the byte and disassembly endpoints. Explicit portable mode may resolve
+   `paths.originalDll` within the serving project, taking precedence over incidental
+   project config so snapshot offsets are applied to the intended binary.
+   Unknown targets do not fall back.
+   Binary slices and disassembly use configured, contained paths through
+   `server._find_dll_path`; native parsing runs in process. Portable exports alone
+   do not carry or grant access to their referenced sources/binaries. Replacing
+   a readable binary changes cached analysis inputs, not authorization.
+
 4. **App to local process (regen).** The only privilege transition: a POST makes
    the server import rebrew and rebuild the coverage documents, with the
    process's own filesystem authority (`src/recoverage/regen.py`).
-5. **Config to runtime.** `rebrew-project.toml` and the `RECOVERAGE_*`
-   environment select the coverage directory, the target binary path, the served
-   trees, the log level and the bind address, with no signature or allowlist.
-   `XDG_CACHE_HOME` is a third input to that boundary and it sits outside the
-   gate: it relocates the persisted parse cache (`documents.cache_dir`,
-   `src/recoverage/documents.py:142`) without appearing in `config.KNOWN_VARS`
-   (`src/recoverage/config.py:56`), so a parent environment that sets it moves
-   a copy of every document's contents with no startup validation and no line
-   in the banner. `RECOVERAGE_DEV_API` is a fourth and points the other way,
-   out of this process: it is read by Node in `web/vite.config.ts:88` before
-   `recoverage` is importable, is accepted by `config.check_unknown_vars`
-   because the prefix check would otherwise refuse every command, and selects
-   which host the `make web-dev` proxy forwards `/api`, `/src` and `/original`
-   to. No gate in this package validates it, and it accepts a bare `host:port`
-   as readily as an origin, so a developer loop pointed somewhere unintended is
-   a deployment-shape risk rather than a server one.
+5. **Config to runtime.** Project configuration selects live target, source,
+   binary, inventory, archive and link-analysis inputs. It no longer selects a
+   generated coverage directory. `coverage_source` resolves explicit portable
+   selection first, so offline facts can be served without readable project
+   configuration. `RECOVERAGE_DB` is removed, with no compatibility alias.
+   Live configuration is validated and changed inputs invalidate derived views;
+   a failed read is not accepted as a healthy empty project. Configuration remains
+   operator-controlled and unsigned. Startup validates the `RECOVERAGE_*` server
+   settings (`config.check_unknown_vars`, `check_snapshot_override`).
+   `XDG_CACHE_HOME` relocates only the portable parsed-document cache; it is not
+   an analysis sandbox. `RECOVERAGE_DEV_API` is a build-time Vite proxy setting,
+   outside Python runtime validation (`web/vite.config.ts`).
 
-   What changed on this boundary since the last pass is DURABILITY, not trust.
-   `server._get_targets_config` (`src/recoverage/server.py:1629`) no longer
-   memoizes a FAILED read, so a config that was mid-write or unreadable
-   recovers on the next request instead of pinning the dashboard to "this
-   project declares no targets" for the life of the process
-   (`server._log_config_error`, `src/recoverage/server.py:1606`; and
-   `server._config_read_ok`, `src/recoverage/server.py:1592`, which keeps a
-   degraded target list from being filed under a fingerprint that never produced
-   a complete read). The file is still unsigned, a still-broken config is still
-   served as a degraded list rather than refused, and the failure now costs one
-   `read_config` per request while it lasts, so risk 5 and unmitigated 6 stand
-   unchanged: what a hostile or merely borrowed `rebrew-project.toml` can
-   redirect is exactly what it could before.
 6. **CLI to host.** The browser opener and the bind address are operator
    decisions, not attacker input.
-7. **Build to runtime (regen).** rebrew's catalog pipeline runs INSIDE this
-   process, on this process's authority, and writes the coverage directory the
-   same process then serves (`regen.run_regen`, `src/recoverage/regen.py:332`).
-   This is the one boundary where a request causes a WRITE to a path every
-   later read treats as authoritative, and the only controls on it are the
-   loopback gate, the cooldown, the in-process and advisory locks, and the
-   directory-match refusal (`regen._check_writes_where_the_dashboard_reads`,
-   `src/recoverage/regen.py:278`) and its unresolvable-directory sibling
-   (`regen._coverage_dir`, `src/recoverage/regen.py:156`, raising
-   `RegenDbUnresolvableError`), both taken before rebrew runs. There is no
-   sandbox: the pipeline runs with the server's own filesystem rights over a
-   project tree the operator may not be the author of.
+7. **Live refresh inside the web process.** `regen.run_regen` invokes shared
+   read-only project analysis with the process's OS read permissions. POST
+   admission uses `api._REGEN_LOCK`, cooldown and bounded idempotency replay;
+   Rebrew serializes its live caches per project in process. There is no
+   cross-process refresh writer, advisory regen lock or directory-match gate.
+   Normal GET reads can also rederive changed inputs, so POST controls neither
+   sandbox parsing nor bound all read-analysis cost. Configured archive/compiler
+   inputs may lie outside the fixed HTTP file subtrees
+   (`coverage_project.load_project_coverage`, `data_ownership.ownership_inputs`).
+
 8. **This app into someone else's WSGI host.** `recoverage.webapp.app`
    (`src/recoverage/webapp.py`) can be mounted directly, and everything the
    bundled listener provides as a SIDE EFFECT of being `serve` becomes the
@@ -627,53 +537,28 @@ describe, not a wrong one.
    unconfigured mount. The loopback acknowledgement (`cli._remote_bind_gate`)
    is the CLI's and does not travel with the app, which is why this is folded
    into risk 1 rather than ranked apart from it.
-9. **An archive file into the coverage directory.** `recoverage restore
-   ARCHIVE` reads a tar the operator names and writes the coverage documents
-   that `/api/targets`, `/api/targets/<t>/data`, `/stats`, the function list,
-   the `/src` and `/original` file trees and Potato Mode all read. Unlike every
-   boundary above, nothing about the archive was produced by this package: the
-   holder chooses the format, the member names, the member sizes and the bytes,
-   and a manifest in that file is a file they wrote. The trust decision is the
-   same one boundary 5 records for `rebrew-project.toml` — a local file is
-   trusted because the operator is local — but the consequences differ in a way
-   that makes it its own boundary rather than another bullet under 5: the
-   untrusted side is a TAR, a container format with its own size fields, link
-   targets and name-collision rules, and it crosses inward, from a file on disk
-   to the authoritative write path, rather than outward from the process.
-   The controls are all of the "refuse before the first write" shape
-   (`backup.restore_backup`, `src/recoverage/backup.py:502`): the whole archive
-   is verified — every member read, every size and digest checked against
-   `manifest.json` — before any document is written, and each document then
-   lands by `_atomic_write` (`src/recoverage/backup.py:198`). `recoverage backup`
-   is the other direction of the same boundary and takes no untrusted input at
-   all: it copies documents this process already parsed, and reads its own
-   output back through `verify_backup` before reporting success.
+9. **An archive into selected portable exports.** Backup/restore require
+   `RECOVERAGE_SNAPSHOTS` (`cli.backup`, `cli.restore`). The archive's member
+   names, declared sizes and payloads are untrusted. `backup.restore_backup`
+   verifies the complete archive and manifest, enforces plain coverage basenames,
+   duplicate/size bounds and differing-file refusal before publishing; document
+   writes use temporary files and replacement with rollback on failure.
+   These writes affect selected offline facts only. They never overwrite live
+   Rebrew metadata or roll canonical verdicts/history back. The manifest proves
+   archive consistency, not the operator's identity or authenticity of evidence.
 
 ## Assets
 
-- Project C sources under `<project>/src`, original binaries under
-  `<project>/original`, and the coverage documents under the project's coverage
-  directory (`db/coverage-<target>.toml`: reverse-engineering output, the thing
-  worth stealing). These are now the ONLY durable state in the package, which
-  is what makes the next entry matter: every other artifact this process writes
-  is derived and a regen rebuilds it, but `history` and `verify_results` are
-  carried forward from the previous document and cannot be reproduced by
-  `rebrew coverage build`.
-- **THE BACKUP ARCHIVE, a third copy of that same output, which this list did
-  not name until `87e3022` added it.** `recoverage backup` writes every
-  coverage document into one tar beside the project (`../backups/` by default,
-  or `$RECOVERAGE_BACKUP_DIR`), so the one asset worth stealing is duplicated
-  into a directory the project's own tree does not cover and no `.gitignore`
-  governs. Its exposure is a filesystem mode rather than a control, because
-  there is no encryption and no key: the members and the manifest are written
-  `0o600` (`backup._tar_bytes`, `src/recoverage/backup.py:242`), which keeps
-  them off other users' accounts but does nothing about a shared filesystem, a
-  container volume, or whatever copies the runbook's backups directory onto
-  second storage. Unlike the parse cache below, this copy is intended to be
-  moved off the machine and kept for months, so it is the one asset here whose
-  lifetime exceeds the process that made it. Losing it costs history and
-  verify results that no regen can reproduce; that is `docs/RECOVERY.md`'s RPO
-  and this is the asset it is about.
+- Project sources, configuration, inventory, reference binaries, layout and
+  canonical function/data/type metadata are authoritative project assets.
+  Function verdicts, `status_history` and verification provenance belong to
+  Rebrew's owners and project backups, not to Recoverage refresh.
+- Portable exports and their backup archives contain exported facts/evidence;
+  they omit the source/binary files themselves. Archives are unencrypted and
+  expose those exported facts to anyone with filesystem access. Preserve old
+  exported transitions through `rebrew coverage import-history` before retiring
+  exports; do not assume every legacy `verify_results` entry is reconstructible.
+
 - The `--token` / `RECOVERAGE_TOKEN` bearer value, the only credential the
   system holds.
 - A SECOND copy of the coverage documents, which this list did not name until
@@ -731,15 +616,17 @@ anyone who can reach those, and nothing else about the value.
 at the dashboard; mitigated by the Host allowlist on loopback binds
 (`src/recoverage/server.py`, installed at
 `src/recoverage/cli.py`) and by the `Sec-Fetch-Site` rejection on regen
-(`src/recoverage/api.py`). Tampering: only regen writes, and only from loopback.
-Information disclosure: `/src` and `/original` proxy the whole project tree,
+(`src/recoverage/api.py`). Tampering: read routes and refresh do not write project evidence; explicit
+portable export/restore writers and canonical metadata owners are separate.
+Information disclosure: `/files/<target>/source/*` and `/files/<target>/binary` expose configured,
+contained target files; `/src` and `/original` expose their fixed project subtrees,
 and the byte and asm endpoints serve arbitrary offsets of the original binary
 (`src/recoverage/api.py`) with no per-resource authorization. The other arm of
-that boundary is where a file reading turns into a browser one: those two routes
+that boundary is where a file reading turns into a browser one: project file routes
 guess a content type from the file's own suffix, so an `.html` or an `.svg`
-anywhere under the project tree is rendered as a document at this origin and can
+under those served subtrees may otherwise render as a document at this origin and
 reach every `/api/*` response. `server.csp_for_path`
-(`src/recoverage/server.py:3698`) answers both prefixes under `_INERT_CSP`, so
+(`src/recoverage/server.py:3698`) answers `/files/`, `/src/` and `/original/` under `_INERT_CSP`, so
 such a file lands in an opaque, scriptless origin; `server.is_plain_relative` is
 what keeps the path inside the tree in the first place.
 `GET /api/health` additionally hands any authenticated client the process's
@@ -788,8 +675,8 @@ request line over 65536 bytes is answered 414 and the connection dropped
 (`src/recoverage/devserver.py`), which is the only framing resource bound.
 
 **App to coverage documents.** Tampering is bounded by the direction of the
-dependency: this server only reads, and the only two writers are `rebrew
-build-db` and `recoverage restore`, each replacing each document whole through a
+dependency: this server only reads, and portable document writers are explicit `rebrew coverage export` and
+`recoverage restore`, each replacing each document whole through a
 temporary sibling and an atomic rename (`rebrew/coverage_toml.py` and
 `backup._atomic_write`, `src/recoverage/backup.py:198`), so a reader sees the
 previous document or the new one and never a torn write. A document the reader
@@ -806,22 +693,16 @@ than vanished is the sizing of that fold, which is unmitigated item 12a above.
 served in full, so a `.env` or a key committed under `src/` is published to
 every client.
 
-**App to local process.** A local, unauthenticated process can trigger regen.
-The `Origin` and `Sec-Fetch-Site` checks stop the browser-shaped version; they
-do not stop a local binary, and the `Sec-Fetch-Site` check is skipped entirely
-when an `Origin` is sent that the same-origin test accepts
-(`server.origin_is_this_dashboard`, `src/recoverage/server.py`: the origin's host and
-port against the request's own `Host`, so a page on another loopback port is
-refused). Regen runs with no timeout by design (`src/recoverage/regen.py`). The
-in-process lock and cooldown are not the whole answer, because a second writer
-this process cannot see (another terminal, a cron job) is a duplicate rather
-than a flood: `regen._exclusive_regen` takes an advisory lock on an open
-descriptor and refuses rather than queues (`src/recoverage/regen.py`), so a
-second pipeline cannot interleave a whole-document replace with the first.
+**App to live analysis.** An authorized loopback caller can request read-only
+refresh. Origin/fetch-site checks protect the browser-shaped POST path, while
+cooldown, single-flight and idempotency bound duplicate POST admission. There is
+no advisory writer lock or cross-process publication to serialize. GET requests
+also rederive changed inputs; expensive input parsing remains in process and is
+not sandboxed by POST controls (`regen.run_regen`, `coverage_project`).
 
 **Config to runtime.** A `rebrew-project.toml` from a cloned or shared project,
-or a `RECOVERAGE_DB` / `RECOVERAGE_BIND` inherited from a parent environment,
-silently redirects the served trees, the coverage directory or the listener.
+or a `RECOVERAGE_SNAPSHOTS` / `RECOVERAGE_BIND` inherited from a parent environment,
+silently redirects the configured analysis inputs, portable selection or the listener.
 There is no prompt and no warning when a config changes under a running server;
 the memoized path just recomputes (`src/recoverage/_paths.py`,
 `src/recoverage/server.py`). Since `1991284` the memo caches only a SUCCESSFUL
@@ -847,40 +728,27 @@ a per-member and an archive-wide bound are checked from the HEADERS before any
 member bytes are read (`_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`,
 `src/recoverage/backup.py:94`) — a check after `extractfile` would already have
 allocated the thing it was meant to bound. Elevation of privilege: a restore is
-the strongest write this package performs, since it replaces the authoritative
-read path wholesale, and it takes no authentication at all, because it is a local
-command and the holder of the filesystem is the trust. That is a deliberate
-trade; the residual is that any local process which can run the command can
-substitute the project's entire coverage state, and the rollback refusal is the
-only thing standing between a mistaken archive and a silently reverted project
-(`backup.restore_backup`, `src/recoverage/backup.py:502`, refusing to roll over
-a document that differs unless `--force`). Repudiation: an archive carries a
+a write to the explicitly selected portable read path. It is a local command,
+and the holder of the filesystem is trusted to choose the archive. A mistaken
+archive can replace offline facts after the differing-file refusal is explicitly
+overridden with `--force`; canonical live metadata and history are unchanged.
+Repudiation: an archive carries a
 `created` stamp and per-member digests, so WHAT was restored and WHEN is
 recoverable from the file itself, but nothing records WHO ran the command —
 unmitigated 17. Information disclosure: none beyond the archive's own contents,
 since the operator supplies the file and learns its members.
 
-**Where the flow has no audit trail.** A restore writes the authoritative state
-and the served pages change to match, with nothing marking them as restored:
-`server._snapshot_db_mtime` (`src/recoverage/server.py:812`) keys on content
-digests, so the ETags move and `/api/events` broadcasts `db-updated`, but both
-are indistinguishable from a rebuild. `docs/RECOVERY.md` tells the operator to
-re-run `regen` afterwards and the model names that; what does not exist is any
-way for the DASHBOARD to tell a reader whether the figures on screen came from
-`rebrew coverage build` or from an archive. Named here so a later pass can decide
-whether that is worth a field.
+**Where the flow has no audit trail.** Offline restore changes selected exported
+facts without a persistent served marker saying they were restored. ETags and
+SSE change detection observe changed content, not its operator or provenance.
+Offline readers detect restored files; live refresh refuses
+`RECOVERAGE_SNAPSHOTS` mode. Canonical live verdicts/history are unchanged.
 
-**A stale data set is now detectable, which is a detection rather than a
-boundary.** Since `00b821c` a document set that stopped moving ages out of
-`/api/health`'s verdict: the newest document's mtime is judged against
-`config.DEFAULT_MAX_DB_AGE_HOURS` (`src/recoverage/config.py:141`) and named in
-the `reasons` list, because "the data is days old" is the one fault every other
-signal on that endpoint stays quiet through — the documents parse, every route
-answers 200, the caches hit, no counter moves. The bound is a constant and not a
-`RECOVERAGE_*` setting, deliberately: the build cadence belongs to the rebrew
-project, not to this package. What it does not do is stop the stale figures being
-served, so a reader who never polls health is looking at last week's coverage
-with nothing in the page saying so — unmitigated 9.
+**Stale portable data.** Only explicit portable mode applies
+`config.DEFAULT_MAX_DB_AGE_HOURS` to export mtimes. It reports old exports in
+health without refusing to serve their facts. Unchanged canonical input mtimes
+do not make live mode stale; changed inputs rederive the live view. Failed live
+targets remain explicit failures.
 
 ## Recurrence: the classes this history has already fixed
 
@@ -996,19 +864,18 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `src/recoverage/cli.py` | Accidental LAN exposure |
 | Every request-supplied integer goes through `server.parse_ascii_int`: ASCII digits in the stated base and nothing else, with `api._parse_byte_count` and `api._page_int` on top | `src/recoverage/server.py`, `src/recoverage/api.py` | Digit-set smuggling: `int(x, base)` also accepts the whole Unicode Nd/Nl/No sets and the `_` separator, so `?size=٤٠٩٦` served a 4096-byte slice and `?page=1_0` opened page 10 |
 | Startup validation of every `RECOVERAGE_*`, unknown name rejected | `src/recoverage/config.py`, `src/recoverage/cli.py` | Misconfigured deployment, misspelled env var |
-| Present-but-unreadable `rebrew-project.toml` refused on every route by a `before_request` hook, after auth and before any read, and an unreadable `RECOVERAGE_DB` value refused at startup rather than silently globbing nothing | `src/recoverage/server.py` (`_reject_broken_project_config`, `src/recoverage/server.py:3591`, registered at `:3543`; the startup check is `config.check_db_override`) | A coverage directory the project file never named, which reads as a project with no coverage rather than as a broken config. The scope is NARROWER than the table row used to claim: the hook calls `_db_path()`, so a `RECOVERAGE_DB` override is applied first and a request with the override set reads THAT directory and is never refused. An unreadable project file under an explicit override is therefore the operator's own setting pointing somewhere wrong, which the startup check cannot see and the hook deliberately does not cover (`server._reject_broken_project_config`, `src/recoverage/server.py:3591`). That is a stated scope limit, not a bypass, and a reader relying on the older wider claim would model a gate that is not there |
+| Live configuration errors are refused; explicit portable selection is validated independently | `_paths.coverage_source`, `config.check_snapshot_override`, `server._reject_broken_project_config` | A broken live project silently reading as healthy empty coverage; offline facts may intentionally serve without project configuration |
 | Grid lattice width from a document's `columns` clamped to `_MAX_GRID_COLUMNS` (256) before the table is sized | `src/recoverage/potato.py` (`layoutSection`), `web/app/grid/pack.ts` (`MAX_GRID_COLUMNS`) | A document carrying an unbounded `columns` asking the renderer for gigabytes of table. The document's numbers are read as plain ints with no ceiling, so the bound is the only thing between a hostile document and the allocation |
 | `Sec-Fetch-Site: cross-site` and same-origin `Origin` gate on regen | `src/recoverage/api.py` | Cross-site POST |
-| Regen refuses to run when rebrew would write a coverage directory the dashboard does not read (`regen._check_writes_where_the_dashboard_reads`, `RECOVERAGE_DB` compared against `rebrew.workspace.db_dir`), raised as `RegenDbMismatchError` and answered as exit 2 by the CLI or a JSON 500 by the API | `src/recoverage/regen.py`, `src/recoverage/cli.py`, `src/recoverage/api.py` | A regen that reports `Done` after rewriting documents no served directory reads: a silent staleness, which reads as a dashboard that simply never refreshes |
-| Single-flight lock + cooldown on regen | `src/recoverage/api.py` | Concurrent torn rebuilds, regen flood |
-| Cross-process advisory lock on regen (`.recoverage-regen.lock`, taken on an open descriptor in the directory `rebrew.workspace.db_dir` resolves, non-blocking, released by the kernel when a holder dies; a held lock raises `RegenBusyError`, answered as exit 1 by the CLI and as the 429 the in-process lock sends, counted under `rejected`) | `src/recoverage/regen.py`, `src/recoverage/api.py` | A duplicate this process cannot see: a `recoverage regen` at another terminal, or a cron job over the same tree. The writer replaces each `coverage-<target>.toml` whole, so two writers interleave and a reader can land between one truncate and its write. Taking it on a descriptor is what releases it when a regen is killed mid-run, which a lock file's mere presence could not do |
+| Refresh refuses explicit offline mode and writes no project files | `src/recoverage/regen.py` | A refresh falsely claiming to update portable exports, or a view operation mutating canonical evidence |
+| Single-flight admission + cooldown on refresh | `src/recoverage/api.py` | Duplicate expensive analysis and request floods |
 | `Idempotency-Key` ledger: charset-validated (`[A-Za-z0-9._:-]`, 128 chars), 600 s TTL, 128-slot eviction, a completed run replayed and an in-flight run answered 202 with `in_progress` before the cooldown | `src/recoverage/api.py` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `src/recoverage/server.py` | Injection, framing, token leak via Referer |
-| The `/src` and `/original` file routes answer under an INERT policy rather than the dashboard's own: `server.csp_for_path` (`src/recoverage/server.py:3767`) picks `server._INERT_CSP` (`default-src 'none'; sandbox; base-uri 'none'; form-action 'none'`, `src/recoverage/server.py:3767`) for any path under `_REPO_FILE_PREFIXES`, and `_CSP` everywhere else | `src/recoverage/server.py` | A file the project tree picked up — a vendored `.html`, a generated `.svg` — is served with a content type guessed from its own suffix, so the browser renders it AS a document at this origin, under a policy whose `script-src` allows `'unsafe-inline'`. Such a file could read every `/api/*` response, and with `--token` on the auth cookie rides along on those requests even though the script cannot read it. `sandbox` puts the document in an opaque origin with scripting and forms off, and `default-src 'none'` denies what is left; the files stay readable, which is what the code panes are for |
+| The `/files/`, `/src` and `/original` file routes answer under an INERT policy rather than the dashboard's own: `server.csp_for_path` (`src/recoverage/server.py:3767`) picks `server._INERT_CSP` (`default-src 'none'; sandbox; base-uri 'none'; form-action 'none'`, `src/recoverage/server.py:3767`) for any path under `_REPO_FILE_PREFIXES`, and `_CSP` everywhere else | `src/recoverage/server.py` | A file the project tree picked up — a vendored `.html`, a generated `.svg` — is served with a content type guessed from its own suffix, so the browser renders it AS a document at this origin, under a policy whose `script-src` allows `'unsafe-inline'`. Such a file could read every `/api/*` response, and with `--token` on the auth cookie rides along on those requests even though the script cannot read it. `sandbox` puts the document in an opaque origin with scripting and forms off, and `default-src 'none'` denies what is left; the files stay readable, which is what the code panes are for |
 | `Secure` on the auth cookie and `Strict-Transport-Security` beside it, both read off the request through `server.request_is_https` (`wsgi.url_scheme`, or `X-Forwarded-Proto` behind a TLS-terminating proxy) | `server.set_auth_cookie`, `src/recoverage/server.py` | A cookie handed to whoever was on the wire when a reader followed an http link to a host that also answers https. A constant `Secure` would instead stop the cookie being stored at all on the plaintext loopback bind the bundled listener serves, and neither answer is a bypass: a client that claims https over plaintext only ever makes the response stricter |
 | CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response | `src/recoverage/server.py`, `src/recoverage/cli.py` | Cross-origin reads |
 | CORS `Access-Control-Expose-Headers` names exactly `ETag, Retry-After, Idempotent-Replay, X-Request-ID`, and `X-Request-ID` joined `Access-Control-Allow-Headers` | `server._security_headers`, `src/recoverage/server.py` | Without the exposure a `--cors` frontend cannot do the conditional GET the ETag-bearing endpoints are built around, cannot read the `Idempotent-Replay` answer, and cannot read the request id it was told to send, so the preflight refuses the request before the header leaves the browser at all. Every exposed name is a validator or a correlation label, none is the token, and the echoed `Access-Control-Allow-Origin` is the allowlist entry rather than the request's `Origin` reflected |
-| Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `src/recoverage/ui.py` | Path traversal |
+| Symlink-resolving containment plus NUL rejection on `/files/`, `/src`, `/original` | `src/recoverage/ui.py` | Path traversal |
 | Independent containment check on Potato Mode's source panel | `src/recoverage/potato.py` | Path traversal through a second reader |
 | Allowlist regex for package assets | `src/recoverage/ui.py` | Arbitrary file read from the assets dir |
 | Bounded request body, VA list, page offset, slice size, search length | `src/recoverage/api.py` | Memory and CPU exhaustion per request |
@@ -1023,10 +890,10 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Per-socket 120 s in-flight deadline and 15 s keep-alive idle deadline | `src/recoverage/devserver.py` | Threads pinned by half-open or non-reading peers, and by idle keep-alive connections |
 | 65536-byte request-line cap, answered 414 | `src/recoverage/devserver.py` | Unbounded per-connection read |
 | Negative VA, file offset and size refused before the slice at the one function both the API and Potato arrive at; container-header width read over a bounded 4096-byte buffer with a range-checked `e_lfanew` and a checked `PE\0\0` signature, a floor rather than an error | `src/recoverage/disasm.py` (`_disassemble_loaded`, `binary_width_bits`) | A negative Python index counting back from the END of the binary, which answers a well-formed decode of bytes the reader never selected; an address capstone's unsigned `insn.address` cannot carry, rendered beside the byte dump of the bytes it claims to describe; and a sample steering the width reader to a `Machine` field it planted. The three refusals sit at the callee rather than in either caller, so a fourth route that reaches the decoder inherits them |
-| Documents are read as UTF-8 text and are written only whole: by `rebrew coverage build` and by `recoverage restore`, both landing each document through a temporary sibling and an atomic rename. NOTE the reader never writes; the only writers are those two, and this row said "the only writer" until a restore became the second | `src/recoverage/server.py`, `rebrew/coverage_toml.py`, `src/recoverage/backup.py` (`_atomic_write`) | Accidental writes, and a torn read of a document being rebuilt or restored. The restore arm also verifies the whole archive against its manifest before the first write, so a half-restored coverage directory is not reachable |
+| Documents are read as UTF-8 text and are written only whole: by `rebrew coverage export --output <directory>` and by `recoverage restore`, both landing each document through a temporary sibling and an atomic rename. NOTE the reader never writes; the only writers are those two, and this row said "the only writer" until a restore became the second | `src/recoverage/server.py`, `rebrew/coverage_toml.py`, `src/recoverage/backup.py` (`_atomic_write`) | Accidental writes, and a torn read of a document being rebuilt or restored. The restore arm also verifies the whole archive against its manifest before the first write, so a half-restored coverage directory is not reachable |
 | Backup archive integrity: every member's size and sha256 recorded in `manifest.json` and re-checked on read; the archive is verified in full before the first document is written, and each document lands by temp file plus `os.replace` (`backup._atomic_write`, `src/recovery/backup.py:198`) | `src/recovery/backup.py` (`_verify_archive`, `restore_backup`, `write_backup`) | A truncated or tampered archive reaching the authoritative read path, and a restore that lands half its members and leaves a directory no reader can distinguish from a rebuild. `write_backup` reads its own output back through `verify_backup` before reporting success, so a reported backup has been parsed once |
 | Tar hardening on restore: a member name must be a plain basename AND match the coverage glob; per-member and archive-wide byte bounds are checked from the HEADERS before any payload is read; a member delivering more bytes than its header declares is refused; a name appearing twice is refused | `src/recoverage/backup.py` (`_read_archive`, `_is_coverage`, `_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`) | Path traversal out of the coverage directory, an allocation bomb from a header claiming gigabytes, a member verified by prefix only, and a member substituted by taking whichever duplicate the map kept |
-| Rollback refusal: a restore refuses to overwrite a document whose bytes differ from the archive's unless `--force` is given, and `--force` overrides that check and no other (a corrupt archive, a foreign member and an unreadable file are still refusals) | `src/recovery/backup.py` (`restore_backup`), `src/recovery/cli.py` (`restore`) | A month-old archive silently rolled over a tree rebuilt since, discarding every status transition since, which `recoverage regen` cannot recover |
+| Restore refuses differing portable documents unless `--force` is selected; corruption and member bounds remain enforced | `backup.restore_backup` | Silent replacement of selected offline facts. Canonical verdicts/history are outside this operation |
 | Document gate: the format `version` must be the one this build reads, every array and table must have its documented shape, and the document's `target` must match its filename; a failure is answered 503 | `src/recoverage/server.py`, `rebrew/coverage_toml.py` | A truncated, foreign or hand-edited document reading as an empty target, and query-time 500s from a document the reader cannot use |
 | Basename-only coverage-directory name in health and SSE payloads | `src/recoverage/api.py` | Home-directory layout disclosure |
 | JSON error contract, `Cache-Control: no-store` on errors, no tracebacks in bodies, control-char-escaped logs | `src/recoverage/server.py` | Information disclosure, stale cached errors, log forgery |
@@ -1158,67 +1025,38 @@ generic STRIDE checklist. Each entry names the shipped fix in
     (`src/recoverage/cli.py`). A failure in either is logged and the start continues,
     so a server can be serving with a dead coverage watcher, which reads `healthy`
     while no SSE client refreshes.
-14. The persisted parse cache is a second copy of every document's parsed
-    contents on disk, and its access control is a directory mode rather than a
-    control: `0o700` at creation, never re-checked, and overridable by pointing
-    `XDG_CACHE_HOME` at a shared path (`documents.cache_dir`,
-    `src/recoverage/documents.py:142`; the write at
-    `src/recoverage/documents.py:142`). Reading the cache is safe by
-    construction, so this is an exposure-of-data-at-rest gap rather than a code
-    execution one, but it is the only place the project writes a copy of its
-    reverse-engineering output OUTSIDE the project tree, and the model had not
-    named it as an asset before. Since 4.2 its SIZE bound is also weaker than the
-    slot count suggests, because a prune that cannot delete or cannot list now
-    reports and continues (`documents._unlink_quiet`,
-    `src/recoverage/documents.py:193`) rather than raising: the directory is
-    bounded only while the filesystem accepts the deletes.
-15. A request can cause a WRITE to a path every later read treats as
-    authoritative: the regen pipeline runs rebrew's catalog in-process, with the
-    server's own filesystem rights, and nothing separates it from the server
-    (`regen.run_regen`, `src/recoverage/regen.py:332`). The loopback gate,
-    cooldown, locks and directory-match refusal bound WHEN it runs, not WHAT it
-    can touch, and there is no sandbox between the pipeline and the project
-    tree. A project the operator did not author is enough to have its tree
-    walked, parsed and rewritten.
-16. **A restore replaces the authoritative state with no record that it did.**
-    The coverage documents are the only durable state here, and `recoverage
-    restore` overwrites all of them from a file the operator supplied, with no
-    undo, no journal and no line in the served output that says the bytes came
-    from an archive rather than from a rebuild. The manifest's `created` stamp
-    and per-member digests survive the transfer, so an investigator holding the
-    archive can date what happened, but nothing inside the running server can:
-    `server._snapshot_db_mtime` keys on content digests, so a restore moves the
-    ETags and broadcasts `db-updated` in exactly the shape a rebuild does. This
-    is listed below item 15 rather than beside it because it is the inverse
-    trust direction — the bytes came from outside the package rather than from
-    rebrew — and because the damage is silent in a way regen's is not: a failed
-    regen answers 500 and logs a failure, while a rollback to a month-old archive
-    produces a healthy dashboard full of last month's coverage.
-17. **Nothing attributes a backup or a restore to a person.** Both commands run
-    under the invoking user and write no record of the operator, the host, or
-    which archive was taken where; the archive's own `created` field is a wall
-    clock, not an identity. For the only durable state in the package, that is
-    the missing half of item 16: the repository holds no audit trail from
-    "documents were replaced" back to a who. A filesystem that already answers
-    that question (`/var/log`, a container's runtime log, an init system's
-    journal) is the mitigation a deployment inherits, and it is outside this
-    tree — so this is a gap in what the package can offer, not a claim that a
-    deployment has no trail at all.
+14. Portable-mode parse caches create an additional copy of exported facts
+    outside the project. Live reads bypass that cache. New directories use mode
+    0700, but existing permissions and shared XDG locations are not rechecked.
+    Best-effort slot pruning bounds neither total bytes nor retention when
+    deletion fails. Backup archives are another external copy, with their own
+    retention and filesystem access requirements (`documents.cache_dir`,
+    `_read_cached`, `_write_cached`, `_prune`; `backup.write_backup`).
+15. Read requests can trigger expensive shared project analysis in the web
+    process, with its OS read permissions. There is no parser sandbox. POST
+    cooldown/idempotency controls do not bound GET-triggered analysis or total
+    CPU/memory consumption (`regen.run_regen`, `load_project_coverage`).
+16. Offline restore can replace selected portable facts without a persistent
+    served marker saying they were restored. A stale but valid archive can show
+    stale offline progress; `--force` acknowledges differing files. This never
+    rolls canonical live verdicts or status history back.
+17. Backup and restore do not record an operator identity or audit journal.
+    The manifest's timestamp and member digests establish archive consistency,
+    not who created or restored it. Deployments must retain their own audit trail
+    for offline export operations and for canonical project backups separately.
 
 ## Abuse cases
 
 - A hostile but authenticated LAN user with the shared token can scrape the
-  whole project: `/src` for sources, `/original/<t>.dll` and
+  whole project: `/files/<t>/source/*` for configured sources, `/files/<t>/binary` and
   `/api/targets/<t>/sections/<s>/bytes?size=4096` for the binary,
   `/api/targets/<t>/data` for the map. Nothing distinguishes browsing from bulk
   extraction; the only bound is the page and slice caps.
-- A local process without any token can loop `POST /api/regen` to consume the
-  host's CPU and rewrite `db/`, degrading the dashboard for the operator. The
-  cooldown bounds rate, not volume; the `Idempotency-Key` ledger absorbs a
-  *retry* of one key, not a caller that mints a fresh key per attempt, which is
-  bounded only by the 5 s cooldown, the single-flight 429 and the advisory
-  lock's refusal (`src/recoverage/regen.py`), which stops a second pipeline
-  rather than slowing the first.
+- An authorized loopback caller can repeatedly request refresh with fresh
+  idempotency keys and consume analysis CPU within POST admission limits. GET
+  requests can also rederive changed inputs. Refresh writes no exports or native
+  metadata; cooldown and single-flight admission do not bound all read cost.
+
 - Any webpage a developer visits can hold 32 `/api/events` connections to their
   own loopback dashboard (`src/recoverage/api.py`) without any credential, because the
   SPA's EventSource is same-origin and no-cors from a cross-site page. A
@@ -1257,24 +1095,13 @@ generic STRIDE checklist. Each entry names the shipped fix in
   log, the chat history of whoever pasted it, and any navigation the
   `Referrer-Policy` does not cover. The delivery mechanism is unchanged in
   substance; the exposure window on the client side is shorter.
-- **An operator (or anything that reaches the operator's shell) can roll the
-  project's coverage back silently and keep the dashboard answering 200 the whole
-  time.** This is the abuse case with no network peer at all: `recoverage restore
-  backups/coverage-<old>.tar --force` replaces every coverage document with an
-  older set, the dashboard serves it as current, and every health signal reads
-  healthy because the documents parse, the caches fill, no counter moves and
-  nothing is slow. Only the age signal now disagrees, and only once the restored
-  documents are older than 24 hours. The enabling code path is
-  `backup.restore_backup` (`src/recovery/backup.py:502`) writing through
-  `_atomic_write` (`src/recovery/backup.py:198`) into the very directory
-  `server._snapshot_db_mtime` reads, with `--force` overriding exactly the one
-  check — the differing-document refusal — that would have made it a decision.
-  `docs/RECOVERY.md`'s drill exercises this deliberately, which is why the
-  `--force` arm exists; the gap is that nothing in the served output marks the
-  result as restored (unmitigated 16), so a drill and a mistake are the same
-  bytes.
+- An operator can restore an old valid archive into selected offline exports
+  with `--force`, leaving an offline dashboard showing old facts without a
+  persistent restore marker. This is an offline rollback risk, separate from
+  canonical live project state and its backups (`backup.restore_backup`).
+
 - A `RECOVERAGE_BACKUP_DIR` inherited from a parent environment redirects where
-  the only durable state is COPIED, the same shape as the trusted-by-assumption
+  portable exported facts are COPIED, the same shape as the trusted-by-assumption
   environment in risk 11: the variable names a directory, nothing `serve`
   resolves reads it, and the archive lands there with `0o600` members and no
   encryption (`backup.backup_dir_from_env`, `src/recovery/backup.py:123`). A

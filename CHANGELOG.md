@@ -5,7 +5,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-10-15
+
 ### Breaking
+- Removed `recoverage.config::db_override`; use `snapshot_override` only for explicit
+  offline exports. Normal mode resolves the live project root from the working directory.
+
+- Local coverage reads canonical project inputs through Rebrew's shared live
+  reader. Generated coverage files and project `db_dir` settings are unnecessary.
+  `RECOVERAGE_DB` is removed; `RECOVERAGE_SNAPSHOTS` explicitly selects portable
+  offline exports. `regen` and `serve --regen` refresh live views without writing
+  files and refuse portable mode. Backup/restore operate only on explicit exports.
+  Preserve old exported history with `rebrew coverage import-history` before
+  retiring it. Status history now lives in canonical function metadata.
 
 - Function documentation in both dashboard modes comes only from dedicated
   metadata (`note` and `blocker`). Inline `NOTE`, `BLOCKER`, `ORIGIN`, and
@@ -13,10 +25,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stored metadata only; its C-source argument and Potato Mode's private
   `_extract_annotations` reader are removed.
 
-- Rebrew 3.0.0 is the minimum version (was 2.23.0): `rebrew>=3.0.0`. The
+- Rebrew 4.1.0 is the minimum version (was 2.23.0): `rebrew>=4.1.0`. The
   server uses address-only source bindings and canonical format-2 metadata.
   Function and data state lives in the dedicated stores. See
   [UPGRADING.md](docs/UPGRADING.md).
+
+### Fixed
+- Open configured target sources and binaries outside the fixed `src/` and
+  `original/` trees through target-scoped, project-contained file routes. Encode
+  target and filename components once; serve project files under inert CSP.
+
 
 ## [6.1.0] - 2026-10-08
 

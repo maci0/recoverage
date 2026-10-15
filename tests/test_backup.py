@@ -534,14 +534,14 @@ class TestBackupCli:
     ) -> None:
         """A backup of a different directory than the one served protects nothing.
 
-        The two reach the coverage directory through the same `_db_path`, so
-        RECOVERAGE_DB moves them together with the request path. This pins that
+        The two reach the coverage directory through the same `coverage_source`, so
+        RECOVERAGE_SNAPSHOTS moves them together with the request path. This pins that
         they have not acquired a resolution of their own.
         """
-        from recoverage._paths import _db_path as resolve
+        from recoverage._paths import coverage_source as resolve
 
         db = build_synthetic_coverage(tmp_path / "db").parent
-        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
         assert resolve() == db
         result = runner.invoke(app, ["backup", "--to", str(tmp_path / "s.tar"), "--json"])
         assert result.exit_code == 0, result.output
@@ -556,7 +556,7 @@ class TestBackupCli:
     ) -> None:
         db = build_synthetic_coverage(tmp_path / "db").parent
         archive = tmp_path / "snap.tar"
-        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
         result = runner.invoke(app, ["backup", "--to", str(archive)])
         assert result.exit_code == 0, result.output
         assert archive.exists()
@@ -573,7 +573,7 @@ class TestBackupCli:
     ) -> None:
         """A scheduled job reads this, not the table."""
         db = build_synthetic_coverage(tmp_path / "db").parent
-        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
         result = runner.invoke(app, ["backup", "--to", str(tmp_path / "s.tar"), "--json"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
@@ -585,7 +585,7 @@ class TestBackupCli:
     ) -> None:
         empty = tmp_path / "db"
         empty.mkdir()
-        monkeypatch.setenv("RECOVERAGE_DB", str(empty))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(empty))
         result = runner.invoke(app, ["backup", "--to", str(tmp_path / "s.tar")])
         assert result.exit_code == 1
         assert not (tmp_path / "s.tar").exists()
@@ -597,7 +597,7 @@ class TestBackupCli:
         archive = tmp_path / "snap.tar"
         write_backup(db, archive)
         archive.write_bytes(b"not a tar at all")
-        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
         result = runner.invoke(app, ["restore", str(archive)])
         assert result.exit_code == 1
         assert "Error" in result.output + str(result.stderr or "")
@@ -610,7 +610,7 @@ class TestBackupCli:
         write_backup(db, archive)
         document = next(db.glob("coverage-*.toml"))
         document.write_text(document.read_text() + "\n# newer\n", encoding="utf-8")
-        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
         result = runner.invoke(app, ["restore", str(archive)])
         assert result.exit_code == 1
         assert "# newer" in document.read_text()

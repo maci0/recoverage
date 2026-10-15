@@ -10,11 +10,11 @@ Module map (dependencies point one way, left to right):
   in-package deps)
 - ``devserver``   — the WSGI serving stack: socket family, admission cap, socket
   deadline, keep-alive framing (imports config+metrics; stdlib only)
-- ``_paths``      — coverage-directory resolution (imports config)
-- ``documents``   — coverage documents read per file, the TOML parse persisted
-  across restarts, and their verified backup/restore (``backup``)
-- ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
-  lazily and runs both under one call (no in-package deps)
+- ``_paths``      — live project or explicit portable snapshot resolution (imports config)
+- ``documents``   — immutable live views or portable documents read per file;
+  portable TOML parses persist across restarts; ``backup`` archives explicit exports
+- ``regen``       — explicit read-only refresh of Rebrew's shared live project view
+  (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,
   compression, stats, DLL cache, the ``is_plain_relative`` path-containment
   rule every route and the C-source reader share); defines ``app`` plus its
@@ -39,4 +39,4 @@ and that every module here is named in this map, so a new module has to
 declare where it sits.
 """
 
-__version__ = "6.1.0"
+__version__ = "7.0.0"

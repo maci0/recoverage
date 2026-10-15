@@ -39,7 +39,7 @@ export type CoveragePanelProps = {
   section: Section | null;
   cellIndex: number | null;
   panes: Panes;
-  sourceRoot: string;
+  target: string;
   /** The address a parent-function NAME resolves to, or null when the search
    * index does not carry it. `Cell.parent_function` is a name, so the Parent
    * link is a lookup rather than an address it already holds. */
@@ -165,12 +165,12 @@ function CodeSection({
 
 function FunctionMeta({
   fn,
-  sourceRoot,
+  target,
   docs,
   onJumpToAddress,
 }: {
   fn: FunctionDetail;
-  sourceRoot: string;
+  target: string;
   docs: string | null;
   onJumpToAddress: (address: number) => void;
 }): ComponentChildren {
@@ -182,7 +182,7 @@ function FunctionMeta({
             {index > 0 ? ", " : ""}
             <a
               className="source-link"
-              href={sourceFileUrl(sourceRoot, file)}
+              href={sourceFileUrl(target, file)}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -391,7 +391,7 @@ function PanelMeta({
   fn,
   cell,
   section,
-  sourceRoot,
+  target,
   docs,
   parentVaFor,
   onJumpToAddress,
@@ -399,7 +399,7 @@ function PanelMeta({
   fn: FunctionDetail | null;
   cell: Cell | undefined;
   section: Section | null;
-  sourceRoot: string;
+  target: string;
   docs: string | null;
   parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
@@ -408,7 +408,7 @@ function PanelMeta({
     return (
       <FunctionMeta
         fn={fn}
-        sourceRoot={sourceRoot}
+        target={target}
         docs={docs}
         onJumpToAddress={onJumpToAddress}
       />
@@ -465,7 +465,7 @@ export function CoveragePanel({
   section,
   cellIndex,
   panes,
-  sourceRoot,
+  target,
   parentVaFor,
   onJumpToAddress,
   hiddenWhenStacked,
@@ -579,7 +579,7 @@ export function CoveragePanel({
               fn={fn}
               cell={cell}
               section={section}
-              sourceRoot={sourceRoot}
+              target={target}
               docs={panes.docs}
               parentVaFor={parentVaFor}
               onJumpToAddress={onJumpToAddress}

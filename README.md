@@ -30,7 +30,7 @@ block that covers it.
 | Filter by verdict | One pill per state with its block count; click one to dim every other block |
 | First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~40 KB today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
-| Live regen | Re-catalog and rebuild from the browser without restarting the server |
+| Live regen | Refresh the project view from the browser without restarting the server |
 
 ## Screenshots
 
@@ -67,9 +67,9 @@ glance without loading the full SPA.
 ## Installation
 
 > [!IMPORTANT]
-> The wheel declares `rebrew>=3.0.0` as a hard runtime dependency, and rebrew
+> The wheel declares `rebrew>=4.1.0` as a hard runtime dependency, and rebrew
 > is not on the package index yet, so `pip install recoverage` stops at
-> resolution with "No matching distribution found for rebrew>=3.0.0". The
+> resolution with "No matching distribution found for rebrew>=4.1.0". The
 > commands below are the install that works today: recoverage resolves rebrew
 > from a sibling checkout, so the tree must sit beside one. `git clone`
 > recoverage on its own, or any git worktree of it, leaves `uv sync` failing
@@ -120,30 +120,34 @@ is the full record.
 
 ## Quick Start
 
-```bash
-# 1. Generate the coverage documents (from your project directory)
-uv run rebrew coverage build
-# Analyzes the target binary and your annotations, then writes one clear-text
-# coverage document per target (db/coverage-<target>.toml) for the dashboard.
-# The catalog analysis runs inside this command, so there is nothing to run
-# before it.
+From anywhere inside an existing Rebrew project:
 
-# 2. Start the dashboard
-recoverage
-# Same as `recoverage serve`: starts a lightweight Bottle web server serving
-# the frontend SPA and providing the API backend
+```bash
+recoverage serve
 ```
 
-> [!NOTE]
-> The server resolves the coverage **directory** from the **current working
-> directory**: `[project] db_dir` in `rebrew-project.toml` when set, falling back
-> to `<root>/db`, so run it from your project root. A `rebrew-project.toml` that
-> is present but not valid TOML is an error, not a fallback.
-> `RECOVERAGE_DB` still selects an explicit coverage directory.
->
-> Serving the dashboard needs one readable `coverage-<target>.toml` document in
-> that directory, not a database file: rebrew's pipeline produces the documents
-> and recoverage only reads them.
+The dashboard reads canonical metadata, binaries, sources and discovery inventory
+through Rebrew's shared live coverage model. No generated coverage files or
+`db_dir` setting is required. Input changes refresh the view automatically;
+`recoverage regen` explicitly refreshes it without writing files.
+
+For portable, offline viewing:
+
+```bash
+rebrew coverage export --output snapshots/
+RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots recoverage serve
+```
+
+Before retiring older generated exports, preserve their history:
+
+```bash
+rebrew coverage import-history --snapshots db/ --dry-run
+rebrew coverage import-history --snapshots db/
+```
+
+The import does not change current verdicts or bindings. Keep configured inventory
+files even if they live under `db/`. Status transitions now live in canonical
+function metadata and survive dashboard restarts and export removal.
 
 ---
 
@@ -191,7 +195,7 @@ this command with its default settings.
 | `--allow-remote` / `--no-allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
-| `--regen` | off | Re-run rebrew's catalog analysis and rewrite the documents before starting |
+| `--regen` | off | Refresh the live project view before starting |
 | `--cors` / `--no-cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
 | `--log-level` | `INFO` | Log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive) |
@@ -215,22 +219,22 @@ always wins over the environment.
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number (`0`, `10`, `20`, `30`, `40`, `50`; any other number is a startup error, because a threshold no record clears logs nothing at all) |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
 | `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-socket-operation deadline in seconds; a client that cannot absorb a write inside it is cut mid-body |
-| `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`); a path that is a file is a startup error, not an empty dashboard |
+| `RECOVERAGE_SNAPSHOTS` | unset (live project) | explicit portable snapshot directory; a file path is a startup error |
 | `RECOVERAGE_BACKUP_DIR` | a `backups/` beside the coverage directory | directory `recoverage backup` writes its archive into; read by that command and by nothing else. Never point it inside the coverage directory: the next backup would copy the previous archive as if it were a document. A scheduled job cannot pass `--to`, so this is the channel that reaches it |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
-| `RECOVERAGE_DEV_API` | `http://127.0.0.1:8001` | the running server the `make web-dev` Vite proxy forwards `/api`, `/src` and `/original` to; read by `web/vite.config.ts`, not by any subcommand (the same rule the two fuzz knobs follow: the name is accepted so exporting it cannot refuse a command, and it changes nothing `serve` does) |
+| `RECOVERAGE_DEV_API` | `http://127.0.0.1:8001` | the running server the `make web-dev` Vite proxy forwards `/api`, `/files`, `/src` and `/original` to; read by `web/vite.config.ts`, not by any subcommand (the same rule the two fuzz knobs follow: the name is accepted so exporting it cannot refuse a command, and it changes nothing `serve` does) |
 
-Parsed coverage documents persist under `$XDG_CACHE_HOME/recoverage/documents/`
+Portable-mode parsed coverage documents persist under `$XDG_CACHE_HOME/recoverage/documents/`
 (`~/.cache/recoverage/documents/` when it is unset or relative), one file per
 document, so a restart skips the TOML parse for every document whose bytes have
 not changed. It keeps the 64 most recently used documents, and deleting the
-directory is always safe.
+directory is always safe. Live project reads bypass this persisted parse cache.
 
 ```bash
 # A service that is not run from the project root, on a LAN interface,
 # with a token that never reaches the process listing:
-export RECOVERAGE_DB=/srv/project/db
+export RECOVERAGE_SNAPSHOTS=/srv/project/db
 export RECOVERAGE_BIND=0.0.0.0
 export RECOVERAGE_ALLOW_REMOTE=1
 export RECOVERAGE_TOKEN="$(cat /run/secrets/recoverage_token)"
@@ -241,7 +245,7 @@ The same service in PowerShell, where `export` is not how a variable is set
 and there is no `/run/secrets`:
 
 ```powershell
-$env:RECOVERAGE_DB = "D:\project\db"
+$env:RECOVERAGE_SNAPSHOTS = "D:\project\db"
 $env:RECOVERAGE_BIND = "0.0.0.0"
 $env:RECOVERAGE_ALLOW_REMOTE = "1"
 $env:RECOVERAGE_TOKEN = (Get-Content C:\secrets\recoverage_token -Raw).Trim()
@@ -254,7 +258,7 @@ on what it accepts. It is what a `systemd` `EnvironmentFile` or a container
 spec is drafted from, and `tests/test_config.py` fails when a variable reaches
 this table and misses it.
 
-`RECOVERAGE_DB` is read through `Path.expanduser()`, so a leading `~` and the
+`RECOVERAGE_SNAPSHOTS` is read through `Path.expanduser()`, so a leading `~` and the
 `USERPROFILE` it resolves against on Windows work as they do on POSIX.
 
 `RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
@@ -269,18 +273,17 @@ instead of cutting the requests in flight. Windows has no `SIGTERM` a handler
 can see, so there the stop signal is `CTRL_BREAK` (`SIGBREAK`), with `Ctrl+C`
 as the always-available one.
 
-`RECOVERAGE_DB` moves what is *read*, and rebrew resolves what a regen
-*writes* from `rebrew-project.toml` alone. A regen with the two pointing at
-different directories is refused with exit 2 rather than run: it would report
-success while the dashboard kept serving the documents it already had. To make
-them agree, point `[project].db_dir` at the same directory, or leave
-`RECOVERAGE_DB` unset and run from the project root.
+`RECOVERAGE_SNAPSHOTS` selects portable exports instead of the live project.
+Portable mode is read-only: `regen` and `serve --regen` refuse it. To run a live
+service, set its working directory inside the project and leave this variable
+unset. `backup` / `restore` operate only on explicitly selected portable exports;
+canonical project metadata remains managed by Rebrew.
 
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
 an unknown log level, an empty value where one is required, a bind address no
 resolver can answer (`0.0.0.0 `, `host:8001`), a CORS origin no browser could
 send, a token carrying whitespace a trimmed header could never present, a
-`RECOVERAGE_DB` that is a file rather than the coverage directory, or a
+`RECOVERAGE_SNAPSHOTS` that is a file rather than the coverage directory, or a
 misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
 variable named, instead of starting with a default you did not ask for. The
 same check runs for every command that reads the environment (`stats`,
@@ -362,9 +365,8 @@ With `--json`, a failure is reported on stdout as
 parses one shape whether the run failed or not.  `check --json` and
 `export --format json` report the same envelope.
 
-Exit codes: 0 = the table (or the JSON) was printed, 1 = the coverage
-directory holds no document, or `--target` names a target no build has
-written, 2 = an invalid flag or `RECOVERAGE_*` value.
+Exit codes: 0 = the table (or JSON) was printed, 1 = no readable coverage or an
+unavailable selected target, 2 = an invalid flag or `RECOVERAGE_*` value.
 
 ### `recoverage export`
 
@@ -378,9 +380,8 @@ recoverage export --format md       # Markdown table
 ```
 
 The rows are the only thing on stdout, so `> coverage.csv` and a pipe get clean
-data. Exit codes: 0 = the rows were written, 1 = the coverage directory holds
-no document, or `--target` names a target no build has written, 2 = an invalid
-flag or `RECOVERAGE_*` value. Under `--format json` the failure envelope goes
+data. Exit codes: 0 = the rows were written, 1 = no readable coverage or an
+unavailable selected target, 2 = an invalid flag or `RECOVERAGE_*` value. Under `--format json` the failure envelope goes
 to stdout, as it does for `stats --json`. `--json` with a `--format` that is
 not `json` is a usage error (exit 2), not a silent winner.
 
@@ -402,40 +403,18 @@ document, or a coverage directory holding no `coverage-*.toml`.
 
 ### `recoverage regen`
 
-Re-run the catalog analysis to regenerate the coverage documents.
+Refresh the live project view immediately without generating files:
 
 ```bash
 recoverage regen
 ```
 
-recoverage calls rebrew's `coverage build` (catalog analysis plus the document
-writer) as a library, in process, rather than spawning the `rebrew` console
-script.  The run has no
-timeout, so it always runs to completion.
-
-Nothing reaches stdout: the progress line, the completion line and every error
-are status, and they go to stderr, so a script reads the outcome from the exit
-code.  `serve --regen` runs the same pipeline, so its progress stays off the
-stdout the startup banner is written to.
-
-Exit codes: 0 = the documents were written (or rebrew had no built target to
-write for), 1 = rebrew failed or another regen of the same project already
-holds its lock, 2 = `RECOVERAGE_DB` names a directory rebrew
-would not write to, or `rebrew-project.toml` is missing or malformed.  That
-mismatch is refused rather than reported as a done
-regen that left the dashboard stale, because rebrew resolves what it writes
-from `rebrew-project.toml` alone.  A project file rebrew cannot read is
-reported the way the read commands report it, for the same reason: rebrew
-reads it before any of its own work, so nothing is rebuilt and the operator
-has to change something first.
-
-Running it a second time *while the first is still going* is refused rather
-than run: two writers of one `coverage-<target>.toml` interleave instead of
-converging, and the dashboard can read the gap. The guard is a lock in the
-coverage directory, so it also covers a `recoverage regen` run beside a
-running dashboard or from a cron job, which this process's own lock cannot
-see. The lock is released by the operating system when its holder exits, so a
-regen that is killed does not block the next one.
+Progress and errors go to stderr; stdout stays empty. `serve --regen` uses the
+same operation. Normal reads also detect input changes automatically. Portable
+snapshots are read-only, so unset `RECOVERAGE_SNAPSHOTS` to refresh a project.
+Status transitions are canonical metadata; refresh does not create history from
+what the dashboard happened to observe. The API retains its in-process admission
+and idempotency rules; there is no cross-process snapshot writer or lock.
 
 ### `recoverage backup`
 
@@ -447,14 +426,10 @@ recoverage backup --to /srv/backups/nightly.tar
 recoverage backup --json                           # for a scheduled job
 ```
 
-The coverage documents are recoverage's only durable state, and two arrays
-inside them cannot be rebuilt. rebrew writes each document as a
-read-modify-write over the previous one, so the cumulative `history` of status
-transitions and the `verify_results` of the last verification are carried
-forward from the file being overwritten - not from the source tree. A regen
-over a directory whose documents were lost rebuilds the current facts and
-loses both arrays for good: the charts start again from that build, and every
-earlier transition is gone.
+Backup and restore require an explicit `RECOVERAGE_SNAPSHOTS` directory. Live
+project history and verification evidence belong to the canonical Rebrew metadata,
+which these commands never overwrite. Before retiring old exports, preserve their
+history with `rebrew coverage import-history --snapshots <directory>`.
 
 So the backup is verified rather than merely written. Every archive carries a
 manifest of its members' sha256 digests, and the command reads the archive back
@@ -473,7 +448,7 @@ so a failed build must read as an alert rather than as a green run.
 
 ### `recoverage restore`
 
-Put a verified backup's documents back into the coverage directory.
+Put a verified backup's documents into the explicitly selected offline directory.
 
 ```bash
 recoverage restore /srv/backups/nightly.tar
@@ -486,16 +461,13 @@ through an atomic replace. A restore therefore either completes or leaves the
 coverage directory exactly as it was; half a restore is a dashboard that reads
 healthy and shows half a project.
 
-`--force` overrides exactly one refusal: a document already present whose bytes
-differ from the one in the archive. Rolling a month-old archive over a tree
-that has been rebuilt since discards every status transition since, and no
-regen can bring them back, so the refusal names every document it would
-overwrite. A corrupt archive, a member that is not a coverage document, a
+`--force` replaces differing selected offline snapshots; the refusal names every
+document it would overwrite. Canonical live verdicts and `status_history` stay
+unchanged. A corrupt archive, a member that is not a coverage document, a
 member name that would escape the directory and an unreadable file are refused
 either way.
 
-Run `recoverage regen` afterwards, so the served snapshots and ETags follow the
-restored bytes. The full procedure is in
+Offline readers detect restored bytes automatically; `regen` is a live-project operation. The full procedure is in
 [the recovery runbook](https://github.com/maci0/recoverage/blob/main/docs/RECOVERY.md).
 
 ### `recoverage open`
@@ -527,12 +499,14 @@ reload; the exit code stays 0.
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/index.html` | GET | The same document, for a URL that names it |
-| `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
+| `/files/<target>/source/<filepath:path>` | GET | A file under the selected target's configured, project-contained source root |
+| `/files/<target>/binary` | GET | The selected target's configured, project-contained binary |
+| `/src/<filepath:path>` | GET | A file under the project's fixed `src/` tree |
 | `/original/<filepath:path>` | GET | A file under the original binary's tree |
 | `/app.js`, `/style.css`, `/print.css`, `/favicon.svg`, `/highlight.js`, `/archivo.woff2`, `/jetbrains-mono.woff2` | GET | The packaged static assets (`no-cache` with a strong `ETag`). `/highlight.js` is the standalone highlighter the code panes load on demand; it is emitted as a second bundle beside `app.js` because the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info (`db.unreadable` names each document that does not parse, and any one degrades the status), installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets, and under `unreadable` every coverage document that exists and does not parse (`file`, `target`, `error`; the file name only, never its path). Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
+| `/api/health` | GET | Server version, the settings this process resolved, coverage-source info (`db.unreadable` names failed live targets or unreadable portable documents, and any one degrades the status), installed extras, request/regen/stream/connection counters, cache hit-miss |
+| `/api/targets` | GET | List configured/readable targets, plus failed live targets or unreadable portable documents under `unreadable` (`file`, `target`, `error`; no absolute paths). Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages (no query parameters) |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary, or a `sort` column the list does not carry, is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |
@@ -540,11 +514,10 @@ reload; the exit code stays 0.
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail. Revalidates like the list: the tag names the snapshot, the target and the requested spelling |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
-| `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
+| `/api/events` | GET | Server-Sent Events: `db-updated` when the live view or selected portable exports change (SPA auto-refresh) |
+| `/api/regen` | POST | Refresh the live project view (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
 
-A regen rebuilds the coverage documents from scratch, so running it twice leaves the
-same state as running it once. Send an `Idempotency-Key` header with the
+A refresh derives a read-only view from the current project inputs. Send an `Idempotency-Key` header with the
 request and a repeat of that key is answered with the recorded result
 (`Idempotent-Replay: true`) instead of running the pipeline again; a repeat that
 lands while the first run is still going is answered `202` with
@@ -557,11 +530,8 @@ admits in that window, so a key is only ever dropped by its own age), and a
 failed or interrupted run is not remembered — retrying a failure retries for
 real.
 
-Both of those are this process's own bookkeeping. A regen under way in another
-process (a `recoverage regen` at a terminal, a cron job over the same tree) is a
-duplicate none of them can see, so the pipeline takes a lock in the coverage
-directory and the POST is answered `429` with the same body the in-process lock
-sends, counting as a refusal rather than a failure.
+Admission and idempotency are local to this process. Independent processes read
+canonical project inputs without acquiring a shared snapshot writer lock.
 
 ### Query parameters
 
@@ -659,35 +629,28 @@ bounded whatever a caller asks for. The snapshot is taken before the reading
 request is filed, so it describes everything up to it. There is no metrics
 backend to configure: these numbers live in the process and reset with it.
 
-`regen` covers the rebuild pipeline, which is the one request that runs for
-minutes: the request counters can say a request is in flight but not that it
-is a rebuild, how long the last one took, or whether failures are climbing.
+`regen` measures explicit read-only refresh: its duration, completion and
+failures are separate from ordinary request counts. Changed-input reads may also
+perform analysis without a POST refresh.
 `rejected` counts POSTs the cooldown or the run lock refused, which is a
 double-clicked Regenerate button rather than a broken pipeline, so it is kept off
 `failures`. `streams` reports live-reload saturation: each connected SSE
 stream pins a server thread for its whole life, so `clients` against
 `max_clients` is the distance to the 503 the next tab gets.
 `serve` starts the poller at startup rather than on the first stream, so an
-external rebuild refreshes a server that never has an SSE client (curl-only
+external project or snapshot changes refresh a server that never has an SSE client (curl-only
 automation); `watcher_alive` is `null` only in a process that never ran
 `serve`. A connected client with a dead poller answers `degraded`: every
 page still renders, none of them will ever refresh again.
 
-`status` also answers `degraded` for coverage that has gone stale: a document
-whose newest mtime is more than `config.DEFAULT_MAX_DB_AGE_HOURS` (24) hours
-old. That is the one fault every other signal here stays quiet through — the
-documents parse, every route answers 200, the caches hit, no counter moves and
-no request is slow — so a regen that stopped running three days ago is
-invisible on all of them, and a probe reading this endpoint cannot tell a
-working dashboard from one showing figures that are a week out of date. The
-bound is a constant rather than a setting on purpose: the build cadence belongs
-to the rebrew project, and a knob that only reads as "set it to something else
-next release" is worse than a documented number. Raise it where it is defined
-if your coverage is built in batches rather than on demand.
+In portable mode, `status` also answers `degraded` when the newest document mtime
+is more than `config.DEFAULT_MAX_DB_AGE_HOURS` (24) hours old. Live reads instead
+rederive changed project inputs; they do not depend on a scheduled export job.
+Broken live targets and unreadable portable documents are reported explicitly.
 
 `serve --regen` opens the same `regen` counters and writes the same
 `event=regen` lifecycle lines `POST /api/regen` does, so one filter over that
-field finds every rebuild the process made whichever entry point started it.
+field finds explicit refreshes whichever entry point started them.
 The standalone `recoverage regen` command does not: it prints its outcome to a
 terminal that exits, so there would be nothing left to read the counter back.
 
@@ -772,18 +735,17 @@ the `retry_after` body key.
 
 ## Architecture & How it works
 
-**recoverage** is designed as a standalone **consumer** of the data that [rebrew](https://github.com/maci0/rebrew) produces. The two packages are intentionally decoupled.
+Recoverage consumes Rebrew's immutable coverage model. Normal project mode uses
+`rebrew.coverage_project.load_project_coverage`, deriving functions, data, grid
+cells and history directly from canonical project inputs. Both dashboards share
+the same catalog and normalization rules. Input fingerprints invalidate cached
+views; one failed target does not hide healthy siblings. Views never compile or
+write project files.
 
-```text
-rebrew coverage build (catalog in-process)  recoverage (Bottle)
-              │                             │
-  db/coverage-<target>.toml  ─────────────▶  Preact dashboard
-```
-
-1. **`rebrew coverage build`**: Scans your project's source definitions and dedicated metadata, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole while preserving status history.  See [COVERAGE_DOCUMENT.md](https://github.com/maci0/rebrew/blob/main/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew coverage catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a **Preact** + Tailwind Single Page Application built from `web/` by `make web-build` (Vite, TypeScript, Tailwind CSS 4) into `assets/app.js` and `assets/style.css`, which the server inlines into the `/` shell, rendering the interactive defrag grid.
-
-You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+Explicit portable mode reads `coverage-<target>.toml` from `RECOVERAGE_SNAPSHOTS`.
+Only that mode uses the persisted TOML parse cache; it can serve offline without
+a project workspace or compiler toolchain. Rebrew remains a library dependency.
+The Bottle backend serves the Preact dashboard and API in both modes.
 
 ### Hosting it on a network
 
@@ -907,19 +869,19 @@ recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
     ├── py.typed              # PEP 561 marker: the package ships its own annotations
-    ├── _paths.py             # Coverage directory resolution (RECOVERAGE_DB, db_dir)
+    ├── _paths.py             # Live project or explicit portable snapshot resolution
     ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
     ├── documents.py          # Coverage documents read per file; the TOML parse persisted
     │                         #   under $XDG_CACHE_HOME/recoverage/documents/
-    ├── backup.py             # Verified backup/restore of those documents (the only durable state)
+    ├── backup.py             # Verified backup/restore of explicit portable snapshots
     ├── metrics.py            # In-process RED counters, read by /api/health
     ├── devserver.py          # WSGI serving stack: threading server + its IPv6 class, keep-alive
     │                         #   handlers
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── disasm.py             # Capstone disassembly (optional extra)
-    ├── regen.py              # In-process rebrew regen (catalog analysis + document writer)
+    ├── regen.py              # Read-only live project refresh
     ├── api.py                # REST API routes (/api/*)
     ├── ui.py                 # UI routes (/, static files)
     ├── potato.py             # Potato Mode renderer + the /potato route

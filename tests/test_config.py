@@ -35,7 +35,7 @@ class TestDefaults:
         assert config.allow_remote() is False
         assert config.cors() is False
         assert config.cors_origins() == []
-        assert config.db_override() is None
+        assert config.snapshot_override() is None
         assert config.token() is None
 
 
@@ -85,9 +85,9 @@ class TestScalarParsing:
         monkeypatch.setenv("RECOVERAGE_TOKEN", "")
         assert config.token() == ""
 
-    def test_db_override_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("RECOVERAGE_DB", "~/proj/db/coverage.db")
-        assert config.db_override() == Path("~/proj/db/coverage.db").expanduser()
+    def test_snapshot_override_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", "~/proj/db/coverage.db")
+        assert config.snapshot_override() == Path("~/proj/db/coverage.db").expanduser()
 
     @pytest.mark.parametrize(
         "raw", ["s3cret ", " s3cret", "s3cret\n", "  ", "two words", "tok\x01en", "tok\x7fen"]
@@ -113,7 +113,7 @@ class TestScalarParsing:
             config.token()
         assert "s3cret" not in str(excinfo.value)
 
-    def test_db_override_naming_a_file_is_refused(
+    def test_snapshot_override_naming_a_file_is_refused(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The SQLite-era spelling: a file where the documents' directory goes.
@@ -124,26 +124,26 @@ class TestScalarParsing:
         """
         db_file = tmp_path / "coverage.db"
         db_file.write_text("not a directory")
-        monkeypatch.setenv("RECOVERAGE_DB", str(db_file))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db_file))
         with pytest.raises(config.ConfigError) as excinfo:
-            config.check_db_override()
+            config.check_snapshot_override()
         assert "not a directory" in str(excinfo.value)
 
-    def test_db_override_that_does_not_exist_is_allowed(
+    def test_snapshot_override_that_does_not_exist_is_allowed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """A service may start before the first ``rebrew coverage build``."""
         override = tmp_path / "not-built-yet"
-        monkeypatch.setenv("RECOVERAGE_DB", str(override))
-        config.check_db_override()
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(override))
+        config.check_snapshot_override()
         # "Allowed" is not "ignored": the read path still resolves the name
         # the reader configured, which is the half a deleted check could take.
-        assert config.db_override() == override
+        assert config.snapshot_override() == override
 
-    def test_db_override_unset_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("RECOVERAGE_DB", raising=False)
-        config.check_db_override()
-        assert config.db_override() is None
+    def test_snapshot_override_unset_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
+        config.check_snapshot_override()
+        assert config.snapshot_override() is None
 
     @pytest.mark.parametrize(
         "raw,expected", [("DEBUG", logging.DEBUG), ("warning", logging.WARNING), ("30", 30)]
@@ -259,13 +259,13 @@ class TestRejectsBadValues:
         with pytest.raises(config.ConfigError, match="RECOVERAGE_CORS"):
             config.cors()
 
-    @pytest.mark.parametrize("name", ["RECOVERAGE_BIND", "RECOVERAGE_DB"])
+    @pytest.mark.parametrize("name", ["RECOVERAGE_BIND", "RECOVERAGE_SNAPSHOTS"])
     def test_empty_value_is_not_silently_defaulted(
         self, monkeypatch: pytest.MonkeyPatch, name: str
     ) -> None:
         """Set-but-empty is a mistake for these, not "use the default"."""
         monkeypatch.setenv(name, "")
-        reader = config.bind if name == "RECOVERAGE_BIND" else config.db_override
+        reader = config.bind if name == "RECOVERAGE_BIND" else config.snapshot_override
         with pytest.raises(config.ConfigError, match=name):
             reader()
 
@@ -482,7 +482,7 @@ class TestUnknownVars:
             cors=resolved.cors,
             cors_origin=resolved.cors_origins,
             token=resolved.token,
-            db=resolved.db,
+            snapshots=resolved.snapshots,
             log_level=resolved.log_level,
             max_connections=resolved.max_connections,
             client_timeout=resolved.client_timeout,
@@ -560,6 +560,7 @@ class TestTransportBounds:
         from recoverage.cli import app as cli_app
         from recoverage.server import app as server_app
 
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(Path.cwd() / "db"))
         monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "7")
         monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", "300")
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
@@ -611,13 +612,13 @@ class TestActiveConfig:
             cors=False,
             cors_origin=[],
             token=None,
-            db=None,
+            snapshots=None,
             log_level=logging.INFO,
             max_connections=config.DEFAULT_MAX_CONNECTIONS,
             client_timeout=config.DEFAULT_CLIENT_TIMEOUT_SECONDS,
         )
         assert rendered["port"] == "8001"
-        assert rendered["db"] == "auto"
+        assert rendered["source"] == "live project"
         assert rendered["cors_origin"] == "none"
         assert rendered["log_level"] == "INFO"
         assert rendered["max_connections"] == str(config.DEFAULT_MAX_CONNECTIONS)
@@ -636,7 +637,7 @@ class TestActiveConfig:
             # portable — str(PureWindowsPath("/tmp/x.db")) is "\tmp\x.db", so
             # Path("/tmp/x.db") renders differently on Windows. The value
             # asserted below is the string this object carries.
-            db=PurePosixPath("/tmp/x.db"),
+            snapshots=PurePosixPath("/tmp/x.db"),
             log_level=logging.WARNING,
             max_connections=512,
             client_timeout=45,
@@ -647,7 +648,7 @@ class TestActiveConfig:
         assert rendered["token"] == "set"
         assert "s3cret-value" not in " ".join(rendered.values())
         assert rendered["cors_origin"] == "http://a.test"
-        assert rendered["db"] == "/tmp/x.db"
+        assert rendered["source"] == "/tmp/x.db"
 
 
 class TestServeResolution:
@@ -661,10 +662,12 @@ class TestServeResolution:
         assert resolved.bind == "127.0.0.1"
         assert resolved.allow_remote is False
         assert resolved.token is None
-        assert resolved.db is None
+        assert resolved.snapshots is None
         assert resolved.log_level == logging.INFO
 
-    def test_environment_supplies_every_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_environment_supplies_every_setting(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         from recoverage.cli import _resolve_serve_config
 
         monkeypatch.setenv("RECOVERAGE_PORT", "9001")
@@ -673,7 +676,7 @@ class TestServeResolution:
         monkeypatch.setenv("RECOVERAGE_CORS", "true")
         monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://a.test")
         monkeypatch.setenv("RECOVERAGE_TOKEN", "env-token")
-        monkeypatch.setenv("RECOVERAGE_DB", "/srv/coverage.db")
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path))
         monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "WARNING")
         resolved = _resolve_serve_config()
         assert resolved.port == 9001
@@ -682,7 +685,7 @@ class TestServeResolution:
         assert resolved.cors is True
         assert resolved.cors_origins == ["http://a.test"]
         assert resolved.token == "env-token"
-        assert resolved.db == Path("/srv/coverage.db")
+        assert resolved.snapshots == tmp_path
         assert resolved.log_level == logging.WARNING
 
     def test_flag_beats_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -803,10 +806,10 @@ class TestServeStartup:
 
         db_file = tmp_path / "coverage.db"
         db_file.write_text("not a directory")
-        monkeypatch.setenv("RECOVERAGE_DB", str(db_file))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db_file))
         result = CliRunner().invoke(app, ["serve", "--no-open"])
         assert result.exit_code == 2
-        assert "RECOVERAGE_DB" in result.output
+        assert "RECOVERAGE_SNAPSHOTS" in result.output
 
 
 class TestConfigCommand:
@@ -832,7 +835,7 @@ class TestConfigCommand:
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0
         assert f"port={config.DEFAULT_PORT}" in result.output
-        assert "db=auto" in result.output
+        assert "source=live project" in result.output
 
     def test_token_is_reported_without_its_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from typer.testing import CliRunner
@@ -865,7 +868,7 @@ class TestConfigCommand:
             "allow_remote": "false",
             "cors": "true",
             "cors_origin": "http://localhost:5173",
-            "db": "auto",
+            "source": "live project",
             "log_level": "INFO",
             "token": "unset",
             "max_connections": str(config.DEFAULT_MAX_CONNECTIONS),
@@ -1062,34 +1065,34 @@ class TestCoverageDirectoryWarnings:
     to infer it from a blank map."""
 
     def test_a_directory_with_documents_warns_about_nothing(self, tmp_path: Path) -> None:
-        from recoverage.cli import _db_warnings
+        from recoverage.cli import _snapshot_warnings
 
         (tmp_path / "coverage-demo.toml").write_text("[target]\n")
-        assert _db_warnings(tmp_path) == []
+        assert _snapshot_warnings(tmp_path) == []
 
     def test_an_empty_directory_warns_and_names_it(self, tmp_path: Path) -> None:
-        from recoverage.cli import _db_warnings
+        from recoverage.cli import _snapshot_warnings
 
-        warnings = _db_warnings(tmp_path)
+        warnings = _snapshot_warnings(tmp_path)
         assert len(warnings) == 1
         assert str(tmp_path) in warnings[0]
-        assert "rebrew coverage build" in warnings[0]
+        assert "RECOVERAGE_SNAPSHOTS" in warnings[0]
 
     def test_a_missing_directory_warns_too(self, tmp_path: Path) -> None:
         """The service-started-in-the-wrong-directory case: the resolved
         default is a directory that was never created."""
-        from recoverage.cli import _db_warnings
+        from recoverage.cli import _snapshot_warnings
 
-        warnings = _db_warnings(tmp_path / "never-created")
+        warnings = _snapshot_warnings(tmp_path / "never-created")
         assert len(warnings) == 1
         assert "does not exist" in warnings[0]
 
     def test_a_path_that_is_a_file_is_left_to_the_startup_refusal(self, tmp_path: Path) -> None:
-        from recoverage.cli import _db_warnings
+        from recoverage.cli import _snapshot_warnings
 
         db_file = tmp_path / "coverage.db"
         db_file.write_text("not a directory")
-        assert _db_warnings(db_file) == []
+        assert _snapshot_warnings(db_file) == []
 
     def test_the_config_command_reports_it(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1098,10 +1101,10 @@ class TestCoverageDirectoryWarnings:
 
         from recoverage.cli import app
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path))
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path))
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0, result.output
-        assert "RECOVERAGE_DB" in result.output
+        assert "RECOVERAGE_SNAPSHOTS" in result.output
 
 
 class TestCorsOriginIsWhatABrowserCouldSend:
@@ -1210,22 +1213,22 @@ class TestEnvValidatedByEveryCommand:
 
         from recoverage.cli import app
 
-        monkeypatch.setenv("RECOVERAGE_DB_PATH", "/tmp/other.db")
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS_PATH", "/tmp/other.db")
         result = CliRunner().invoke(app, argv)
         assert result.exit_code == 2
-        assert "RECOVERAGE_DB_PATH" in result.output
+        assert "RECOVERAGE_SNAPSHOTS_PATH" in result.output
 
-    def test_empty_db_override_exits_2_not_a_traceback(
+    def test_empty_snapshot_override_exits_2_not_a_traceback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from typer.testing import CliRunner
 
         from recoverage.cli import app
 
-        monkeypatch.setenv("RECOVERAGE_DB", "")
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", "")
         result = CliRunner().invoke(app, ["stats"])
         assert result.exit_code == 2
-        assert "RECOVERAGE_DB" in result.output
+        assert "RECOVERAGE_SNAPSHOTS" in result.output
         assert "Traceback" not in result.output
 
 

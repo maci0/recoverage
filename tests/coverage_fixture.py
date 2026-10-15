@@ -395,7 +395,7 @@ def build_synthetic_coverage(directory: Path) -> Path:
 def coverage_dir(root: Path, *parts: str) -> Path:
     """The coverage directory a fixture's documents belong in, beneath *root*.
 
-    Spelled ``db`` on purpose: ``RECOVERAGE_DB`` names the directory itself,
+    Spelled ``db`` on purpose: ``RECOVERAGE_SNAPSHOTS`` names the directory itself,
     while rebrew's reader takes the project ROOT and resolves the configured
     ``db_dir`` (``<root>/db`` by default) beneath it, so the two only agree when
     the directory carries that name.  Extra *parts* give one test several

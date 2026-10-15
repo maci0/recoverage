@@ -32,20 +32,42 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
-## [Unreleased]
+## [7.0.0]
 
-### Rebrew metadata bindings are required
+### Live project coverage and optional offline exports
+
+Run Recoverage inside the project to read canonical inputs directly. Remove
+`[project].db_dir`; there is no database or required generated coverage directory.
+Before retiring old exports, run `rebrew coverage import-history --snapshots db/
+--dry-run`, then repeat without `--dry-run`. Retain configured inventory JSON.
+`RECOVERAGE_DB` is removed, with no alias. Use `RECOVERAGE_SNAPSHOTS` only for
+portable exports created by `rebrew coverage export --output <directory>`.
+Refresh generates no files and refuses offline mode; backup/restore manage
+portable exports only. Earlier release notes below describe historical layouts.
+
+### Rebrew 4.1.0 and canonical metadata bindings are required
 
 Before: recoverage ran against rebrew 2.23.0 or later.
 
-After: it needs the Rebrew release pinned by `tools/ci_clone_rebrew.sh`.
+After: it needs Rebrew 4.1.0 or later, with the tested release pinned by
+`tools/ci_clone_rebrew.sh`.
 Source bindings come from `rebrew.metadata.bindings`; functions and data use
 format-2 dedicated stores. Old inline metadata and old store formats are rejected.
 Convert existing project records before serving or regenerating their coverage.
 No compatibility reader is included.
 
 Do: update the sibling rebrew checkout (`make clone-rebrew`), then
-`make setup`. Coverage documents, the HTTP API and the CLI are unchanged.
+`make setup`. Live reads replace required coverage generation; portable documents
+remain available through explicit snapshot mode. The removed environment setting
+and source-documentation arguments are named in the release notes.
+
+### Configured file paths
+
+Target source and binary requests use `/files/<target>/source/<path>` and
+`/files/<target>/binary`, resolved within the serving project. Portable exports
+use a supplied `paths.originalDll` for their contained local binary, even beside
+a project config naming different bytes. Config is used only when that snapshot
+field is absent. The browser no longer treats document paths as URLs.
 
 ## [6.0.0]
 

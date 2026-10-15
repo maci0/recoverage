@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-The current release line is `6.x`. `recoverage` is a single-developer,
+The current release line is `7.x`. `recoverage` is a single-developer,
 single-machine tool: it is supported on the version the maintainer ships, and
 older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 6.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v6.1.0`) | yes |
-| < 6.0.0 | no |
+| 7.x (current; `__version__` in `src/recoverage/__init__.py`, tagged `v7.0.0`) | yes |
+| < 7.0.0 | no |
 
 The supported line is what `__version__` says, so a build that disagrees with
 the tag is the thing to look at first rather than this table.
@@ -34,10 +34,13 @@ this document does not fill them with a guess.
 configured. A non-loopback bind is refused at startup without
 `--allow-remote` (`cli._remote_bind_gate`, `src/recoverage/cli.py`), and
 `--allow-remote` without `--token` is an acknowledgement, not a requirement:
-every host that can reach the port then reads the whole project, which is
-sources under `<project>/src`, original binaries, raw byte slices and
-disassembly. That is the deployment's assumption, not a defect, and it is the
-first entry in the risk-ranked table in
+every host that can reach the port can read the served coverage and exposed
+project files. HTTP file routes serve configured target source roots and binaries
+only within the project, plus the fixed `<project>/src` and `<project>/original`
+trees; binary slices use configured contained binary paths, and Potato source
+reads use a contained `sourceRoot`. Portable exports alone do not include those
+files. That is the deployment's assumption, not a defect, and it is the first
+entry in the risk-ranked table in
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 
 The bundled listener speaks no TLS, so a non-loopback deployment has no
@@ -53,14 +56,14 @@ log, a pasted link, and a URL copied before the page settles all still carry
 the bearer value, so a token shared as a link should be read as disclosed to
 every system that saw the request.
 
-## Backups hold a copy of the project
+## Backups hold exported project facts
 
-`recoverage backup` writes every coverage document into one tar beside the
-project (`../backups/` by default, or `$RECOVERAGE_BACKUP_DIR`). Since 4.3 the
-coverage documents are the only durable state in the package — `history` and
-`verify_results` are carried forward from the previous document and
-`rebrew coverage build` cannot reproduce them — so that archive is the only copy of
-them that outlives the tree, and losing it is not something a regen repairs.
+`recoverage backup` requires an explicit `RECOVERAGE_SNAPSHOTS` directory
+and archives its portable coverage documents. Live project metadata, history and
+verification evidence belong to Rebrew's canonical stores; backup/restore never
+write those stores. Preserve historical exports with
+`rebrew coverage import-history --snapshots <directory>` before retiring them.
+Keep configured inventory files even if they live under `db/`.
 
 Members are written `0o600` and every member's size and sha256 are recorded in
 the archive's `manifest.json`, which `recoverage restore` re-checks in full
@@ -71,7 +74,8 @@ project's reverse-engineering output, and `$RECOVERAGE_BACKUP_DIR` deserves the
 same scrutiny as any other environment input.
 
 `recoverage restore ARCHIVE` replaces the coverage documents from that file,
-which is the same directory every served page reads. It takes no
+in the explicitly selected portable directory. A live service continues reading
+its canonical project inputs. It takes no
 authentication, because it is a local command and the holder of the filesystem
 is the trust. It refuses to overwrite a document whose bytes differ unless
 `--force` is given, and `--force` overrides that check and no other. A restore

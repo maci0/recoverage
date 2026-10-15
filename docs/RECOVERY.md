@@ -1,195 +1,85 @@
 # Recovery runbook
 
-What survives, what is lost, and how to get it back. Written from what this
-tree actually does; every command below is one this package ships.
+Recoverage normally reads live Rebrew project inputs. Its refresh operation
+writes no project files. Preserve source, configuration, inventories, layout
+packages, function/data/type metadata and reference binaries through the project’s
+own version control and backups. `recoverage backup` never backs up that project.
 
 ## The state inventory
 
-Everything recoverage writes, and what it is worth:
+| State | Owner | Recovery |
+|---|---|---|
+| Function identities, verdicts and `status_history` | Rebrew function metadata | Restore the canonical project store |
+| Data identities and verification evidence | Rebrew data metadata | Restore the canonical project store |
+| Binary, inventory, source and layout evidence | Project | Restore the matching project inputs |
+| Portable `coverage-<target>.toml` exports | Explicit snapshot directory | Verified `recoverage backup` / `restore` |
+| Parse caches and in-process memos | Recoverage | Rebuilt on demand |
 
-| State | Where | Rebuilt from a `regen`? | Backed up by `recoverage backup`? |
-|-------|-------|------------------------|-----------------------------------|
-| Coverage documents | `db/coverage-<target>.toml` | **partly** — see below | **yes** |
-| Status history | inside each document (`history`) | **no** — carried forward from the previous document | **yes** |
-| Verify results | inside each document (`verify_results`) | **no** — carried forward the same way | **yes** |
-| Parse cache | `$XDG_CACHE_HOME/recoverage/documents/` | yes, on first read | no (correctly: derived) |
-| In-process memos, ETags | the serving process | yes, per stat | no (correctly: derived) |
-| Regen lock | `db/.recoverage-regen.lock` | released by the OS when its holder exits | no (correctly: an empty lock) |
-
-**The coverage documents are the only durable state, and they are only partly
-rebuildable.** rebrew's `write_coverage_toml` reads the previous document and
-merges into it: `history` accumulates the status-delta chain across every
-build, and `verify_results` carries the last verification forward. Both come
-from the file being overwritten, not from the source tree. So:
-
-* the **facts** — sections, cells, functions, globals — come back from a regen
-  against the built binaries;
-* the **history and the verify results** come back only from a copy of the
-  previous document.
-
-Losing the documents therefore does not mean losing the coverage map; it means
-losing every status transition before the rebuild and every verification since
-the last one. That is what the backup is for.
-
-## RPO and RTO
-
-Neither is bounded by the software. A regen restores the facts in as long as
-the catalog analysis takes on that target; the history and verify results are
-recoverable only as far back as the oldest backup that still verifies.
-
-So the numbers are deployment decisions, and these are the questions to answer
-before choosing them:
-
-* **RPO** is the age of the newest archive you can still restore. It is the
-  schedule of `recoverage backup`, plus how long the storage holding the
-  archives keeps them. A nightly cron means an RPO of one build's work; a
-  backup run on every regen means an RPO of one regen.
-* **RTO** is how long the restore takes: the archive is read, verified and
-  written whole, so it scales with the size of the coverage documents, not
-  with the size of the binaries. Measure it once with
-  `recoverage restore <archive>` against a copy — that run is also the restore
-  drill (below).
+Before retiring older exports, run
+`rebrew coverage import-history --snapshots <directory> --dry-run`, review the
+counts, then run the same command without `--dry-run`. This preserves historical
+transitions without changing current verdicts. Keep the original exports until
+that import and the resulting live view have been checked.
 
 ## Recovery procedures
 
-### A target's document is missing, truncated or corrupt
+For a live project, restore damaged inputs from a matching project backup and run
+`recoverage check --json`. Input changes refresh the view automatically;
+`recoverage regen` requests an immediate read. A missing or corrupt target is
+reported explicitly, while healthy targets remain available. Never restore a
+portable export over a canonical metadata file.
 
-1. Find the newest archive holding it:
-   ```bash
-   tar -tf backups/coverage-*.tar | grep coverage-<target>
-   ```
-2. Restore it. A missing file is restored without complaint; a file that is
-   *present but differs* is a refusal, which is the case where you want to read
-   the message:
-   ```bash
-   recoverage restore backups/<newest>.tar
-   ```
-3. If the refusal names a document you mean to lose, re-run with `--force`:
-   ```bash
-   recoverage restore backups/<newest>.tar --force
-   ```
-4. `recoverage regen`, so the served snapshots and ETags follow the restored
-   bytes. A running server notices on its own through the document watcher,
-   but a regen also re-derives anything the build changed.
-
-### The whole coverage directory is gone
-
-1. The directory itself is not state. Recreate it wherever the project expects
-   it, or point at the restore with `RECOVERAGE_DB`:
-   ```bash
-   mkdir -p db
-   RECOVERAGE_DB="$PWD/db" recoverage restore backups/<newest>.tar
-   ```
-2. `recoverage regen` to bring the facts back to the current binaries, which
-   restores the coverage map even when no archive survives.
-3. Only the history and verify results need the archive, and only up to the
-   age of its newest verified member.
-
-### The binary is gone but the coverage is not
-
-The documents outlive the binaries they describe, which is the point of backing
-them up: `/api/targets/<target>/data`, the map and Potato Mode all read the
-document. Restore the binary and re-run the regen to refresh the facts.
-
-### Recovering without this tool
-
-The archive is a POSIX tar, so:
+For explicit offline snapshots, select their directory for each operation:
 
 ```bash
-tar -tf backups/<archive>.tar                # the member names
-tar -xf backups/<archive>.tar coverage-GAME.toml   # one document
-tar -xOf backups/<archive>.tar manifest.json  # the manifest, to stdout
+RECOVERAGE_SNAPSHOTS=/srv/snapshots recoverage backup --to /srv/backups/nightly.tar
+RECOVERAGE_SNAPSHOTS=/srv/restored recoverage restore /srv/backups/nightly.tar
+RECOVERAGE_SNAPSHOTS=/srv/restored recoverage check --json
 ```
 
-Members are stored FLAT, with no `db/` prefix: each coverage document under
-its own filename, plus `manifest.json` at the root. Extract into the coverage
-directory itself (`cd db && tar -xf ...`), not next to it, or the restore
-lands one level above where the server reads.
+Restore validates every member before publishing files. Existing differing
+files require `--force`; review the named files before choosing to replace them.
+Offline readers detect restored files automatically. `regen` refuses offline
+mode because only Rebrew can derive a fresh export from the original inputs.
 
-`manifest.json` carries each member's size and sha256, so `sha256sum` on the
-extracted files is the same check `recoverage restore` makes before it writes
-anything. The digests are over the member's own bytes, so one rewritten
-document is named in the failure rather than the whole archive reported as
-corrupt.
+## RPO and RTO
+
+The backup schedule and retention determine the recovery point. Measure restore
+time against a copy to establish the recovery time; neither is bounded by the
+software. A portable archive cannot recover project inputs it never contained.
 
 ## Backup schedule
 
-The archive is written by `recoverage backup`, which verifies it before
-reporting success — the exit code says the archive can be read back, not that a
-write returned. Run it whenever the coverage documents change:
+Use a separate backup volume and state the schedule’s time zone explicitly:
 
 ```cron
-17 3 * * *  cd /srv/project && RECOVERAGE_BACKUP_DIR=/srv/backups recoverage backup --json >> /var/log/recoverage-backup.log 2>&1
-```
-
-**Say which zone `03:17` is.** The five fields are a WALL-CLOCK time, read in
-whatever zone the host is set to, and the archive it writes is stamped in UTC
-(`coverage-<YYYYMMDD>T<HHMMSS.ffffff>Z`). Those are the same instant, but on a
-host that observes DST they name it in two offsets: in `Europe/Warsaw` the line
-above fires at `03:17+02:00` in summer and `03:17+01:00` in winter, so the
-archive name steps an hour against the crontab twice a year, and an operator
-reading a filename beside an incident timeline has to know which half of the
-year produced it. The host is not the only variable — a container with no `TZ`
-of its own inherits the daemon's, and one that sets `TZ` per deployment lands
-an hour apart from the run the timeline is built on.
-
-Pin it rather than leaving it to the host, with whichever the deployment
-already has:
-
-```cron
-# Cronie/systemd-style crontabs, and any host with a known zone.
 CRON_TZ=UTC
-17 3 * * *  cd /srv/project && RECOVERAGE_BACKUP_DIR=/srv/backups recoverage backup --json >> /var/log/recoverage-backup.log 2>&1
+17 3 * * * RECOVERAGE_SNAPSHOTS=/srv/snapshots RECOVERAGE_BACKUP_DIR=/srv/backups recoverage backup --json >> /var/log/recoverage-backup.log 2>&1
 ```
 
-```ini
-# A systemd timer: OnCalendar is a wall clock too, so it names the zone as
-# well, and Persistent=true is what makes a laptop that was asleep at 03:17
-# take the backup on its next wake instead of skipping the day.
-[Timer]
-OnCalendar=*-*-* 03:17:00 UTC
-Persistent=true
-```
-
-Stock Vixie cron has no `CRON_TZ`. There, set the host's zone once
-(`timedatectl set-timezone UTC`, or `TZ=UTC` in the daemon's environment) and
-check it: `date` on the box the cron daemon runs on, not the one you are
-logged into. A `TZ=UTC` wrapper the line calls is the same rule by another
-route, and the one that survives the daemon being reinstalled.
-
-**The schedule is the RPO.** Put `RECOVERAGE_BACKUP_DIR` on a different volume
-from `db/` — a different disk, or a different host — or the backup protects
-against nothing that taking the coverage directory down would not take with it.
-Within one host and one filesystem, a mistaken `rm -rf db/` still reaches it.
+The archive is verified before success is reported. On hosts whose cron lacks
+`CRON_TZ`, configure the daemon’s time zone explicitly. Archive timestamps use UTC.
 
 ## Restore drills
 
-An unrestored backup is a hypothesis. Run this on a schedule (monthly is
-typical), against a copy rather than the live directory:
+Run a drill against a fresh directory, leaving the live source untouched:
 
 ```bash
 drill=$(mktemp -d)
-RECOVERAGE_DB="$drill/db" recoverage restore /srv/backups/<newest>.tar
-recoverage stats --json            # exits 1 if nothing parses
-recoverage regen                   # optional: the facts follow from the binaries
-rm -rf "$drill"
+RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage restore /srv/backups/nightly.tar
+RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage check --json
 ```
 
-`recoverage restore` verifies every member before it writes the first byte, so
-a drill on a copy exercises the whole verification path — the same one a real
-incident runs. A drill that only lists the archive with `tar -tf` does not.
+Record the archive, elapsed time and document count, then remove the drill
+copy after inspection. A successful `tar -tf` alone does not exercise validation.
 
-Record the result: which archive, how long it took, how many documents. That
-number is the measured RTO above, and it is the one to compare against when
-the archive has grown.
+## Recovering without this tool
+
+Archives are POSIX tar files containing flat `coverage-<target>.toml` members and
+`manifest.json`. Extract into an offline snapshot directory. The manifest records
+each member’s size and SHA256; verify those digests before serving restored data.
 
 ## What is deliberately not covered
 
-* **The parse cache and the in-process memos.** Both are rebuilt from the
-  documents on first read. A backed-up cache would restore stale parses of
-  documents the backup did not have.
-* **The binaries under the project's `bin/`.** They are build output; a regen
-  rebuilds them from source, which is a different backup's problem.
-* **`rebrew-project.toml`.** It is tracked in the project's own repository.
-  If it is not, the restore has documents but no project, and
-  `recoverage config` will say so before anything is served.
+Recoverage backup excludes canonical project metadata, source, reference binaries,
+configuration, build output and caches. Back up those through their owning project.

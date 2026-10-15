@@ -16,16 +16,35 @@ from recoverage.webapp import app
 
 
 @pytest.fixture(autouse=True)
-def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
     """Drop every RECOVERAGE_* variable before each test.
 
     `serve` reads its defaults from the environment, so an ambient
-    RECOVERAGE_DB (or a leftover token) would silently redirect a test's
+    RECOVERAGE_SNAPSHOTS (or a leftover token) would silently redirect a test's
     database path.  The suite must depend on the code, not the shell it runs
     from.
     """
     for name in [n for n in os.environ if n.startswith("RECOVERAGE_")]:
         monkeypatch.delenv(name)
+    # Endpoint/transport fixtures exercise portable documents explicitly.
+    # Workspace resolution and configuration tests retain the unset default.
+    if (
+        request.module.__name__
+        in {
+            "test_api",
+            "test_server",
+            "test_cli",
+            "test_potato",
+            "test_lifecycle",
+            "test_fuzz",
+            "test_concurrency",
+            "test_metrics",
+            "test_perf",
+        }
+        and HAS_DB
+        and "TestLiveRefresh" not in request.node.nodeid
+    ):
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(_DB_DIR))
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +92,7 @@ def _clean_derived_caches() -> None:
     """Drop every coverage.db-derived cache before each test.
 
     Those caches are process globals keyed on nothing DB-specific, so a test
-    that re-points `_db_path` at its own fixture database (the Potato Mode
+    that re-points `coverage_source` at its own fixture database (the Potato Mode
     NULL-va cases do) leaves its rows behind for the next test: the resolved
     target list memoized the fixture's single target, and the next test's
     `/api/targets/<id>/...` came back 404 against a target the memo no longer
@@ -96,7 +115,7 @@ def _isolated_document_cache(
 
 
 # ── Synthetic coverage documents ────────────────────────────────────────────────────────
-# The document-gated tests below read the directory `_db_path()` resolves, and
+# The document-gated tests below read the directory `coverage_source()` resolves, and
 # CI has no real rebrew project — so they silently never ran.  Write a minimal
 # set of coverage documents matching rebrew's schema so those tests execute
 # everywhere.  The files are gitignored (see .gitignore).  The documents

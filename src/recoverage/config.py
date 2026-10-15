@@ -64,7 +64,7 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_CLIENT_TIMEOUT",
         "RECOVERAGE_CORS",
         "RECOVERAGE_CORS_ORIGIN",
-        "RECOVERAGE_DB",
+        "RECOVERAGE_SNAPSHOTS",
         "RECOVERAGE_DEV_API",
         "RECOVERAGE_FUZZ_ITERATIONS",
         "RECOVERAGE_FUZZ_SEED",
@@ -478,7 +478,7 @@ def cors_origins() -> list[str]:
     an allowlist one item short of what the operator wrote.
 
     A variable that is set but yields no origin is an error for the same reason
-    (:func:`db_override` and :func:`_str_var` draw the line there): the unit
+    (:func:`snapshot_override` and :func:`_str_var` draw the line there): the unit
     file, the container env and the CI job all spell "not configured" as an
     empty value, and this is the one that would otherwise start a server with
     CORS on and an allowlist of nothing, so every cross-origin read is refused
@@ -552,48 +552,28 @@ def log_level() -> int:
         raise ConfigError(f"RECOVERAGE_LOG_LEVEL: {exc}") from None
 
 
-def db_override() -> Path | None:
-    """Explicit coverage directory, or None to resolve it from the project.
-
-    Overrides the cwd-relative resolution (``[project] db_dir`` in
-    ``rebrew-project.toml``, else ``db/``) so a service can run from a
-    directory that is not the project root.  It names the directory holding the
-    ``coverage-*.toml`` documents, which is the directory ``coverage.db`` was in.
-    """
-    raw = _raw("RECOVERAGE_DB")
+def snapshot_override() -> Path | None:
+    """Explicit portable snapshot directory; unset means live project metadata."""
+    raw = _raw("RECOVERAGE_SNAPSHOTS")
     if raw is None:
         return None
     if not raw:
-        raise ConfigError("RECOVERAGE_DB: set but empty (unset it, or give it a path)")
+        raise ConfigError("RECOVERAGE_SNAPSHOTS: set but empty (unset it, or give it a path)")
     return Path(raw).expanduser()
 
 
-def check_db_override() -> None:
-    """Refuse a coverage-directory override that cannot hold documents.
-
-    A path that does not exist is left alone: a service may be started before
-    the first ``rebrew coverage build``, and the resolved directory is a default for
-    the next run.  A path that exists and is NOT a directory has no such
-    reading.  The likeliest spelling is the one the SQLite era taught:
-    ``RECOVERAGE_DB=/srv/coverage.db`` pointing at the old database FILE after
-    the documents moved beside it.  The glob for ``coverage-*.toml`` then
-    matches nothing, the dashboard serves an empty target list forever, and
-    every served number reads as a healthy zero rather than as a wrong path.
-
-    Two stats, at startup only: :func:`db_override` is on the request path
-    (through ``_paths._db_path``) and must stay a bare environment read.
-    """
-    override = db_override()
+def check_snapshot_override() -> None:
+    """Reject an offline snapshot source that is not a readable directory."""
+    override = snapshot_override()
     if override is None:
         return
     try:
         if override.exists() and not override.is_dir():
-            raise ConfigError(
-                f"RECOVERAGE_DB: {override} is not a directory; the variable names the "
-                "directory holding the coverage-<target>.toml documents"
-            )
+            raise ConfigError(f"RECOVERAGE_SNAPSHOTS: {override} is not a directory")
     except OSError as exc:
-        raise ConfigError(f"RECOVERAGE_DB: {override} is not readable ({exc.strerror})") from None
+        raise ConfigError(
+            f"RECOVERAGE_SNAPSHOTS: {override} is not readable ({exc.strerror})"
+        ) from None
 
 
 def check_unknown_vars() -> None:
@@ -620,7 +600,7 @@ def active_config(
     cors: bool,
     cors_origin: Sequence[str],
     token: str | None,
-    db: Path | None,
+    snapshots: Path | None,
     log_level: int,
     max_connections: int,
     client_timeout: int,
@@ -642,7 +622,7 @@ def active_config(
         "allow_remote": str(allow_remote).lower(),
         "cors": str(cors).lower(),
         "cors_origin": ",".join(cors_origin) or "none",
-        "db": str(db) if db is not None else "auto",
+        "source": str(snapshots) if snapshots is not None else "live project",
         "log_level": logging.getLevelName(log_level),
         "token": "set" if token else "unset",
         "max_connections": str(max_connections),

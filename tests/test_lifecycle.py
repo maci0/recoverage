@@ -2,9 +2,8 @@
 
 Pins:
 
-- ``run_regen`` loads rebrew-project.toml once and calls rebrew's catalog and
-  build-db module functions in order, in this process (no subprocess), and a
-  second run repeats that sequence instead of appending to or skipping it.
+- ``run_regen`` refreshes the shared live project model in process without
+  writing files; portable exports remain read-only and failures stay visible.
 - ``_open_and_reap`` must reap the browser-opener child (setsid alone does not
   prevent zombies), bound its wait so a hung opener cannot stall serve, and
   detach the opener from the console on every platform that needs it.
@@ -22,8 +21,6 @@ import socket
 import subprocess
 import sys
 import time
-import types
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -60,625 +57,49 @@ def _own_zombie_pids() -> set[int]:
     return zombies
 
 
-def _install_fake_rebrew(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    load_config: Any,
-    run_catalog: Any,
-    build_db: Any,
-) -> None:
-    """Put fake rebrew modules in sys.modules for run_regen's lazy imports."""
-    package = types.ModuleType("rebrew")
-    package.__path__ = []
-    config = types.ModuleType("rebrew.config")
-    config.load_config = load_config  # type: ignore[attr-defined]
-    catalog = types.ModuleType("rebrew.catalog")
-    catalog.__path__ = []
-    catalog_cli = types.ModuleType("rebrew.catalog.cli")
-    catalog_cli.run_catalog = run_catalog  # type: ignore[attr-defined]
-    writer = types.ModuleType("rebrew.coverage_toml")
-    writer.write_coverage_toml = build_db  # type: ignore[attr-defined]
-    for name, module in (
-        ("rebrew", package),
-        ("rebrew.config", config),
-        ("rebrew.catalog", catalog),
-        ("rebrew.catalog.cli", catalog_cli),
-        ("rebrew.coverage_toml", writer),
-    ):
-        monkeypatch.setitem(sys.modules, name, module)
-
-
-def _record_rebrew_calls(monkeypatch: pytest.MonkeyPatch, events: list[tuple[str, Any]]) -> object:
-    """Install fake rebrew steps that append their name and argument to *events*.
-
-    Returns the config object ``load_config`` hands back, so a caller can
-    assert the catalog step received that same object rather than a path.
-    """
-    cfg = object()
-
-    def load_config(root: Path) -> object:
-        events.append(("load_config", root))
-        return cfg
-
-    def run_catalog(c: object) -> None:
-        events.append(("run_catalog", c))
-
-    def build_db(project_root: Path) -> None:
-        events.append(("build_db", project_root))
-
-    _install_fake_rebrew(
-        monkeypatch,
-        load_config=load_config,
-        run_catalog=run_catalog,
-        build_db=build_db,
-    )
-    return cfg
-
-
-class TestRunRegen:
-    def test_loads_config_once_then_runs_steps_in_order(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+class TestLiveRefresh:
+    def test_refreshes_without_writing_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        events: list[tuple[str, Any]] = []
-        cfg = _record_rebrew_calls(monkeypatch, events)
+        from types import SimpleNamespace
 
-        run_regen(tmp_path)
+        calls: list[tuple[Path, bool]] = []
 
-        assert events == [
-            ("load_config", tmp_path),
-            ("run_catalog", cfg),
-            ("build_db", tmp_path),
-        ]
+        def load(root: Path, *, refresh: bool = False) -> Any:
+            calls.append((root, refresh))
+            return SimpleNamespace(snapshots={"GAME": object()}, failures={})
 
-    def test_missing_rebrew_import_error_propagates(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        monkeypatch.setattr("rebrew.coverage_project.load_project_coverage", load)
+        assert run_regen(tmp_path) is None
+        assert calls == [(tmp_path, True)]
+        assert list(tmp_path.iterdir()) == []
+
+    def test_failed_targets_remain_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # None in sys.modules is the deterministic "rebrew cannot be imported"
-        # signal.  rebrew is a required dependency, so an ImportError here is a
-        # broken install: run_regen lets it propagate and the callers map it to
-        # their exit-1 / HTTP-500 contract.
-        monkeypatch.setitem(sys.modules, "rebrew", None)
-        for name in (
-            "rebrew.config",
-            "rebrew.catalog",
-            "rebrew.catalog.cli",
-            "rebrew.coverage_toml",
-        ):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-
-        with pytest.raises(ImportError):
-            run_regen(tmp_path)
-
-    def test_rebrew_failure_propagates(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """run_regen must not swallow rebrew's own exceptions; callers map them."""
-
-        def run_catalog(c: object) -> None:
-            raise ValueError("corrupt function_structure.json")
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=lambda root: object(),
-            run_catalog=run_catalog,
-            build_db=lambda project_root: None,
-        )
-
-        with pytest.raises(ValueError, match="corrupt"):
-            run_regen(tmp_path)
-
-    def test_rebrew_error_exit_becomes_regen_failed(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """rebrew's ``error_exit`` raises ``typer.Exit``; the caller must not
-        have to import typer to read it, so run_regen translates it."""
-        import typer
+        from types import SimpleNamespace
 
         from recoverage.regen import RegenError
 
-        def run_catalog(c: object) -> None:
-            raise typer.Exit(2)
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=lambda root: object(),
-            run_catalog=run_catalog,
-            build_db=lambda project_root: None,
-        )
-
-        with pytest.raises(RegenError) as caught:
-            run_regen(tmp_path)
-        assert caught.value.exit_code == 2
-
-    def test_a_failing_unlock_does_not_replace_the_regen_failure(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The lock's cleanup must not swallow or overwrite what the run said.
-
-        The descriptor close in ``_exclusive_regen``'s outer ``finally`` drops
-        the lock whatever happens, so an OSError out of the explicit unlock
-        reports a release that is about to happen anyway. Letting it out would
-        replace the operator's answer — rebrew's exit status, or its own
-        traceback — with a message about a lock nobody is left holding.
-        """
-        from recoverage import regen
-
-        def run_catalog(c: object) -> None:
-            raise ValueError("corrupt function_structure.json")
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=lambda root: object(),
-            run_catalog=run_catalog,
-            build_db=lambda project_root: None,
-        )
         monkeypatch.setattr(
-            regen,
-            "_release_lock",
-            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
+            "rebrew.coverage_project.load_project_coverage",
+            lambda *a, **k: SimpleNamespace(
+                snapshots={"GOOD": object()}, failures={"BAD": "missing binary"}
+            ),
         )
-
-        with pytest.raises(ValueError, match="corrupt"):
+        with pytest.raises(RegenError, match="BAD: missing binary"):
             run_regen(tmp_path)
 
-    def test_a_failing_unlock_after_a_good_run_is_not_a_failed_run(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_offline_snapshots_are_read_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With nothing to protect, the unlock failure does not fail the run.
+        from recoverage.regen import RegenError
 
-        The other arm of the pair: letting an OSError out of the success-path
-        unlock would report a regen that wrote every document correctly as a
-        failure (CLI exit 1, API 500). The lock it was protecting is NOT left
-        held — the descriptor close in ``_exclusive_regen``'s outer ``finally``
-        releases an flock/msvcrt byte-range lock whatever the explicit unlock
-        did (verified: closing the fd drops the LOCK_NBLCK), so there is
-        nothing to protect and nothing to report. The success-path unlock is
-        best effort for exactly the reason the failure-path one is.
-        """
-        from recoverage import regen
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=lambda root: object(),
-            run_catalog=lambda c: None,
-            build_db=lambda project_root: None,
-        )
-        monkeypatch.setattr(
-            regen,
-            "_release_lock",
-            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
-        )
-
-        # The run succeeds: run_regen returns the written-document list rather
-        # than raising the unlock error.
-        run_regen(tmp_path)
-
-    def test_the_lock_is_released_even_when_the_explicit_unlock_fails(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """A failed explicit unlock leaves no lock: the next regen runs.
-
-        The claim the previous test rests on, driven rather than assumed: the
-        descriptor close in the outer ``finally`` is what releases the lock, so
-        swallowing the success-path unlock's OSError cannot wedge the next run
-        against a lock nobody holds. With the real unlock restored for the
-        second run, a RegenBusyError here would be exactly that wedge.
-        """
-        from recoverage import regen
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=lambda root: object(),
-            run_catalog=lambda c: None,
-            build_db=lambda project_root: None,
-        )
-        real_release = regen._release_lock
-        monkeypatch.setattr(
-            regen,
-            "_release_lock",
-            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
-        )
-        run_regen(tmp_path)
-
-        # First run done. Back to the real unlock, and a second run must not be
-        # refused as busy — nothing holds the lock.
-        monkeypatch.setattr(regen, "_release_lock", real_release)
-        run_regen(tmp_path)
-
-    def test_a_second_run_repeats_the_same_pipeline(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Running it twice runs the same three steps, with no carry-over.
-
-        The docstring claims a second run converges on the first run's state.
-        What recoverage owns is the call shape: neither execution appends to,
-        skips, or reorders anything, so the second ends where the first did.
-        """
-        events: list[tuple[str, Any]] = []
-        cfg = _record_rebrew_calls(monkeypatch, events)
-
-        one_run = [
-            ("load_config", tmp_path),
-            ("run_catalog", cfg),
-            ("build_db", tmp_path),
-        ]
-        run_regen(tmp_path)
-        run_regen(tmp_path)
-
-        assert events == one_run * 2
-
-    def test_a_second_run_during_the_first_is_refused(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Two runs AT ONCE are not a second execution, they are a collision.
-
-        A regen is convergent, so a second run after the first ends is the case
-        the test above covers.  Two writers of one document at the same time
-        are not: each replaces ``coverage-<target>.toml`` whole, so the second
-        truncates while the first is still writing and a reader can land in
-        between.  The pipeline holds a lock for exactly that window, and this
-        drives a second run from inside the first one's catalog step, where an
-        unguarded pipeline would be writing right now.
-        """
-        from recoverage.regen import RegenBusyError
-
-        events: list[tuple[str, Any]] = []
-        cfg = _record_rebrew_calls(monkeypatch, events)
-        inner: list[str] = []
-
-        def run_catalog(c: object) -> None:
-            events.append(("run_catalog", c))
-            try:
-                run_regen(tmp_path)
-            except RegenBusyError:
-                inner.append("refused")
-            else:
-                inner.append("ran")
-
-        # The fake `rebrew` package is not importable by dotted name (it has an
-        # empty __path__), so the step is reached through sys.modules.
-        monkeypatch.setattr(sys.modules["rebrew.catalog.cli"], "run_catalog", run_catalog)
-
-        run_regen(tmp_path)
-
-        assert inner == ["refused"]
-        # The refused run read the config and stopped: no second catalog step and
-        # no second writer, which are the two that touch the documents.
-        assert events == [
-            ("load_config", tmp_path),
-            ("run_catalog", cfg),
-            ("load_config", tmp_path),
-            ("build_db", tmp_path),
-        ]
-
-    def test_a_failed_run_leaves_the_lock_free(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """A run that died must not wedge the next one.
-
-        The lock is held on an open descriptor, so a pipeline that raises is
-        the case a `finally` covers and a SIGKILL does not; both have to leave
-        the tree rebuildable, or the one failed run costs every run after it.
-        """
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-
-        def boom(c: object) -> None:
-            raise ValueError("corrupt function_structure.json")
-
-        monkeypatch.setattr(sys.modules["rebrew.catalog.cli"], "run_catalog", boom)
-        with pytest.raises(ValueError, match="corrupt"):
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path))
+        with pytest.raises(RegenError, match="read-only") as failure:
             run_regen(tmp_path)
-
-        monkeypatch.undo()
-        events.clear()
-        cfg = _record_rebrew_calls(monkeypatch, events)
-        run_regen(tmp_path)
-
-        assert events == [
-            ("load_config", tmp_path),
-            ("run_catalog", cfg),
-            ("build_db", tmp_path),
-        ]
-
-    @pytest.mark.skipif(not hasattr(os, "fork"), reason="Windows has no fork to test with")
-    def test_a_regen_in_another_process_is_refused_and_its_death_frees_the_lock(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The guard the callers' own locks cannot provide, in a second process.
-
-        `_REGEN_LOCK` and the idempotency ledger live in the server's memory, so
-        a `recoverage regen` typed at a terminal beside a running dashboard, or a
-        cron job over the same tree, is a duplicate run no in-process lock sees.
-        A forked child is a real second process holding the real lock; when it
-        exits without releasing anything itself, the next regen has to proceed,
-        which is the property a lock FILE (whose mere presence would wedge every
-        run after a SIGKILL) could not have.
-        """
-        import select
-
-        from recoverage.regen import _REGEN_LOCK_NAME, RegenBusyError, _try_lock
-
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        lock_path = tmp_path / "db" / _REGEN_LOCK_NAME
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-
-        ready_r, ready_w = os.pipe()
-        done_r, done_w = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            # The child shares the parent's fds and pytest state; it does the
-            # one thing the parent cannot do for it (hold a lock in a process of
-            # its own) and leaves through _exit so no teardown runs twice.
-            os.close(ready_r)
-            os.close(done_w)
-            handle = lock_path.open("a+b")
-            code = 0 if _try_lock(handle) else 2
-            if code == 0:
-                os.write(ready_w, b"1")
-                os.read(done_r, 1)
-            os._exit(code)
-        os.close(ready_w)
-        try:
-            ready, _, _ = select.select([ready_r], [], [], 10)
-            assert ready, "the forked holder never took the lock"
-            with pytest.raises(RegenBusyError) as excinfo:
-                run_regen(tmp_path)
-            assert _REGEN_LOCK_NAME in str(excinfo.value)
-            # Refused before the pipeline: the writer never started, so there is
-            # no second writer of the document the child is busy with.
-            assert events == [("load_config", tmp_path)]
-        finally:
-            os.write(done_w, b"1")
-            os.close(done_r)
-            assert os.waitpid(pid, 0)[1] == 0
-            os.close(ready_r)
-
-        # The holder is gone without having released anything itself.
-        events.clear()
-        cfg = _record_rebrew_calls(monkeypatch, events)
-        run_regen(tmp_path)
-        assert events == [
-            ("load_config", tmp_path),
-            ("run_catalog", cfg),
-            ("build_db", tmp_path),
-        ]
-
-    def test_refuses_a_db_override_rebrew_would_not_write_to(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """RECOVERAGE_DB set to a directory rebrew will not write to is refused.
-
-        rebrew resolves its coverage directory from rebrew-project.toml alone.
-        A regen that ignored the override would write documents no served
-        directory reads and still report success, which is worse than failing:
-        the dashboard would look refreshed and be exactly as stale.
-        """
-        from recoverage.regen import RegenDbMismatchError
-
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        _install_fake_workspace(monkeypatch, tmp_path / "db")
-
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere"))
-        with pytest.raises(RegenDbMismatchError) as excinfo:
-            run_regen(tmp_path)
-
-        assert "RECOVERAGE_DB" in str(excinfo.value)
-        assert str(tmp_path / "elsewhere") in str(excinfo.value)
-        # Refused before rebrew ran: no catalog, no write.
-        assert events == []
-
-    def test_db_override_matching_rebrews_directory_runs(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        _install_fake_workspace(monkeypatch, tmp_path / "db")
-
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "db"))
-        run_regen(tmp_path)
-
-        assert [name for name, *_ in events] == ["load_config", "run_catalog", "build_db"]
-
-    def test_a_differently_spelled_override_on_a_case_insensitive_fs_runs(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """`/proj/DB` and `/proj/db` are ONE directory on macOS and Windows.
-
-        Compared as strings they are two, and the guard refused a regen that
-        would have reached the dashboard, naming a mismatch that does not
-        exist.  The comparison asks the OS instead, so it is right on a
-        case-insensitive filesystem and still exact on a case-sensitive one.
-
-        Only the case arm is exercised, and only where the host agrees that
-        the two spellings are one directory: on a case-sensitive filesystem
-        they are genuinely two directories and the refusal is the correct
-        answer, so the test skips rather than asserting the wrong thing.
-        """
-        from recoverage.regen import _same_directory
-
-        upper = tmp_path / "DB"
-        upper.mkdir()
-        lower = tmp_path / "db"
-        if not _same_directory(upper, lower):
-            pytest.skip("this filesystem distinguishes the two spellings")
-
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        _install_fake_workspace(monkeypatch, upper)
-
-        monkeypatch.setenv("RECOVERAGE_DB", str(lower))
-        run_regen(tmp_path)
-
-        assert [name for name, *_ in events] == ["load_config", "run_catalog", "build_db"]
-
-    def test_two_directories_that_only_look_alike_are_still_refused(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The OS is asked which directory, not whether the names match.
-
-        A symlink and its target, and a path with `..` in it, are the same
-        directory; a hardlink to a directory is not something a filesystem
-        hands out, so the two spellings below are genuinely distinct and must
-        keep raising.  Without this the samefile fallback would be a way to
-        wave a real mismatch through.
-        """
-        from recoverage.regen import RegenDbMismatchError, _same_directory
-
-        real = tmp_path / "db"
-        real.mkdir()
-        other = tmp_path / "elsewhere"
-        other.mkdir()
-
-        assert _same_directory(real, real / ".." / "db"), "a `..` hop is the same directory"
-        assert not _same_directory(real, other)
-
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        _install_fake_workspace(monkeypatch, real)
-
-        monkeypatch.setenv("RECOVERAGE_DB", str(other))
-        with pytest.raises(RegenDbMismatchError):
-            run_regen(tmp_path)
-        assert events == []
-
-    def test_a_db_dir_neither_side_can_resolve_is_refused_not_declined(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The guard that keeps a regen writing where the dashboard reads must run.
-
-        A ``db_dir`` rebrew resolved but this process cannot walk (a symlink
-        loop, a permission error on a parent) used to DECLINE the comparison,
-        and the regen went on with the write directory unknown: the one check
-        standing between a rebuild and a dashboard that stays stale had not
-        run, and nothing said so.  ``_exclusive_regen`` resolves the same
-        directory through the same helper and falls back to ``root/db``, so the
-        lock landed in a directory rebrew does not write to and two processes
-        stopped seeing each other -- the interleaved write the lock exists to
-        prevent.
-
-        The refusal is a distinct type from ``RegenDbMismatchError`` because an
-        operator reading the log has to tell the two apart: this one is a path
-        to fix, that one is a setting to change.
-        """
-        from recoverage.regen import RegenDbMismatchError, RegenDbUnresolvableError
-
-        def refuses_to_resolve(_root: Path) -> Path:
-            raise OSError(13, "Permission denied")
-
-        events: list[tuple[str, Any]] = []
-        _record_rebrew_calls(monkeypatch, events)
-        _install_fake_workspace(
-            monkeypatch,
-            tmp_path / "db",
-            db_dir_resolver=refuses_to_resolve,
-        )
-
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere"))
-        with pytest.raises(RegenDbUnresolvableError) as excinfo:
-            run_regen(tmp_path)
-
-        message = str(excinfo.value)
-        # The message carries what an operator needs to act on: the project, the
-        # setting it disagrees with, and the underlying OS failure.
-        assert "RECOVERAGE_DB" in message
-        assert str(tmp_path / "elsewhere") in message
-        assert "Permission denied" in message
-        # Still refused BEFORE rebrew ran, and still not the mismatch type: a
-        # caller catching the mismatch alone must not see this.
-        assert events == []
-        assert not isinstance(excinfo.value, RegenDbMismatchError)
-
-    def test_the_unresolvable_lock_directory_is_named_in_the_log(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """The fallback lock directory is a guess, and a guess has to be findable.
-
-        ``_coverage_dir`` still answers ``root/db`` when rebrew's own
-        resolution fails, because refusing would stop a rebuild rebrew was
-        going to run.  But a lock in the wrong directory costs two processes
-        the ability to see each other, so the arm that guesses says which
-        directory it guessed.  It is reached with ``RECOVERAGE_DB`` unset: with
-        it set, the guard above has already refused the same failure before
-        this runs.
-        """
-        from recoverage import regen
-
-        def refuses_to_resolve(_root: Path) -> Path:
-            raise OSError(13, "Permission denied")
-
-        _install_fake_workspace(
-            monkeypatch,
-            tmp_path / "db",
-            db_dir_resolver=refuses_to_resolve,
-        )
-
-        with caplog.at_level(logging.WARNING, logger="recoverage"):
-            resolved = regen._coverage_dir(tmp_path)
-
-        assert resolved == tmp_path / "db"
-        messages = [record.getMessage() for record in caplog.records]
-        assert any(
-            "regen lock is held in" in message and "Permission denied" in message
-            for message in messages
-        ), messages
-
-
-def _install_fake_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-    db_dir: Path,
-    *,
-    db_dir_resolver: Callable[[Path], Path] | None = None,
-) -> None:
-    """Fake ``rebrew.workspace`` with *db_dir* as the resolved coverage directory.
-
-    Only the two names ``_check_writes_where_the_dashboard_reads`` imports; the
-    real module is a sibling checkout this suite does not control.
-
-    ``db_dir_resolver`` replaces the resolver for the arm where resolution
-    ITSELF fails rather than returning a different directory: rebrew's real
-    ``db_dir`` resolves internally, and that resolve is what raises on a path
-    this process cannot walk.  The default is the answering resolver, so every
-    existing caller keeps saying what it said.
-    """
-    resolve = db_dir_resolver if db_dir_resolver is not None else (lambda _root: db_dir)
-    workspace = types.ModuleType("rebrew.workspace")
-    workspace.CONFIG_NAME = "rebrew-project.toml"  # type: ignore[attr-defined]
-    workspace.db_dir = resolve  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "rebrew.workspace", workspace)
-
-
-class TestRebrewSurface:
-    """Pins the rebrew call shape run_regen depends on.
-
-    rebrew 2.7 stopped re-exporting ``run_catalog`` from ``rebrew.catalog``.
-    A later required argument on any of the three calls would raise TypeError
-    inside regen instead of failing this import check.
-    """
-
-    def test_regen_entrypoints_match_run_regen(self) -> None:
-        import inspect
-
-        from rebrew.catalog.cli import run_catalog
-        from rebrew.config import load_config
-        from rebrew.coverage_toml import write_coverage_toml
-
-        catalog_required = [
-            name
-            for name, param in inspect.signature(run_catalog).parameters.items()
-            if param.default is inspect.Parameter.empty
-        ]
-        assert catalog_required == ["cfg"]
-        assert list(inspect.signature(load_config).parameters)[:1] == ["root"]
-        root_parameter = inspect.signature(write_coverage_toml).parameters["root_dir"]
-        assert root_parameter.default is inspect.Parameter.empty
-        # The three calls run_regen makes, bound against the installed rebrew.
-        root = Path("project")
-        inspect.signature(load_config).bind(root)
-        inspect.signature(run_catalog).bind(object())
-        inspect.signature(write_coverage_toml).bind(root)
+        assert failure.value.exit_code == 2
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestOpenAndReap:
@@ -1036,6 +457,7 @@ class TestClientConnectionDeadline:
         the deadline.  Driven against the real handler stack, with the
         deadline set well under the heartbeat.
         """
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(Path.cwd() / "db"))
         import threading
         from wsgiref.simple_server import make_server
 
@@ -1101,6 +523,7 @@ class TestClientConnectionDeadline:
         Driven over real sockets against the real handler stack, in a burst, so
         the number that has to come back is one a leak would make obvious.
         """
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(Path.cwd() / "db"))
         import threading
         from wsgiref.simple_server import make_server
 

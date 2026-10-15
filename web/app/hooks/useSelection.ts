@@ -42,7 +42,6 @@ export type SelectionInput = {
   target: string;
   section: string;
   sections: Record<string, Section>;
-  sourceRoot: string;
   cellIndex: number | null;
   dll: OriginalBinary;
 };
@@ -86,7 +85,6 @@ export function useSelection({
   target,
   section,
   sections,
-  sourceRoot,
   cellIndex,
   dll,
 }: SelectionInput): Panes {
@@ -216,7 +214,7 @@ export function useSelection({
         const sourceUrl =
           file === undefined
             ? null
-            : sourceFileUrl(sourceRoot, file);
+            : sourceFileUrl(target, file);
         const address = detail.vaStart ?? detail.va;
         const size = detail.size ?? 0;
 
@@ -262,7 +260,7 @@ export function useSelection({
     return () => control.abort();
     // `dll` participates: the bytes pane waits for the download, so a late
     // arrival has to re-run the selection that asked for it.
-  }, [cellIndex, dll, row, section, sourceRoot, target]);
+  }, [cellIndex, dll, row, section, target]);
 
   return panes;
 }
