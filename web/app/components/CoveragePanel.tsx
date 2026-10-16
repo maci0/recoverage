@@ -40,9 +40,7 @@ export type CoveragePanelProps = {
   cellIndex: number | null;
   panes: Panes;
   target: string;
-  /** The address a parent-function NAME resolves to, or null when the search
-   * index does not carry it. `Cell.parent_function` is a name, so the Parent
-   * link is a lookup rather than an address it already holds. */
+  /** Resolve a parent reference (hexadecimal VA or legacy name) for navigation. */
   parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
   /** Take the panel out of the flow below `lg`, where it stacks under the
@@ -434,10 +432,8 @@ function PanelMeta({
        * gave it. Both are on the cell the server sends and on the Potato panel
        * beside this one; a block without a function is exactly the case they
        * exist for, so the branch that has no function panel is the branch that
-       * needs them. The parent is spelled as the NAME rebrew stored (the Potato
-       * panel beside this one prints the same string), and it is a link only
-       * when the search index resolves it to an address: a link to nowhere
-       * answers a click with a block that covers no such function. */}
+       * needs them. Both hexadecimal VAs and legacy names resolve through
+       * parentVaFor, so a Rebrew-produced parent stays navigable. */}
       {cell.label === undefined ? null : <MetaItem label="Label">{cell.label}</MetaItem>}
       {parent === undefined ? null : (
         <MetaItem label="Parent">

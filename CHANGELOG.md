@@ -3,6 +3,38 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [8.1.2] - 2026-10-16
+
+### Fixed
+
+- Portable snapshots use the same original binary for downloads, disassembly,
+  byte slices and Potato Mode, including when the local project config names
+  another binary.
+- JSON disassembly uses the binary's declared instruction width, matching the
+  text response for 64-bit images.
+- Parent-function links accept the hexadecimal addresses emitted by Rebrew as
+  well as names from older exports.
+- Restore stages every document before publishing and rolls back earlier
+  replacements if a later file cannot be restored.
+- Portable target names load correctly when the filesystem stores accented
+  filenames in decomposed Unicode form.
+- An unreadable target reports its own error instead of returning another
+  target whose ID differs only in case.
+- CLI target selection preserves exact IDs before accepting case aliases, and
+  a broken case sibling no longer prevents reading a healthy target explicitly.
+- CLI packaging declares the Click dependency used to render JSON errors.
+- Section coverage and CI gates include bytes missing from a partial export's
+  cell list, so a partially described section cannot report complete coverage.
+- Function-list searches accept the same padded and bare hexadecimal addresses
+  as Potato Mode.
+
+### Security
+
+- Requests carrying a body close their connection after the response, so unread
+  body bytes cannot be interpreted as a subsequent HTTP request.
+- Source roots resolving to the project directory itself are refused, including
+  `.` and symlinks back to the root, so source routes cannot expose project secrets.
+
 ## [Unreleased]
 
 ## [8.1.1] - 2026-10-15

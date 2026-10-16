@@ -19,10 +19,7 @@ export type Cell = {
   /** The function(s) covering the cell: a name, or a VA spelling. */
   functions?: Array<string | number>;
   label?: string;
-  /** The NAME of the function a data or thunk cell belongs to, not its VA:
-   * `rebrew.catalog.grid` writes `func_end_to_name[off]` here, and the Potato
-   * panel beside this one resolves it the same way (`potato._parent_url`).
-   * A reader that treats it as an address jumps nowhere. */
+  /** The parent function's hexadecimal VA, or its name in older exports. */
   parent_function?: string;
 };
 

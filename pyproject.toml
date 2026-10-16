@@ -43,6 +43,7 @@ classifiers = [
 dependencies = [
     "bottle>=0.13",
     "brotli>=1.1",
+    "click>=8.0",
     "rcssmin>=1.1",
     # Shared live project accounting, canonical format-2 metadata/bindings,
     # and explicit portable coverage documents. The sibling path dependency
@@ -155,6 +156,7 @@ files = [
     "tests/conftest.py",
     "tests/coverage_fixture.py",
     "tests/test_backup.py",
+    "tests/test_clispec.py",
     "tests/test_concurrency.py",
     "tests/test_frontend_import_graph.py",
     "tests/test_import_graph.py",

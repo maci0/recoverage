@@ -512,6 +512,11 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             self.raw_requestline = self.rfile.readline(_MAX_REQUEST_LINE + 1)
 
     def _run_wsgi(self) -> None:
+        # Routes and early refusals may leave a body unread; never parse it as another request.
+        if self.headers.get_all("Transfer-Encoding") or self.headers.get_all(
+            "Content-Length", ["0"]
+        ) != ["0"]:
+            self.close_connection = True
         # The two casts are typeshed gaps, not laundered evidence:
         # http.server types ``rfile``/``wfile`` as the raw buffered socket
         # objects, while wsgiref's constructor takes the PEP 3333 InputStream
@@ -565,7 +570,7 @@ class _KeepAliveServerHandler(ServerHandler):
     request_handler: WSGIRequestHandler
 
     def send_headers(self) -> None:
-        if not self._response_is_framed():
+        if self.request_handler.close_connection or not self._response_is_framed():
             self.request_handler.close_connection = True
             self.headers["Connection"] = "close"
         super().send_headers()

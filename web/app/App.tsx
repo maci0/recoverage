@@ -519,14 +519,18 @@ export function App() {
     return matched;
   }, [coverage.searchIndex, matchedNames]);
 
-  // The address a parent-function name resolves to, or null when the index
-  // does not carry it. `parent_function` is a NAME (see `Cell`), so the jump
-  // the detail panel's Parent link offers is a name lookup, not the address it
-  // used to be handed.
+  // Rebrew emits parent VAs; older portable documents can carry names.
   const parentVaFor = useCallback(
     (name: string): number | null => {
       const entry = coverage.searchIndex[name];
-      return entry === undefined ? null : toVa(entry.va);
+      if (entry !== undefined) {
+        return toVa(entry.va);
+      }
+      if (!/^0x[\da-f]+$/iu.test(name)) {
+        return null;
+      }
+      const address = toVa(name);
+      return Number.isSafeInteger(address) ? address : null;
     },
     [coverage.searchIndex],
   );

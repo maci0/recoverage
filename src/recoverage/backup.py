@@ -14,12 +14,11 @@ Four properties the format has, and why each is here:
   recomputes them.  A backup whose success is measured by its own exit code is
   a hypothesis; the check that makes it a backup is the same one a restore runs
   before it touches anything.
-* **A restore is all-or-nothing.**  Every member is read, digested and size
-  checked BEFORE the first file is written, and each document is then replaced
-  through a temp file in the destination directory, so a restore either lands
-  whole or leaves the previous documents exactly as they were.  Half a restore
-  is worse than none: the dashboard answers 200 with half a project's coverage
-  and nothing that says which half is missing.
+* **A failed restore rolls back.** Every member is verified and staged before
+  publication. Original documents are kept until the last replacement succeeds
+  and restored on a handled failure; a failed rollback retains them for manual
+  recovery. Stop readers during restore: publication is per file, and a process
+  or machine crash can leave an interrupted restore's staging directory behind.
 * **A restore will not roll coverage backwards silently.**  It refuses, before
   writing anything, when a document already in the coverage directory differs
   from the one the archive holds unless the caller passes ``force``.  Restoring
@@ -41,7 +40,9 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
+import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from typing import Any, Final
 
 from recoverage import clock
 from recoverage.documents import COVERAGE_GLOB
+
+_log = logging.getLogger("recoverage")
 
 #: The manifest's own name inside the archive.  Every other member is named by
 #: :data:`COVERAGE_GLOB`, so a member that is neither is this one.
@@ -512,6 +515,9 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     """
     info, members = _verify_archive(archive)
     existing = {name: (db_dir / name) for name, _s, _d in info.members}
+    for path in existing.values():
+        if path.exists() and not path.is_file():
+            raise BackupError(f"cannot restore over {path}: not a regular document")
     if not force:
         clashing = []
         for name, path in existing.items():
@@ -531,13 +537,57 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
                 "'recoverage regen' cannot recover what a rollback discards. "
                 "Re-run with --force if the rollback is what you want."
             )
-    db_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(dir=db_dir, prefix=".restore-"))
+    except OSError as exc:
+        raise BackupError(f"cannot stage restore in {db_dir}: {exc}") from exc
     written: list[Path] = []
-    for name, _size, _digest_hex in info.members:
-        destination = db_dir / name
-        try:
-            _atomic_write(destination, members[name])
-        except OSError as exc:
-            raise BackupError(f"cannot write {destination}: {exc}") from exc
-        written.append(destination)
+    saved: list[Path] = []
+    keep_staging = False
+    previous = staging / "previous"
+    try:
+        previous.mkdir()
+        # Finish every allocation before replacing any original document.
+        for name, data in members.items():
+            _atomic_write(staging / name, data)
+        for name, destination in existing.items():
+            if destination.exists() or destination.is_symlink():
+                destination.replace(previous / name)
+                saved.append(destination)
+            (staging / name).replace(destination)
+            written.append(destination)
+        _fsync_dir(db_dir)
+    except BaseException as exc:
+        rollback_errors: list[str] = []
+        for destination in reversed(written):
+            if destination in saved:
+                continue
+            try:
+                destination.unlink()
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        for destination in reversed(saved):
+            try:
+                (previous / destination.name).replace(destination)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        _fsync_dir(db_dir)
+        if rollback_errors:
+            keep_staging = True
+            raise BackupError(
+                f"restore failed; rollback incomplete; original files retained in {previous}: "
+                + "; ".join(rollback_errors)
+            ) from exc
+        if isinstance(exc, OSError):
+            raise BackupError(f"cannot restore {db_dir}: {exc}") from exc
+        raise
+    finally:
+        if not keep_staging:
+            try:
+                shutil.rmtree(staging)
+            except OSError as exc:
+                _log.warning(
+                    "Cannot remove restore staging directory %r: %r", str(staging), str(exc)
+                )
     return written

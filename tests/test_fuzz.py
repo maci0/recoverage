@@ -2405,7 +2405,7 @@ def _fold(value: str | None) -> str:
 def _row_matches(term: str, fn: Function) -> bool:
     """Whether the endpoint must return *fn* for *term*, computed without it.
 
-    The four columns ``_filtered_functions`` compares, the term stripped the way
+    The name and address columns the list compares, the term stripped the way
     the handler strips it (an all-whitespace search is not a search at all), an
     absent column as the empty string, and a substring test with both sides
     folded — which is what makes a wildcard in the term match literally.
@@ -2419,7 +2419,16 @@ def _row_matches(term: str, fn: Function) -> bool:
     needle = _fold(srv.strip_ascii_whitespace(term))
     if not needle:
         return True
-    return any(needle in _fold(column) for column in (fn.name, fn.symbol, str(fn.va), fn.vaStart))
+    padded_va = fn.va if fn.va >= 0 else fn.va % (2**32)
+    columns = (
+        fn.name,
+        fn.symbol,
+        str(fn.va),
+        fn.vaStart,
+        f"0x{padded_va:08x}",
+        f"0x{abs(fn.va):x}",
+    )
+    return any(needle in _fold(column) for column in columns)
 
 
 def _served_rows(term: str) -> tuple[int, Any]:
@@ -4366,7 +4375,8 @@ class TestCliRendersHostileDocumentValues:
 
     def _assert_json(self, text: str, target: str, section: str) -> None:
         payload = _strict_json(text)
-        entries = payload if isinstance(payload, list) else [payload]
+        entries = payload["items"]
+        assert payload["total"] == len(entries)
         matching = [
             entry
             for entry in entries

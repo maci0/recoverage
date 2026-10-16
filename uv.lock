@@ -930,6 +930,7 @@ source = { editable = "." }
 dependencies = [
     { name = "bottle" },
     { name = "brotli" },
+    { name = "click" },
     { name = "rcssmin" },
     { name = "rebrew" },
     { name = "rich" },
@@ -959,6 +960,7 @@ requires-dist = [
     { name = "bottle", specifier = ">=0.13" },
     { name = "brotli", specifier = ">=1.1" },
     { name = "capstone", marker = "extra == 'capstone'", specifier = ">=5.0" },
+    { name = "click", specifier = ">=8.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.62" },
     { name = "pygments", marker = "extra == 'pygments'", specifier = ">=2.21.0" },

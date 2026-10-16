@@ -33,6 +33,7 @@ from recoverage import metrics as _metrics
 from recoverage import server as _server
 from recoverage._paths import coverage_source
 from recoverage.disasm import (
+    _target_width_bits,
     capstone_unavailable_reason,
     clear_disassembly_cache,
     disassembly_available,
@@ -663,6 +664,7 @@ def _filtered_functions(
     status_filter: str | None,
     search: str | None,
     folded: Mapping[int, tuple[str, str, str]] | None = None,
+    snapshot: CoverageSnapshot | None = None,
 ) -> list[Function]:
     """The functions the list endpoint would serve, before paging.
 
@@ -691,7 +693,9 @@ def _filtered_functions(
     filter is also callable on a list the snapshot was never shown, and there
     the per-row fold is the only way to the same answer.  The decimal VA
     column is built and folded per row either way, and only when the term can
-    hold one (``server.fold_can_match_decimal``).
+    hold one (``server.fold_can_match_decimal``). *snapshot* also supplies the
+    memoized padded and bare hexadecimal VA columns when the term can match
+    an address, as Potato Mode does.
     """
     rows = list(functions)
     if status_filter is not None:
@@ -702,6 +706,13 @@ def _filtered_functions(
         # no decimal number can hold skips the arm outright
         # (server.fold_can_match_decimal).
         match_decimal = _server.fold_can_match_decimal(needle)
+        addresses = None
+        if _server.fold_can_match_hex(needle):
+            addresses = (
+                _server.folded_va_columns(snapshot, snapshot.functions)
+                if snapshot is not None
+                else _server._folded_va_table(rows)
+            )
         if folded is None:
             rows = [
                 fn
@@ -710,6 +721,10 @@ def _filtered_functions(
                 or fold_match_folded(fn.symbol, needle)
                 or (match_decimal and fold_match_folded(str(fn.va), needle))
                 or fold_match_folded(fn.vaStart, needle)
+                or (
+                    addresses is not None
+                    and (needle in addresses[id(fn)][0] or needle in addresses[id(fn)][1])
+                )
             ]
         else:
             rows = [
@@ -717,6 +732,10 @@ def _filtered_functions(
                 for fn in rows
                 if _server.folded_columns_match(folded[id(fn)], needle)
                 or (match_decimal and fold_match_folded(str(fn.va), needle))
+                or (
+                    addresses is not None
+                    and (needle in addresses[id(fn)][0] or needle in addresses[id(fn)][1])
+                )
             ]
     return rows
 
@@ -2189,6 +2208,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
             status_filter,
             search,
             _server.folded_row_columns(coverage, coverage.functions) if search else None,
+            coverage,
         )
         total = _function_total(snap, target, status_filter, search, rows)
         # Enumerate exactly the response fields, in order: the SPA reads
@@ -2660,7 +2680,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
                     },
                 )
 
-            md = get_capstone_md()
+            md = get_capstone_md(_target_width_bits(target, target_data))
             instructions: list[dict[str, Any]] = [
                 {
                     "addr": _server.hex_addr(insn.address),

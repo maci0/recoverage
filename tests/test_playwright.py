@@ -644,3 +644,26 @@ def test_every_panel_row_has_a_value(page: Any):
     assert values, "the panel drew no metadata"
     blank = [value for value in values if value.strip() in ("", "…", "()")]
     assert not blank, f"rows with no value: {blank}"
+
+
+@pytest.mark.parametrize("parent", ["_func_b", "0x10001010"])
+def test_parent_links_accept_names_and_rebrew_addresses(page: Any, parent: str):
+    def parent_cell(route: Any) -> None:
+        response = route.fetch()
+        payload = response.json()
+        payload["sections"][".text"]["cells"] = [
+            {"start": 0, "end": 16, "span": 1, "state": "data", "parent_function": parent},
+            {"start": 16, "end": 32, "span": 1, "state": "reloc", "functions": ["0x10001010"]},
+        ]
+        payload["search_index"] = {"_func_b": {"va": "0x10001010"}}
+        route.fulfill(response=response, json=payload)
+
+    page.route("**/api/targets/*/data?*", parent_cell)
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    page.locator(".grid[role=application]").focus()
+    page.keyboard.press("Enter")
+    link = page.locator("#panel").get_by_role("link", name=parent, exact=True)
+    expect(link).to_be_visible()
+    link.click()
+    expect(page.locator("#panel .panel-head")).to_contain_text("_func_b")

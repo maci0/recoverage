@@ -416,6 +416,93 @@ class TestRestoreBackup:
         restore_backup(archive, db)
         assert {p.name: p.read_bytes() for p in db.glob("coverage-*.toml")} == before
 
+    @pytest.mark.parametrize("failure", ["stage", "publish"])
+    @pytest.mark.parametrize("original", [None, b"newer original"])
+    def test_a_later_io_failure_restores_the_original_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        failure: str,
+        original: bytes | None,
+    ) -> None:
+        source = tmp_path / "source"
+        for target in ("A", "B"):
+            write_coverage(source, target, {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        destination.mkdir()
+        first = destination / "coverage-A.toml"
+        if original is not None:
+            first.write_bytes(original)
+        untouched = destination / "inventory.json"
+        untouched.write_bytes(b"keep inventory")
+        real_write = backup._atomic_write
+        real_replace = Path.replace
+
+        def fail_write(path: Path, data: bytes) -> None:
+            if failure == "stage" and path.name == "coverage-B.toml":
+                raise OSError("disk full")
+            real_write(path, data)
+
+        def fail_replace(path: Path, target: Path) -> Path:
+            if failure == "publish" and target == destination / "coverage-B.toml":
+                raise PermissionError("destination locked")
+            return real_replace(path, target)
+
+        monkeypatch.setattr(backup, "_atomic_write", fail_write)
+        monkeypatch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(BackupError):
+            restore_backup(archive, destination, force=True)
+        if original is not None:
+            assert first.read_bytes() == original
+        else:
+            assert not first.exists()
+        assert not (destination / "coverage-B.toml").exists()
+        assert untouched.read_bytes() == b"keep inventory"
+        assert {path.name for path in destination.iterdir()} == (
+            {first.name, untouched.name} if original is not None else {untouched.name}
+        )
+
+    def test_a_failed_rollback_retains_the_original_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / "source"
+        for target in ("A", "B"):
+            write_coverage(source, target, {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        destination.mkdir()
+        (destination / "coverage-A.toml").write_bytes(b"newer original")
+        real_replace = Path.replace
+
+        def fail_replace(path: Path, target: Path) -> Path:
+            if target == destination / "coverage-B.toml" or path.parent.name == "previous":
+                raise PermissionError("destination locked")
+            return real_replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(BackupError, match="original files retained"):
+            restore_backup(archive, destination, force=True)
+        retained = list(destination.glob(".restore-*/previous/coverage-A.toml"))
+        assert len(retained) == 1
+        assert retained[0].read_bytes() == b"newer original"
+
+    def test_force_does_not_replace_a_directory_after_writing_other_members(
+        self, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "source"
+        for target in ("A", "B"):
+            write_coverage(source, target, {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        (destination / "coverage-B.toml").mkdir(parents=True)
+        with pytest.raises(BackupError):
+            restore_backup(archive, destination, force=True)
+        assert not (destination / "coverage-A.toml").exists()
+
     def test_a_document_that_has_moved_on_is_refused(self, db: Path, archive: Path) -> None:
         """The history and verify arrays the rollback would discard are gone for good."""
         document = next(db.glob("coverage-*.toml"))

@@ -3,8 +3,8 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
-source/refresh boundaries reviewed: 2026-10-15, against
-`__version__ = "8.1.1"` (`src/recoverage/__init__.py:43`) during release preparation.
+source/refresh boundaries reviewed: 2026-10-16, against
+`__version__ = "8.1.2"` (`src/recoverage/__init__.py:43`) during release preparation.
 The historical whole-surface review below was recorded against commit `5fe9ea7` on 2026-10-03.
 
 **The historical 2026-10-03 pass re-derived `file:line` references against the tree at

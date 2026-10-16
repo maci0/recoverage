@@ -14,12 +14,13 @@ import os
 import threading
 import time
 import tomllib
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 import pytest
 from coverage_fixture import cell, coverage_dir, write_coverage
-from rebrew.coverage_toml import load_coverage_from
+from rebrew.coverage_toml import CoverageTomlError, load_all_coverage_from, load_coverage_from
 
 from recoverage import documents, metrics, server
 
@@ -68,6 +69,42 @@ def test_snapshots_equal_rebrews_own_reader(db: Path) -> None:
     snaps = server.coverage_snapshots()
     for target in ("GAME", "TOOL"):
         assert snaps[target] == load_coverage_from(db, target)
+
+
+def test_a_decomposed_filename_keeps_the_documents_canonical_target(
+    db: Path,
+) -> None:
+    target = "café"
+    decomposed = unicodedata.normalize("NFD", target)
+    path = write_coverage(db, target, _sections(64))
+    path.rename(db / f"coverage-{decomposed}.toml")
+    snapshots = documents.load_all(db)
+    assert snapshots[target] == load_all_coverage_from(db)[target]
+    assert documents.unreadable(db) == ()
+    assert server.coverage_for(decomposed) is snapshots[target]
+
+
+def test_an_exact_failed_target_does_not_serve_a_healthy_case_sibling(db: Path) -> None:
+    good = write_coverage(db, "Broken", _sections(64))
+    bad = db / "coverage-broken.toml"
+    if bad.exists():
+        pytest.skip("filesystem does not distinguish target case")
+    bad.write_text("broken = [", encoding="utf-8")
+    with pytest.raises(CoverageTomlError):
+        server.coverage_for("broken")
+    assert server.coverage_for("Broken").target == "Broken"
+    assert good.exists()
+
+
+def test_a_decomposed_request_prefers_the_exact_target_case(db: Path) -> None:
+    write_coverage(db, "CAFÉ", _sections(64))
+    lower = db / "coverage-café.toml"
+    if lower.exists():
+        pytest.skip("filesystem does not distinguish target case")
+    write_coverage(db, "café", _sections(128))
+    target = unicodedata.normalize("NFD", "café")
+    assert server.coverage_for(target).target == "café"
+    assert server.coverage_for(target).sections[".text"].size == 128
 
 
 def test_a_restart_reads_the_persisted_parse(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

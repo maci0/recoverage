@@ -559,7 +559,7 @@ def _contained_source_path(
     # src/evil is, and resolve() follows a symlink. A base that leaves the
     # project makes every is_relative_to below pass trivially, because they
     # are all measured against the base that already escaped.
-    if not base.is_relative_to(project_dir):
+    if base == project_dir or not base.is_relative_to(project_dir):
         _log.debug("Source root %r resolves outside the project", source_root)
         return None
     raw = files[0]
@@ -1223,7 +1223,7 @@ def target_key(target: str) -> str:
     keeps emitting each id in its own spelling, so the target picker still shows
     what the config wrote and what the file is called.
     """
-    return target.casefold()
+    return unicodedata.normalize("NFC", target).casefold()
 
 
 def coverage_for(target: str) -> CoverageSnapshot:
@@ -1243,18 +1243,24 @@ def coverage_for(target: str) -> CoverageSnapshot:
     miss: a target id that IS the document's own spelling, which is every
     request on a case-sensitive host, never pays for it.
     """
+    target = unicodedata.normalize("NFC", target)
     snapshots = load_all(coverage_source())
     snapshot = snapshots.get(target)
-    if snapshot is None:
-        wanted = target_key(target)
-        snapshot = next(
-            (snap for tid, snap in snapshots.items() if target_key(tid) == wanted),
-            None,
-        )
+    if snapshot is not None:
+        return snapshot
+    failures = unreadable_documents()
+    failed = next((row for row in failures if row["target"] == target), None)
+    if failed is not None:
+        raise CoverageTomlError(f"{target}: {failed['error']}")
+    wanted = target_key(target)
+    snapshot = next(
+        (snap for tid, snap in snapshots.items() if target_key(tid) == wanted),
+        None,
+    )
     if snapshot is not None:
         return snapshot
     failed = next(
-        (row for row in unreadable_documents() if target_key(row["target"]) == target_key(target)),
+        (row for row in failures if target_key(row["target"]) == target_key(target)),
         None,
     )
     if failed is not None:
@@ -1629,10 +1635,8 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
         # alone, so this number is not the grid's matchedFunctions.
         matched = buckets["exact"] + buckets["reloc"] + buckets["proven"]
         covered = section.covered_bytes
-        # The bytes per state the reader derived, summed: the same total a
-        # per-cell `sum(cell.size ...)` walked every section to reach, once per
-        # /stats, /data and CLI stats call.
-        total = sum(section.buckets.values())
+        # Missing cells are uncovered bytes, not a smaller coverage denominator.
+        total = section.size if section.size > 0 else sum(section.buckets.values())
         sections[name] = {
             **buckets,
             "matched": matched,
@@ -1685,12 +1689,10 @@ def _project_dir() -> Path:
 
 DLL_DATA: dict[str, bytes | None] = {}
 DLL_LOCK = threading.Lock()
-#: Config stat the current DLL_DATA was filled under, or None before the
-#: first load (and for a project with no rebrew-project.toml, which is also a
-#: state entries get cached under).  The rebuild broadcast empties DLL_DATA
-#: under the same lock and deliberately leaves this alone: the config did not
-#: change, so the next request reloads under a fingerprint that still matches.
-_DLL_CONFIG_MTIME: tuple[int, int, int, int] | None = None
+#: Config and portable-document fingerprints for the current binary cache.
+#: Portable path edits must retire both cached bytes and cached refusals.
+_DllSourceKey = tuple[tuple[int, int, int, int] | None, tuple[int, int] | None]
+_DLL_CONFIG_MTIME: _DllSourceKey | None = None
 #: ``(mtime_ns, size, ino)`` of the binary each DLL_DATA entry was read from.
 #: A target in DLL_DATA with no entry here (a test filling the memo directly,
 #: or a cached "no binary") is never invalidated by a stamp.
@@ -2052,7 +2054,7 @@ def resolve_targets() -> list[dict[str, str]]:
 
 
 def _find_dll_path(target: str) -> Path | None:
-    """Find the DLL path for a target from project config.
+    """Find the target binary from its portable snapshot or project config.
 
     Returns ``None`` when *target* has no ``[targets.<tid>].binary`` entry —
     the caller then reports a target-specific error instead of silently
@@ -2067,6 +2069,21 @@ def _find_dll_path(target: str) -> Path | None:
     resolves, and a miss here meant ``/asm`` refused a target whose coverage the
     dashboard was rendering from the same id.
     """
+    if config.snapshot_override() is not None:
+        binary = coverage_for(target).paths.get("originalDll")
+        if binary:
+            # Portable offsets describe this binary even beside another project config.
+            if not isinstance(binary, str) or "\x00" in binary or binary.startswith("//"):
+                return None
+            relative = Path(binary.removeprefix("/"))
+            if not is_plain_relative(relative):
+                return None
+            root = _project_dir().resolve()
+            try:
+                portable_binary = (root / relative).resolve()
+            except (OSError, ValueError):
+                return None
+            return portable_binary if portable_binary.is_relative_to(root) else None
     targets = _get_targets_config()
     t_info = targets.get(target)
     if t_info is None:
@@ -2108,7 +2125,7 @@ def _find_dll_path(target: str) -> Path | None:
 
 def _cache_dll_unavailable(
     target: str,
-    config_fp: tuple[int, int, int, int] | None,
+    config_fp: _DllSourceKey,
     stamp: tuple[int, int, int, int] | None,
     warning: str,
     *args: object,
@@ -2156,10 +2173,14 @@ def _load_dll(target: str) -> bytes | None:
     rebuild broadcast that clears this dict fires on the DB alone.  The memo
     therefore carries the same config stat its path resolution keys on
     (:func:`config_fingerprint`) and drops every entry when that moves,
-    the contract :func:`_get_targets_config` already follows.
+    the contract :func:`_get_targets_config` already follows. Portable mode
+    also keys on the documents, which supply the binary path in that mode.
     """
     global _DLL_CONFIG_MTIME
-    config_fp = config_fingerprint(_project_dir())
+    config_fp = (
+        config_fingerprint(_project_dir()),
+        _snapshot_db_mtime() if config.snapshot_override() is not None else None,
+    )
     stamp = binary_stamp(target)
     with DLL_LOCK:
         if config_fp != _DLL_CONFIG_MTIME:

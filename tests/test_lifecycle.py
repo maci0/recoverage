@@ -39,6 +39,49 @@ from recoverage.regen import run_regen
 HAS_PROC = Path("/proc/self/stat").is_file()
 
 
+@pytest.mark.parametrize("chunked", [False, True])
+def test_an_unread_body_cannot_become_another_request(chunked: bool) -> None:
+    import threading
+    from wsgiref.simple_server import make_server
+
+    seen: list[str] = []
+
+    def ignoring_body(environ: Any, start_response: Any) -> list[bytes]:
+        seen.append(environ["PATH_INFO"])
+        start_response("200 OK", [("Content-Length", "2")])
+        return [b"OK"]
+
+    server = make_server(
+        "127.0.0.1",
+        0,
+        ignoring_body,
+        server_class=devserver._ThreadingWSGIServer,
+        handler_class=devserver._KeepAliveRequestHandler,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    inner = b"GET /body-is-not-a-request HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    if chunked:
+        framing = b"Transfer-Encoding: chunked\r\n"
+        body = f"{len(inner):x}\r\n".encode() + inner + b"\r\n0\r\n\r\n"
+    else:
+        framing = f"Content-Length: {len(inner)}\r\n".encode()
+        body = inner
+    try:
+        with socket.create_connection(server.server_address, timeout=5) as client:
+            client.sendall(b"POST /one HTTP/1.1\r\nHost: localhost\r\n" + framing + b"\r\n" + body)
+            reply = bytearray()
+            while part := client.recv(65536):
+                reply.extend(part)
+        assert seen == ["/one"]
+        assert reply.count(b"HTTP/1.1") == 1
+        assert b"Connection: close\r\n" in reply
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def _own_zombie_pids() -> set[int]:
     """PIDs of this process's children currently in the zombie state."""
     zombies: set[int] = set()

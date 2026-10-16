@@ -44,6 +44,7 @@ import os
 import tempfile
 import threading
 import tomllib
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -387,7 +388,7 @@ def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
             for target, reason in sorted(project.failures.items())
         )
     return tuple(
-        (name, name[len(_PREFIX) : -len(_SUFFIX)], reason)
+        (name, unicodedata.normalize("NFC", name[len(_PREFIX) : -len(_SUFFIX)]), reason)
         for name, reason in sorted(_current(db_dir)[4].items())
     )
 
@@ -448,7 +449,7 @@ def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
     failures: dict[str, str] = {}
     for stat in key:
         name = stat[0]
-        target = name[len(_PREFIX) : -len(_SUFFIX)]
+        target = unicodedata.normalize("NFC", name[len(_PREFIX) : -len(_SUFFIX)])
         path = db_dir / name
         try:
             doc = _load(path, target, stat, previous.get(name))

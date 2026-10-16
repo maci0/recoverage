@@ -39,6 +39,10 @@ RECOVERAGE_SNAPSHOTS=/srv/restored recoverage check --json
 
 Restore validates every member before publishing files. Existing differing
 files require `--force`; review the named files before choosing to replace them.
+Stop readers during restore. A handled write failure rolls earlier replacements
+back; if rollback also fails, the error names the directory retaining the original
+files. A process or machine crash can leave a `.restore-*` directory behind;
+preserve its `previous/` files and retry the restore before serving the exports.
 Offline readers detect restored files automatically. `regen` refuses offline
 mode because only Rebrew can derive a fresh export from the original inputs.
 

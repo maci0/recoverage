@@ -113,6 +113,18 @@ class TestTargetFileRoutes:
         assert status.startswith("404")
         assert body != b"secret"
 
+    @pytest.mark.parametrize("source_root", [".", "./", "/.", "/reversed/root"])
+    def test_source_root_cannot_expose_the_whole_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_root: str
+    ) -> None:
+        root = _project(tmp_path, monkeypatch)
+        (root / ".env").write_bytes(b"secret")
+        (root / "reversed/root").symlink_to(root, target_is_directory=True)
+        write_coverage(root / "exports", "game", {}, paths={"sourceRoot": source_root})
+        status, _, body = wsgi_get("/files/game/source/.env")
+        assert status.startswith("403")
+        assert body != b"secret"
+
     @pytest.mark.parametrize("configured_exists", [False, True])
     def test_portable_binary_takes_precedence_over_incidental_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured_exists: bool
@@ -143,6 +155,50 @@ class TestTargetFileRoutes:
         write_coverage(root / "exports", "game", {}, paths={"originalDll": "/binaries/game.exe"})
         status, _, body = wsgi_get("/files/game/binary")
         assert status.startswith("200") and body == b"game binary"
+
+    @pytest.mark.parametrize("configured", [False, True])
+    def test_portable_byte_slices_use_the_downloaded_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
+    ) -> None:
+        root = _project(tmp_path, monkeypatch)
+        if not configured:
+            (root / "rebrew-project.toml").unlink()
+        (root / "binaries/snapshot.exe").write_bytes(b"snapshot binary")
+        write_coverage(
+            root / "exports",
+            "game",
+            {".text": {"va": 0x1000, "size": 15, "fileOffset": 0, "cells": []}},
+            paths={"originalDll": "/binaries/snapshot.exe"},
+        )
+        status, headers, body = wsgi_get("/files/game/binary")
+        assert status.startswith("200")
+        downloaded = decode_body(body, headers)
+        status, headers, body = wsgi_get("/api/targets/game/sections/.text/bytes?offset=0&size=4")
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers))["raw"] == list(downloaded[:4])
+
+    def test_portable_binary_path_edits_invalidate_cached_bytes_and_refusals(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = _project(tmp_path, monkeypatch)
+        (root / "binaries/snapshot.exe").write_bytes(b"snapshot binary")
+        for binary, expected in (
+            ("../secret.exe", "404"),
+            ("/binaries/snapshot.exe", "200"),
+            ("../secret.exe", "404"),
+        ):
+            write_coverage(
+                root / "exports",
+                "game",
+                {".text": {"va": 0x1000, "size": 15, "fileOffset": 0, "cells": []}},
+                paths={"originalDll": binary},
+            )
+            status, headers, body = wsgi_get(
+                "/api/targets/game/sections/.text/bytes?offset=0&size=4"
+            )
+            assert status.startswith(expected)
+            if expected == "200":
+                assert json.loads(decode_body(body, headers))["raw"] == list(b"snap")
 
     @pytest.mark.parametrize(
         "binary",

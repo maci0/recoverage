@@ -825,6 +825,24 @@ class TestApiTargets:
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiFunctions:
+    @pytest.mark.parametrize("search", ["00401000", "0x00401000", "0x401000", "4198400"])
+    def test_address_search_matches_padded_and_bare_forms(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, search: str
+    ) -> None:
+        directory = tmp_path / "exports"
+        write_coverage(
+            directory,
+            "PADDED",
+            {},
+            functions=[{"va": 0x401000, "vaStart": "0x401000", "name": "RealFn"}],
+        )
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
+        status, headers, body = wsgi_get(f"/api/targets/PADDED/functions?search={search}")
+        assert status.startswith("200")
+        payload = json.loads(decode_body(body, headers))
+        assert payload["total"] == 1
+        assert payload["functions"][0]["name"] == "RealFn"
+
     """Test /api/targets/<target>/functions with sort validation."""
 
     def test_default_sort(self) -> None:
@@ -6077,6 +6095,30 @@ class TestImageWidthIsReadFromTheContainerHeader:
         import recoverage.disasm as disasm
 
         assert disasm.binary_width_bits(data) == bits
+
+    @pytest.mark.parametrize("bits", [32, 64])
+    def test_json_disassembly_uses_the_images_width(
+        self, monkeypatch: pytest.MonkeyPatch, bits: int
+    ) -> None:
+        from types import SimpleNamespace
+
+        import recoverage.api as api
+        import recoverage.disasm as disasm
+
+        image = self._pe(0x8664 if bits == 64 else 0x014C).ljust(0x204, b"\x90")
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
+        monkeypatch.setattr(api, "_load_dll", lambda target: image)
+        monkeypatch.setattr(disasm, "binary_stamp", lambda target: None)
+        selected: list[int] = []
+
+        def decoder(width: int = 32) -> Any:
+            selected.append(width)
+            return SimpleNamespace(disasm=lambda code, va: [])
+
+        monkeypatch.setattr(api, "get_capstone_md", decoder)
+        status, _, _ = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=4&format=json")
+        assert status.startswith("200")
+        assert selected == [bits]
 
     @pytest.mark.parametrize(
         "data",

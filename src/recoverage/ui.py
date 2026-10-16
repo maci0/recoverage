@@ -21,7 +21,6 @@ from bottle import static_file
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 
 import recoverage.server as _server
-from recoverage import config
 from recoverage.server import (
     CACHE_REVALIDATE,
     SUPPORTED_ENCODINGS,
@@ -390,23 +389,8 @@ def serve_target_source(target: str, filepath: str) -> bytes | HTTPResponse:
 def serve_target_binary(target: str) -> bytes | HTTPResponse:
     """Serve only this target's configured binary within the serving project."""
     target = _server.path_param(target)
-    snapshot = _target_file_snapshot(target)
-    binary = snapshot.paths.get("originalDll") if config.snapshot_override() is not None else None
-    candidate = None
-    if binary:
-        # Portable offsets describe the snapshot binary, even beside another project config.
-        if isinstance(binary, str) and "\x00" not in binary and not binary.startswith("//"):
-            relative = Path(binary.removeprefix("/"))
-            if binary and _server.is_plain_relative(relative):
-                root = _project_dir().resolve()
-                try:
-                    resolved = (root / relative).resolve()
-                except (OSError, ValueError):
-                    resolved = None
-                if resolved is not None and resolved.is_relative_to(root):
-                    candidate = resolved
-    else:
-        candidate = _server._find_dll_path(target)
+    _target_file_snapshot(target)
+    candidate = _server._find_dll_path(target)
     if candidate is None:
         return _server._json_err(404, {"error": "Not found", "detail": "target binary unavailable"})
     return _serve_repo_file(candidate.name, candidate, candidate.parent)

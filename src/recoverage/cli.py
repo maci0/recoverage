@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import threading
+import unicodedata
 import webbrowser
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -750,6 +751,8 @@ def _select_targets(target: str | None, known: list[str], *, json_output: bool) 
 
     if target is None:
         return known
+    if target in known:
+        return [target]
     wanted = target_key(target)
     match = next((tid for tid in known if target_key(tid) == wanted), None)
     if match is None:
@@ -776,10 +779,13 @@ def _open_targets(
     snapshots = _load_coverage_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
     from recoverage.server import target_key, unreadable_documents
 
+    if target is not None:
+        target = unicodedata.normalize("NFC", target)
     failed = [
         row
         for row in unreadable_documents()
-        if target is None or target_key(row["target"]) == target_key(target)
+        if target is None
+        or (target not in snapshots and target_key(row["target"]) == target_key(target))
     ]
     if failed:
         details = "; ".join(f"{row['target']}: {row['error']}" for row in failed)

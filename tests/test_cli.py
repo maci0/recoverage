@@ -711,8 +711,8 @@ class TestStatsCommand:
     def test_stats_runs(self) -> None:
         """The table is the deliverable, so read it: exit code 0 says only
         that nothing raised. The synthetic coverage seeds FAKEDLL with 3
-        functions and two sections, and `.text` is 87.5% covered by bytes
-        (112 of its 128 cell bytes are not 'none').
+        functions and two sections, and `.text` has 112 covered bytes out of
+        its declared 4096 bytes (the cells describe only its first 128).
 
         The function line is derived now, not read from a stored summary blob:
         rebrew counts a function matched when it is byte-identical, so _func_a
@@ -726,7 +726,7 @@ class TestStatsCommand:
         assert "FAKEDLL" in out
         assert "Functions: 2 of 3 matched" in out
         assert ".text" in out and ".data" in out
-        assert "87.5%" in out
+        assert "2.7%" in out
 
     def test_stats_speaks_the_dashboards_vocabulary(self) -> None:
         """The verdict tokens head their columns and the sections keep load order.
@@ -814,7 +814,7 @@ def _write_sections(
     sections: list[str],
     cells: list[tuple[str, int, int, str]],
 ) -> Path:
-    """Write one coverage document: each *section* is 100 bytes, one cell per entry.
+    """Write one coverage document: sections hold at least 100 bytes and every cell.
 
     The document-era replacement for the throwaway SQLite database: the CLI
     reads rebrew's ``coverage-*.toml`` now, so a test-local fixture is a
@@ -827,6 +827,7 @@ def _write_sections(
     }
     for section, start, end, state in cells:
         definitions[section]["cells"].append(cell(start, end, state))
+        definitions[section]["size"] = max(definitions[section]["size"], end)
     return write_coverage(directory, FIXTURE_TARGET, definitions)
 
 
@@ -849,8 +850,8 @@ class TestCheckCommand:
 
     def test_check_with_100_threshold(self) -> None:
         """100% threshold must fail the synthetic DB deterministically:
-        .text sits at 87.5% covered (112/128 bytes) and .data at 100%, so
-        the gate exits 1 with exactly one FAIL verdict — the CI consumer's
+        .text has 112/4096 covered bytes and .data has 16/1024, so
+        the gate exits 1 with two FAIL verdicts — the CI consumer's
         real contract (the old assertion accepted any exit in (0, 1))."""
         result = runner.invoke(app, ["check", "--min-coverage", "100", "--json"])
         assert result.exit_code == 1
@@ -858,8 +859,8 @@ class TestCheckCommand:
         assert payload["passed"] is False
         by_section = {r["section"]: r for r in payload["results"]}
         assert by_section[".text"]["status"] == "FAIL"
-        assert by_section[".text"]["coverage_pct"] == 87.5
-        assert by_section[".data"]["status"] == "PASS"
+        assert by_section[".text"]["coverage_pct"] == 2.73
+        assert by_section[".data"]["status"] == "FAIL"
 
     def test_check_gate_compares_unrounded_ratio(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
