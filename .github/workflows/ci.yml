@@ -132,7 +132,7 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "27"
       - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop) and HTML/CSS (Nu Html Checker)"
         # make web-lint owns the install, the bun/java preflight and both
         # linters, so this job and `make all` run the same commands. lint:html

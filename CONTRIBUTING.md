@@ -34,8 +34,8 @@ Use `--no-sync` for that development session. A normal `uv sync` or `uv run`
 restores the public hash-pinned wheel. No path override is committed.
 
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
-1.4.3) and a JDK 17+ on `PATH`, since `vnu-jar` validates the HTML and CSS
-under `java`. `make web-lint` names whichever is missing.
+1.4.3) and a JDK on `PATH`, since `vnu-jar` validates the HTML and CSS
+under `java`. CI tests Temurin 27. `make web-lint` names whichever is missing.
 
 `make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on
 `PATH`; both ship on the pinned CI runner image, and each target names the one
