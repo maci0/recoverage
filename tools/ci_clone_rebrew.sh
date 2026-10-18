@@ -5,12 +5,9 @@
 # clone-rebrew`, CONTRIBUTING), and without a dialect declared shellcheck
 # reports SC2148 and fails `make shell-lint` on the array and pipefail below.
 #
-# Clone the sibling rebrew path dependency.
-#
-# [tool.uv.sources] in pyproject.toml resolves rebrew from ../rebrew, so a
-# clean clone cannot run `uv sync` without it.  actions/checkout cannot write
-# outside GITHUB_WORKSPACE, so CI calls this instead; `make clone-rebrew`
-# wraps it for a workstation.
+# Optional source checkout for upstream Rebrew development. Normal installs
+# and CI use the hash-pinned public wheel declared in pyproject.toml.
+# This helper never changes which package uv sync installs.
 #
 # REBREW_REF and REBREW_SHA default to the tag this repository was developed
 # against; override either in the environment to pin a different rebrew.
@@ -19,8 +16,8 @@
 # REBREW_FORCE=1 overwrites a destination checkout that has uncommitted work.
 set -euo pipefail
 
-REBREW_REF="${REBREW_REF:-v4.1.0}"
-REBREW_SHA="${REBREW_SHA:-0b9d92e15263186cd2d607d708e427b589a2acae}"
+REBREW_REF="${REBREW_REF:-v5.1.0}"
+REBREW_SHA="${REBREW_SHA:-8954de2e6ecbab6496e2fff4e77501abb5680771}"
 REBREW_URL="${REBREW_URL:-https://github.com/maci0/rebrew.git}"
 dest="${1:-../rebrew}"
 

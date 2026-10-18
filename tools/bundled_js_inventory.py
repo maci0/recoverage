@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import datetime
+import datetime as dt
 import json
 import os
 import re
@@ -282,7 +282,7 @@ def created() -> str:
         # int() accepts: the same refusal as a stamp that is not a number.
         if raw:
             raise InventoryError(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp") from None
-        stamp = int(datetime.datetime.now(tz=datetime.UTC).timestamp())
+        stamp = int(dt.datetime.now(tz=dt.UTC).timestamp())
     if not _MIN_EPOCH <= stamp <= _MAX_EPOCH:
         # `int()` takes any run of digits, so this stamp parsed and then raised
         # out of `fromtimestamp` below as a raw ValueError — past `main`'s
@@ -298,7 +298,7 @@ def created() -> str:
     # field; the `+00:00` it writes is the same offset in the other spelling,
     # which is the one trailing `Z` means and the only change made here.
     # Windows' CRT timestamp conversion rejects otherwise valid calendar dates.
-    moment = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(seconds=stamp)
+    moment = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(seconds=stamp)
     return moment.isoformat().replace("+00:00", "Z")
 
 

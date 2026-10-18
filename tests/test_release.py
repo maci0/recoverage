@@ -322,6 +322,15 @@ class TestDeclaredFloorsAreRecorded:
             for m in (re.fullmatch(r"([\w.-]+)>=([\w.]+)", d) for d in deps)
             if m is not None
         }
+        # Direct GitHub wheels declare an exact version instead of a registry floor.
+        for dependency in deps:
+            direct = re.fullmatch(
+                r"([\w.-]+) @ https://[^ ]+/[^/]+-(\d+\.\d+\.\d+)"
+                r"-py3-none-any\.whl#sha256=[a-f0-9]{64}",
+                dependency,
+            )
+            if direct:
+                declared[direct[1]] = _version_key(direct[2])
         changelog = _changelog()
         # The highest floor the notes ever claim is the one to check.
         claimed: dict[str, tuple[int, ...]] = {}

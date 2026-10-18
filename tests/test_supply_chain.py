@@ -1,8 +1,8 @@
 """Tests for how the tree pins what it depends on.
 
-rebrew is a path dependency, so the checkout that satisfies
-`[tool.uv.sources]` is fetched by a script rather than resolved from a
-registry. Nothing in the package code runs at test time to check that fetch,
+Rebrew is a hash-pinned public wheel. Its source tag and full commit are
+retained in the optional developer clone helper. Nothing in the package code
+runs at test time to check that fetch,
 so these pin the invariants a pin can break without any code changing: two
 mechanisms that disagree about which rebrew is the dependency, a Makefile
 whose pin has drifted from the script CI runs, a runner toolchain version
@@ -89,7 +89,11 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v4.1.0", "REBREW_SHA": "0b9d92e15263186cd2d607d708e427b589a2acae"}
+_PINS = {"REBREW_REF": "v5.1.0", "REBREW_SHA": "8954de2e6ecbab6496e2fff4e77501abb5680771"}
+_REBREW_WHEEL = (
+    "https://github.com/maci0/rebrew/releases/download/v5.1.0/rebrew-5.1.0-py3-none-any.whl"
+)
+_REBREW_HASH = "8356029da54de881326f931170d87db42f43562cf7ad481b8a33dea384574e50"
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 # What _git_lines returns for a tree git cannot answer for. A check that read
@@ -197,30 +201,16 @@ class TestRbrewPin:
             "refuses comes back under the next `git add .`"
         )
 
-    def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
-        """Every installing job materializes the sibling rebrew, one way only.
-
-        A second mechanism (an inline `git clone`, or a step or action
-        carrying its own ref) fetches the same path dependency from a pin
-        nothing else checks, and whichever runs last silently decides which
-        rebrew the suite tested. The script is that single mechanism: it holds
-        the tag and commit, `make clone-rebrew` runs it, and every job reaches
-        it through the `.github/actions/sibling-rebrew` composite action, which
-        exists to be the one place a job may run the script and takes the
-        clone URL but not the ref and sha. The chain is one link long.
-        """
+    def test_ci_installs_the_public_wheel_without_a_sibling(self) -> None:
+        """CI must exercise the same artifact as a normal uv/pip installation."""
         installing = {n: b for n, b in _jobs().items() if "uv sync" in b}
-        assert installing, "no CI job runs uv sync; the check below would pass vacuously"
+        assert installing, "no CI job runs uv sync"
         for name, body in installing.items():
-            assert _SIBLING_ACTION_STEP in body, (
-                f"job {name} never materializes the sibling checkout"
-            )
-            assert "tools/ci_clone_rebrew.sh" not in body, (
-                f"job {name} runs the clone script itself; the action is its only caller"
-            )
-            assert not re.search(r"git clone.*rebrew", body), f"job {name} clones rebrew itself"
+            assert _SIBLING_ACTION_STEP not in body, f"job {name} still needs a sibling"
+            assert "tools/ci_clone_rebrew.sh" not in body, f"job {name} clones upstream"
+            assert not re.search(r"git clone.*rebrew", body), f"job {name} clones upstream"
             for var in _PINS:
-                assert var not in body, f"job {name} carries {var}; the script owns the pin"
+                assert var not in body, f"job {name} carries a separate {var} pin"
 
     def test_the_sibling_action_carries_no_pin(self) -> None:
         """The action is a caller, not a second place to write the pin.
@@ -338,60 +328,34 @@ class TestRbrewPin:
         for var, expected in _PINS.items():
             assert _default(script, var) == expected, f"tools/ci_clone_rebrew.sh: {var} moved"
 
-    def test_the_declared_floor_is_the_version_the_script_clones(self) -> None:
-        """The floor in the dependency metadata, the tag the script clones and
-        the number the Makefile names in its preflight are the same version.
-
-        `[project].dependencies` is what every install of the wheel reads, the
-        script's `REBREW_REF` is what fills the path dependency it resolves to,
-        and `REBREW_FLOOR` is what `make setup` tells a contributor the missing
-        checkout has to be. The tag/commit pair is pinned by `_PINS` above, but
-        the version the floor names was written in three places and nothing
-        compared them: a rebrew release that raised the module this package
-        needs raised the wheel's floor and left the Makefile naming a version
-        whose preflight would then accept a checkout that has no
-        `coverage_toml.py`, or the reverse.
-        """
-        declared = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["project"]["dependencies"]
-        floors = [d.removeprefix("rebrew>=") for d in declared if d.startswith("rebrew>=")]
-        assert len(floors) == 1, f"expected one rebrew floor in the dependencies, got {floors}"
-        floor = floors[0]
-        assert floor == _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_REF").lstrip(
-            "v"
-        ), f"pyproject.toml needs rebrew>={floor}, the script clones a different tag"
-        makefile_floor = _default(_MAKEFILE.read_text(encoding="utf-8"), "REBREW_FLOOR")
-        assert floor == makefile_floor, (
-            f"pyproject.toml declares rebrew>={floor}, the Makefile preflight names "
-            f"{makefile_floor}"
-        )
-
-    def test_the_readme_install_section_carries_the_path_dependency(self) -> None:
-        """The install a reader is told to run is one this tree can actually
-        satisfy.
-
-        `[tool.uv.sources]` resolves rebrew from a sibling checkout, so
-        nothing an index can serve satisfies the wheel's `rebrew` dependency,
-        and `pip install recoverage` stops at resolution. An install section
-        that leads with it sends every reader to a resolver error, and the
-        error names a distribution rather than the sibling checkout that is
-        the actual fix. The section is what the packaged dependency points at,
-        so the two are read together here.
-        """
+    def test_public_artifact_manifest_lock_and_source_pin_agree(self) -> None:
+        """Normal uv and wheel installers use exactly the verified public artifact."""
         manifest = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
-        sources = manifest["tool"]["uv"]["sources"]
-        path_deps = {name for name, spec in sources.items() if "path" in spec}
-        assert path_deps, "no dependency resolves from a path, so the check would pass vacuously"
+        declared = manifest["project"]["dependencies"]
+        requirements = [d for d in declared if d.startswith("rebrew")]
+        assert requirements == [f"rebrew @ {_REBREW_WHEEL}#sha256={_REBREW_HASH}"]
+        sources = manifest["tool"].get("uv", {}).get("sources", {})
+        assert "rebrew" not in sources, "a local uv override replaces the public wheel"
+        lock = tomllib.loads((_ROOT / "uv.lock").read_text(encoding="utf-8"))
+        locked = [p for p in lock["package"] if p["name"] == "rebrew"]
+        assert len(locked) == 1
+        version = _PINS["REBREW_REF"].removeprefix("v")
+        assert locked[0]["version"] == version
+        assert locked[0]["source"] == {"url": _REBREW_WHEEL}
+        assert locked[0]["wheels"] == [{"url": _REBREW_WHEEL, "hash": f"sha256:{_REBREW_HASH}"}]
+        assert _default(_MAKEFILE.read_text(encoding="utf-8"), "REBREW_FLOOR") == version
+        script = _CLONE_SCRIPT.read_text(encoding="utf-8")
+        assert _default(script, "REBREW_REF") == f"v{version}"
+
+    def test_readme_normal_install_needs_no_local_source(self) -> None:
         section = _README.read_text(encoding="utf-8").split("\n## Installation\n", 1)[1]
         section = section.split("\n## ", 1)[0]
-        for name in path_deps:
-            assert name in section, (
-                f"the README install section does not mention {name}, the dependency it "
-                f"resolves from {'/'.join(sources[name]['path'])}"
-            )
-        assert not re.search(r"^\s*(uv run )?pip install recoverage", section, re.MULTILINE), (
-            "the install section offers `pip install recoverage` as a command, which cannot "
-            f"resolve {sorted(path_deps)} while they resolve from a path"
-        )
+        assert "recoverage/releases/download/v" in section
+        assert "hash-pinned Rebrew" in section
+        assert "make clone-rebrew" not in section
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        preflight = makefile.split("ensure-rebrew:", 1)[1].split("\n\n", 1)[0]
+        assert preflight.strip() == "ensure-uv", "normal sync still inspects a local checkout"
 
     def test_pinned_commit_is_a_full_sha(self) -> None:
         """A ref that is not a full object id cannot be checked for a moved tag."""
@@ -441,10 +405,16 @@ class TestRbrewPin:
             ".scratch",
             ".gauntlet",
         }
-        for path in sorted(_ROOT.rglob("*")):
+        for path in sorted(_ROOT / name for name in _tracked_paths()):
             if not path.is_file() or set(path.relative_to(_ROOT).parts) & skipped:
                 continue
-            if path in (_CLONE_SCRIPT, Path(__file__).resolve(), _BUN_LOCK, _ROOT / "uv.lock"):
+            if path in (
+                _CLONE_SCRIPT,
+                Path(__file__).resolve(),
+                _BUN_LOCK,
+                _ROOT / "uv.lock",
+                _MANIFEST,
+            ):
                 continue
             if path.suffix in {".png", ".ico", ".db", ".pyc"}:
                 continue
@@ -733,16 +703,8 @@ class TestEnvironmentInstalls:
             assert "--locked" in flags, f"ci.yml installs without --locked: {flags}"
             assert "--frozen" not in flags, f"ci.yml installs with --frozen: {flags}"
 
-    def test_the_sbom_export_stays_frozen(self) -> None:
-        """`--locked` re-resolves, and `sbom` is the job without a sibling.
-
-        Reading the lock alone is the point of that job: the path dependency
-        `../rebrew` does not exist on the runner that runs it, so the one
-        invocation that has to stay `--frozen` is pinned here rather than
-        left to a reader to work out. The job reaches the export through
-        `make python-sbom`, so the flag lives in the Makefile, and the one
-        `uv export` in the tree is the Makefile's.
-        """
+    def test_the_sbom_export_validates_the_public_lock(self) -> None:
+        """The public dependency resolves without a sibling, so export checks freshness."""
         makefile = _MAKEFILE.read_text(encoding="utf-8")
         exports = [
             " ".join(line.split())
@@ -750,7 +712,7 @@ class TestEnvironmentInstalls:
             if re.match(r"\s*uv export\b", line)
         ]
         assert len(exports) == 1, f"expected one uv export, found {exports}"
-        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+        assert "--locked" in exports[0] and "--frozen" not in exports[0], exports[0]
         exports_in_ci = [
             " ".join(line.split())
             for line in _CI_YML.read_text(encoding="utf-8").splitlines()
@@ -819,6 +781,8 @@ class TestEnvironmentInstalls:
             return re.sub(r"'[^']*'|\"[^\"]*\"", " ", line)
 
         preflight = {"ensure-uv"}
+        if re.search(r"^ensure-rebrew: ensure-uv$", makefile, re.MULTILINE):
+            preflight.add("ensure-rebrew")
         reaches_uv = False
         missing = []
         for match in rule.finditer(makefile):
@@ -859,7 +823,7 @@ class TestEnvironmentInstalls:
             if re.match(r"\s*uv export\b", line)
         ]
         assert len(exports) == 1, f"expected one uv export in the Makefile, found {exports}"
-        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+        assert "--locked" in exports[0] and "--frozen" not in exports[0], exports[0]
         assert "--all-extras" in exports[0] and "--hashes" in exports[0], exports[0]
         assert re.search(r"^python-sbom:", makefile, re.MULTILINE), (
             "the Makefile no longer defines the target that runs the export"
@@ -1052,7 +1016,13 @@ class TestToolchainPins:
         assert claimed, "pyproject.toml claims no 3.x Python classifier"
         matrix = re.search(r"python-version:\s*\[([^\]]+)\]", _CI_YML.read_text(encoding="utf-8"))
         assert matrix, "the test job has no python-version matrix"
-        tested = set(re.findall(r'"([^"]+)"', matrix[1]))
+        test_job = _jobs()["test"]
+        assert "UV_PYTHON: ${{ matrix.python-version }}" in test_job, (
+            "uv would use .python-version instead of the interpreter selected by the matrix"
+        )
+        tested = {
+            ".".join(version.split(".")[:2]) for version in re.findall(r'"([^"]+)"', matrix[1])
+        }
         assert tested == claimed, (
             f"the matrix tests {sorted(tested)}, pyproject.toml claims {sorted(claimed)}"
         )

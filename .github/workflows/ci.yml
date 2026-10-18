@@ -48,24 +48,18 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
-      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin the clone script owns. The composite action is the one
-      # mechanism a job may use: it wraps that script and carries no pin of
-      # its own, `make clone-rebrew` runs the same script for a workstation,
-      # and no job may fetch the sibling any other way.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       # The Makefile owns these commands, so the jobs call the targets rather
       # than restating them: `make all` is the local mirror of the pipeline, and
@@ -105,24 +99,18 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
-      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin the clone script owns. The composite action is the one
-      # mechanism a job may use: it wraps that script and carries no pin of
-      # its own, `make clone-rebrew` runs the same script for a workstation,
-      # and no job may fetch the sibling any other way.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -141,10 +129,10 @@ jobs:
         with:
           path: node_modules
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "27"
       - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop) and HTML/CSS (Nu Html Checker)"
         # make web-lint owns the install, the bun/java preflight and both
         # linters, so this job and `make all` run the same commands. lint:html
@@ -160,6 +148,9 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    env:
+      # The matrix overrides the default .python-version during every uv command.
+      UV_PYTHON: ${{ matrix.python-version }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -167,15 +158,15 @@ jobs:
         os: [ubuntu-24.04]
         # Keep in sync with the Python classifiers in pyproject.toml;
         # tests/test_supply_chain.py fails when they drift apart.
-        python-version: ["3.13", "3.14"]
+        python-version: ["3.13.16", "3.14"]
         # The README claims recoverage "runs independently on any machine",
         # and pip users run it on all three OSes; exercise that claim on at
         # least one non-Linux runner per OS instead of asserting it untested.
         include:
           - os: macos-latest
-            python-version: "3.13"
+            python-version: "3.13.16"
           - os: windows-latest
-            python-version: "3.13"
+            python-version: "3.13.16"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -185,23 +176,17 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin the clone script owns. The composite action is the one
-      # mechanism a job may use: it wraps that script and carries no pin of
-      # its own, `make clone-rebrew` runs the same script for a workstation,
-      # and no job may fetch the sibling any other way.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       - name: Run the suite
         # The same command as `make test`, spelled out rather than delegated:
@@ -239,13 +224,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -270,12 +255,6 @@ jobs:
         with:
           path: node_modules
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
-      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin the clone script owns. The composite action is the one
-      # mechanism a job may use: it wraps that script and carries no pin of
-      # its own, `make clone-rebrew` runs the same script for a workstation,
-      # and no job may fetch the sibling any other way.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       # Nothing else in this workflow builds the artifact, so a wheel missing
       # an asset, a backend that stopped stamping from
@@ -293,22 +272,16 @@ jobs:
           # both MERGE into what they find: the tar below leaves a file that
           # has since been deleted from the tracked tree, and the second build
           # then packages it, so the two builds are compared across different
-          # trees and report a difference that is not one. `ln -s` fails the
-          # same way a step louder, with "File exists", before any build runs.
+          # trees and report a difference that is not one.
           work="$RUNNER_TEMP/rebuild"
           first="$RUNNER_TEMP/first"
-          rm -rf -- "$work" "$first" "$RUNNER_TEMP/rebrew"
+          rm -rf -- "$work" "$first"
           mkdir -p -- "$first" "$work"
           # The second tree carries the tracked files only: dist/ is what the
           # second build produces, and .git would make the copy as large as
           # the checkout. SOURCE_DATE_EPOCH below replaces the one thing the
           # recipe would otherwise read out of .git.
           git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$work"
-          # pyproject.toml resolves rebrew from ../rebrew, and `make build`
-          # ends in a `uv run` that syncs the environment, so the copy needs
-          # the sibling checkout the composite action just made. A symlink is
-          # enough: only the path has to resolve from the copied tree.
-          ln -s "$GITHUB_WORKSPACE/../rebrew" "$RUNNER_TEMP/rebrew"
 
           make build
           # The dashboard bundle is committed and `make build` regenerates it
@@ -353,7 +326,7 @@ jobs:
           # over anything but the tree. LC_ALL/TZ for the first build come from
           # the recipe; the second build overrides them on the command line.
           SOURCE_DATE_EPOCH: "1700000000"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-dist
           path: dist/*
@@ -375,24 +348,18 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
-      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin the clone script owns. The composite action is the one
-      # mechanism a job may use: it wraps that script and carries no pin of
-      # its own, `make clone-rebrew` runs the same script for a workstation,
-      # and no job may fetch the sibling any other way.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       - name: Boot dashboard against sample coverage documents and probe it
         run: make smoke
@@ -420,13 +387,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.12.14"
+          version: "0.13.1"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -446,8 +413,8 @@ jobs:
       # this built from" that a change to the script would leave disagreeing
       # with the artifact a contributor prints locally. That target is the one
       # recipe here with no `ensure-rebrew` and no `uv run`, so it needs neither
-      # the sibling checkout nor a synced environment: --frozen reads uv.lock
-      # alone, which is what lets the job that has no ../rebrew run it.
+      # the sibling checkout nor a synced environment: --locked validates uv.lock
+      # against the public dependency without a sibling checkout.
       - name: Export hashed dependency inventory
         run: make python-sbom > recoverage-python-sbom.txt && test -s recoverage-python-sbom.txt
       # The export above is the Python half of the tree and the whole of what
@@ -489,7 +456,7 @@ jobs:
           python tools/bundled_js_inventory.py --format spdx \
             --output recoverage-browser-spdx.json
           test -s recoverage-browser-spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-python-sbom
           path: recoverage-python-sbom.txt
@@ -498,7 +465,7 @@ jobs:
           # with no artifact attached for anyone to read.
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-browser-sbom
           path: recoverage-browser-sbom.txt
@@ -507,7 +474,7 @@ jobs:
           # records.
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: recoverage-browser-spdx
           path: recoverage-browser-spdx.json

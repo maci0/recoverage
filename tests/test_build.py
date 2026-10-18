@@ -781,21 +781,15 @@ class TestReproducibleBuild:
         assert "bun run build:web" in recipe, "the bundle recipe no longer builds the bundle"
 
     def test_the_two_build_step_clears_what_it_extracts_into(self) -> None:
-        """The second tree is extracted with tar and linked with ln, both of
-        which MERGE into an existing destination: on a self-hosted runner or a
-        retried step, where RUNNER_TEMP survives the run, a file deleted from
-        the tracked tree since the last execution is still there and gets
-        packaged, so the comparison is between two different trees and reports
-        a difference that is not one. `ln -s` fails outright instead. Both
-        need the destination gone first, which is what a build step that runs
-        more than once has to guarantee."""
+        """A repeated build must extract into clean destinations."""
         step = _CI_YML.split("Build the distribution twice and compare", 1)[1]
         step = step.split("\n        env:", 1)[0]
-        assert 'rm -rf -- "$work" "$first" "$RUNNER_TEMP/rebrew"' in step, (
-            "the two-build step extracts and links into whatever RUNNER_TEMP "
+        assert 'rm -rf -- "$work" "$first"' in step, (
+            "the two-build step extracts into whatever RUNNER_TEMP "
             "holds, so a re-run compares two different trees"
         )
         assert 'mkdir -p -- "$first" "$work"' in step, "the cleared trees are not recreated"
+        assert "ln -s" not in step, "the rebuild still substitutes a sibling source checkout"
 
     def test_the_build_recipe_refuses_an_asset_it_did_not_declare(self) -> None:
         """`[tool.setuptools.package-data]` is the glob `assets/*`, so the

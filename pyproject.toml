@@ -45,10 +45,9 @@ dependencies = [
     "brotli>=1.1",
     "click>=8.0",
     "rcssmin>=1.1",
-    # Shared live project accounting, canonical format-2 metadata/bindings,
-    # and explicit portable coverage documents. The sibling path dependency
-    # below and tools/ci_clone_rebrew.sh pin the same supported release.
-    "rebrew>=4.1.0",
+    # Public GitHub artifact: both uv and wheel installers resolve the same
+    # format-3 metadata reader without a local checkout or registry placeholder.
+    "rebrew @ https://github.com/maci0/rebrew/releases/download/v5.1.0/rebrew-5.1.0-py3-none-any.whl#sha256=8356029da54de881326f931170d87db42f43562cf7ad481b8a33dea384574e50",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",
@@ -117,11 +116,6 @@ recoverage = ["assets/*", "py.typed"]
 
 [tool.uv]
 package = true
-
-[tool.uv.sources]
-# Sibling-checkout path dep: uv resolves it relative to this pyproject.toml,
-# keeping the manifest free of machine-specific absolute paths.
-rebrew = { path = "../rebrew", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

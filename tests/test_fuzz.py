@@ -4495,7 +4495,7 @@ def _config_seeds() -> list[bytes]:
     """The well-formed project config plus the shapes worth mutating."""
     whole = (
         '[project]\ndb_dir = "db"\ndefault_target = "demo"\n\n'
-        '[targets.demo]\nbinary = "bin/game.dll"\nreversed_dir = "src/demo"\nmarker = "DEMO"\n'
+        '[targets.demo]\nbinary = "bin/game.dll"\nreversed_dir = "src/demo"\nmodule = "DEMO"\n'
     )
     hostile = (
         f'[project]\ndb_dir = "db"\n\n[targets."{_HOSTILE_TARGET_ID}"]\n'
@@ -4528,7 +4528,7 @@ _CONFIG_TOKENS = (
     b"binary = 5\n",
     b"binary = []\n",
     b"reversed_dir = 5\n",
-    b"marker = 5\n",
+    b"module = 5\n",
     b"default_target = 5\n",
     b'[targets.""]\n',
     b'[targets."<script>"]\n',

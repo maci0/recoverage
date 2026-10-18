@@ -5,86 +5,37 @@ edit-test loop, and the one command that reproduces CI before you push.
 
 ## Bootstrap (clean clone)
 
-Needs [uv](https://docs.astral.sh/uv/) (0.12.14 or newer; the Makefile warns
-below that) and the
-sibling [rebrew](https://github.com/maci0/rebrew) checkout at `../rebrew`.
-The interpreter is pinned in `.python-version` (3.13, the version CI's lint,
-web-lint and smoke jobs run); uv downloads it if the host has no 3.13, and
-`uv run --python 3.14 …` selects the other version the test matrix covers.
+Needs [uv](https://docs.astral.sh/uv/) 0.13.1 or newer. The interpreter is
+pinned in `.python-version` (3.13.16); uv downloads it if necessary.
 
 ```bash
-make clone-rebrew   # rebrew at the pin in tools/ci_clone_rebrew.sh into ../rebrew
 make setup          # uv sync --locked --extra dev
 ```
 
-`REBREW_REF` / `REBREW_SHA` in `tools/ci_clone_rebrew.sh` are the only copy of
-the rebrew pin: `make clone-rebrew` and every CI job read them from there, so a
-tag that moves, or a pin that disagrees with `uv.lock`, fails the clone rather
-than silently changing the path dependency.
-
-The script removes `../rebrew` before cloning. When that directory is a rebrew
-checkout with uncommitted changes it stops instead of discarding the work; run
-`REBREW_FORCE=1 make clone-rebrew` to overwrite it knowingly.
-
-Windows is a supported host and part of the test matrix, and `make` is not part
-of a stock Windows toolchain, so the two `make` lines above are a Linux and
-macOS bootstrap only. Everything after the clone is the same `uv` command on
-both; the clone goes through the same script, under the Git-for-Windows bash
-that `git` already installed:
+Normal installs and CI resolve the public Rebrew wheel declared with its SHA-256
+in `pyproject.toml`; they never inspect or replace a sibling source checkout.
+On Windows, where Make is not preinstalled, run:
 
 ```powershell
-& "C:\Program Files\Git\bin\bash.exe" tools/ci_clone_rebrew.sh ../rebrew
 uv sync --locked --extra dev
-uv run recoverage serve
-```
-
-The suite is spelled out for the same reason the Windows CI job spells its
-pytest command out rather than calling `make test`:
-
-```powershell
 uv run --locked --extra dev python -m pytest tests/ --ignore=tests/test_playwright.py
 ```
 
-The sibling checkout is not optional. `pyproject.toml` pins rebrew to
-`path = "../rebrew"`, and recoverage imports `rebrew.workspace` for
-`rebrew-project.toml` / coverage-directory resolution plus rebrew's coverage
-reader and its catalog/build-db for regen, so `uv sync` cannot resolve without
-it. Without
-`make clone-rebrew` a bare `uv sync` fails with `Distribution not found at
-file://…/rebrew`; `make setup` names the missing checkout instead.
-
-In a git worktree the checkout is not beside the tree, so `../rebrew` resolves
-to something that is not rebrew. Link the sibling path at a rebrew checkout
-from the worktree root:
+For explicit upstream development, `make clone-rebrew` uses the guarded
+`tools/ci_clone_rebrew.sh` tag/commit pin. The helper refuses to overwrite
+uncommitted work. Install a chosen checkout only when you intend to test it:
 
 ```bash
-ln -s /path/to/rebrew ../rebrew   # macOS and Linux
+uv pip install --editable ../rebrew
+uv run --no-sync recoverage serve
 ```
 
-```powershell
-New-Item -ItemType Junction -Path ..\rebrew -Target C:\path\to\rebrew
-```
-
-A junction, not `New-Item -ItemType SymbolicLink`: creating a Windows symlink
-needs either elevation or Developer Mode, so the symlink spelling fails on a
-default shell and the worktree bootstrap stops there. A junction needs
-neither, and uv resolves `../rebrew` through it the same way.
-
-`make setup REBREW_DIR=<path>` only moves the preflight check; uv still reads
-the path out of `pyproject.toml`, so a check that passes there and a sync that
-resolves elsewhere would be worse than none.
-
-Link `../rebrew`, not `./rebrew`. An in-tree `rebrew` symlink is the natural
-thing to reach for in a worktree, and it does nothing: `[tool.uv.sources]`
-resolves the dependency from `../rebrew`, so `uv sync` still answers
-`Distribution not found at file://…/rebrew` with the link sitting right there,
-looking like a solved bootstrap. `.gitignore` ignores an in-tree `/rebrew` for
-the same reason — it is a symlink holding one machine's absolute path, dangling
-in CI and in every clone but the one that made it.
+Use `--no-sync` for that development session. A normal `uv sync` or `uv run`
+restores the public hash-pinned wheel. No path override is committed.
 
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
-1.4.2) and a JDK 17+ on `PATH`, since `vnu-jar` validates the HTML and CSS
-under `java`. `make web-lint` names whichever is missing.
+1.4.3) and a JDK on `PATH`, since `vnu-jar` validates the HTML and CSS
+under `java`. CI tests Temurin 27. `make web-lint` names whichever is missing.
 
 `make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on
 `PATH`; both ship on the pinned CI runner image, and each target names the one
@@ -220,7 +171,7 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 | `make browser-sbom` | sbom | `python tools/bundled_js_inventory.py` |
-| `make python-sbom` | sbom | `uv export --frozen --all-extras --hashes`, then the rebrew tag and commit read from `tools/ci_clone_rebrew.sh` |
+| `make python-sbom` | sbom | `uv export --locked --all-extras --hashes`, then the rebrew tag and commit read from `tools/ci_clone_rebrew.sh` |
 | `make license-inventory` | lint | `python tools/license_inventory.py` |
 
 The `sbom` job is the only one that reads a lockfile without installing from
@@ -255,17 +206,11 @@ the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` 
 is not: it is not preinstalled on Windows or in a bare Git for Windows shell,
 so run the command from the table directly there.
 
-The same applies to `make clone-rebrew`: on a shell without `make`, run
-`bash tools/ci_clone_rebrew.sh ../rebrew` instead. That is the whole of it, and
-it is what CI runs through `.github/actions/sibling-rebrew`, so do not
-reassemble the clone by hand from its two `git` moves. The script carries the
-moves that matter (read its header) and two of them are load-bearing: it
-removes the destination first, so it refuses to run against a checkout with
-uncommitted changes unless `REBREW_FORCE=1`, and it fails when the tag it
-cloned no longer resolves to the commit the pin names. A hand-run
-`git clone --branch <tag>` gets neither. The tag, the commit, and the clone URL
-are written once, in that script; read them there rather than copying them
-here.
+`make clone-rebrew` is optional upstream development tooling. The script owns
+the source tag, full commit and clone URL, verifies the tag resolves to that
+commit, and refuses to overwrite uncommitted work. On Windows it can be run as
+`bash tools/ci_clone_rebrew.sh ../rebrew` from Git for Windows. It does not
+change the dependency used by `uv sync`.
 
 ## Adding to the tree
 
@@ -300,16 +245,10 @@ here.
   `tools/oxlint/anti-slop/` means replacing the directory from upstream and
   running `make vendor-manifest`, then `make web-lint`.
 
-Three targets need no sibling `../rebrew` and no synced environment, because the
-tools they run import nothing outside the stdlib and read no lockfile:
-`make python-sbom`, `make browser-sbom` (and `-spdx`), and `make vendor-manifest`.
-They reach their tools through `uv run --no-project`, which resolves nothing, so
-they work on the checkout the `sbom` job runs on and on the Windows bootstrap,
-where there is no `../rebrew` beside the tree. `make web-lint`, the other half of
-that re-vendor, does need the sibling: its `lint:html` pass imports
-`recoverage.server`. So `make vendor-manifest` works before `make setup` and
-`make web-lint` does not, and a target that adds an import of `rebrew` or
-`recoverage` to one of those three tools moves it back to `$(UV_RUN)` in the same
-change (`tests/test_supply_chain.py` holds the split).
+The inventory targets `make python-sbom`, `make browser-sbom` (and `-spdx`),
+and `make vendor-manifest` need no synced environment. Their stdlib-only tools
+run through `uv run --no-project`; `python-sbom` validates and exports the lock
+with `uv export --locked`. `make web-lint` also imports the application and
+therefore uses the normal public dependency environment.
 
 Conventions, architecture, and the design rules are in `AGENTS.md`.

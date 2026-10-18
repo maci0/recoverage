@@ -1,4 +1,4 @@
-import type { JSX } from "preact";
+import type { TargetedKeyboardEvent } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/compat";
 
 import type { Section } from "@/api";
@@ -529,7 +529,7 @@ export function CoverageMap({
     paint();
   };
 
-  const onKeyDown = (event: JSX.TargetedKeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.ctrlKey || event.metaKey || event.altKey) {
       return;
     }

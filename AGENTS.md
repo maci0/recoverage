@@ -172,8 +172,7 @@ tree and that record disagree. Re-vendor by replacing the directory, running
 CI runs; `make all` is the local mirror of the whole pipeline.
 
 ```bash
-# Bootstrap (clean clone; rebrew is a ../rebrew path dependency)
-make clone-rebrew           # clone the pinned rebrew into ../rebrew (pin: tools/ci_clone_rebrew.sh)
+# Bootstrap (clean clone; Rebrew is a hash-pinned public wheel)
 make setup                  # uv sync --locked --extra dev
 make build                  # wheel + sdist into dist/, reproducibly
 uv sync --locked --extra dev --extra playwright   # browser tests: playwright, pytest-playwright
@@ -187,8 +186,7 @@ uv sync --locked --extra dev --extra playwright   # browser tests: playwright, p
 # committed lock even when pyproject.toml no longer matches it, so a dependency
 # edit that skipped `uv lock` would test a tree the manifest does not
 # describe. `tests/test_supply_chain.py` pins the flag in the Makefile and in
-# every ci.yml job, and `uv export --frozen` is the one exception: the `sbom`
-# job has no sibling ../rebrew to resolve the path dependency against.
+# every ci.yml job. `uv export --locked` validates the same public dependency.
 make test                   # uv run --locked --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # the seeded fuzz campaigns (SEED=, ITERATIONS= widen one)
@@ -252,13 +250,12 @@ uv sync --locked --extra dev --extra playwright && uv run playwright install chr
 uv run --locked --extra dev python -m pytest tests/test_playwright.py
 ```
 
-`tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
-rebrew to the tag and commit in the script's defaults, and fails when the tag
-does not resolve to that commit. It refuses to remove a destination checkout
-that has uncommitted changes unless `REBREW_FORCE=1` is set. The tag and commit
-are written in that script only: the Makefile carries no pin of its own (a
-command-line `make clone-rebrew REBREW_REF=...` reaches the script through the
-environment).
+Normal syncs install the public hash-pinned Rebrew wheel from
+`pyproject.toml`. `tools/ci_clone_rebrew.sh` and `make clone-rebrew` are optional
+upstream development tooling: the helper verifies the source tag and commit
+and refuses to overwrite uncommitted work. To test a chosen local checkout,
+use `uv pip install --editable ../rebrew` followed by `uv run --no-sync ...`.
+A normal sync restores the public wheel; never commit an editable path override.
 
 ## CI
 
@@ -267,39 +264,12 @@ against it, with a `concurrency` group that cancels superseded PR-branch runs
 but never a `main` run, and a per-job `timeout-minutes` so a wedged server
 test fails the job instead of holding a runner for six hours.
 
-`rebrew` is an editable path dependency at `../rebrew` (see
-`[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --locked --extra dev` first uses the `sibling-rebrew` composite action
-(`.github/actions/sibling-rebrew`), the one place a job may run
-`tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"`. It is the same script
-`make clone-rebrew` wraps, and the only mechanism that fetches the sibling: a
-second one (an inline `git clone`, or a job or action carrying its own ref)
-would decide from an unchecked pin which rebrew the suite tested. The action
-exists to hold that rule in one place, because every job needs the step and a
-job body cannot name a sibling path, and it takes the clone URL as its only
-input: a ref or sha input would be a second place to write the pin. That
-input's default is empty, because the URL is a copy of a value the script
-already owns and a moved repository would leave the two disagreeing; the
-script's `REBREW_URL` default supplies it. The action also restores the
-destination from an `actions/cache` entry keyed on
-`hashFiles('tools/ci_clone_rebrew.sh')`, so every job that runs it
-(`lint`, `web-lint`, `test`, `build` and `smoke`; the `test` matrix runs one
-per OS) shares a clone instead of each fetching the same commit, and a pin
-bump misses the key. There is no `restore-keys` fallback: an older rebrew
-that still resolves is the failure the tag-and-commit check exists to catch. A restored
-tree is therefore not trusted on the cache's word; the script keeps a
-destination whose `HEAD` is `REBREW_SHA` and whose tree is clean, and clones
-over anything else, which is also what makes a second `make clone-rebrew` a
-no-op on a tree the first one fetched. The
-script's `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails
-unless the tag still resolves to the commit, so a moved tag cannot change the
-dependency silently. Those defaults must keep matching `uv.lock` (checked by
-`tests/test_supply_chain.py`, which also asserts that no job or the action
-carries a pin of its own, and that no second local action appears): when
-rebrew's dependencies change, re-lock in a tree with the sibling present and
-bump the script alone. The `sbom` job
-deliberately has no such step, because `uv export --frozen` reads the lock
-alone.
+Every job uses the same public wheel URL and SHA-256 declared in
+`pyproject.toml` and recorded by `uv.lock`; no CI job needs a sibling checkout.
+The optional clone helper retains the corresponding source tag/full commit for
+upstream development and the source provenance appended to the Python SBOM.
+`tests/test_supply_chain.py` checks the wheel URL/hash, lock, source tag/commit,
+and the absence of default path or editable dependencies.
 
 The `sbom` job carries the second half of the inventory as well.
 `uv export` reads `uv.lock`, which knows nothing about the browser bundle, and
@@ -333,12 +303,12 @@ document to the fields an SPDX reader requires, the versions `bun.lock`
 resolved, the digests it pinned, the licenses `NOTICE` credits, and the
 reproducible stamp.
 
-The interpreter is pinned in `.python-version` (3.13), which is what uv builds
+The interpreter is pinned in `.python-version` (3.13.16), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their
 `setup-python` steps take `python-version-file: .python-version`, and `bun`
 comes from `package.json`'s `packageManager` through `bun-version-file`. No
 job restates either version; `tests/test_supply_chain.py` fails if a literal
-comes back. The test matrix adds 3.14, and its `include` entries name 3.13
+comes back. The test matrix adds 3.14, and its `include` entries name 3.13.16
 because make is not part of the Windows runner's toolchain, so that job spells
 out the pytest command instead of calling `make test`.
 
@@ -349,8 +319,7 @@ target, so two runs of one commit could execute different code. Dependabot
 rewrites the ref and leaves the comment, so it is what makes a bump reviewable.
 Two bots update this tree and each ecosystem has exactly one of them:
 `renovate.json` reads `pyproject.toml` and `bun.lock` (Dependabot aborts on
-both, the `bun.lock` with no `package-lock.json` beside it and the
-`[tool.uv.sources]` sibling path), and `.github/dependabot.yml` owns the
+both; `bun.lock` has no `package-lock.json` beside it), and `.github/dependabot.yml` owns the
 actions. `tests/test_supply_chain.py` (`TestUpdateBots`) holds the split from
 both sides, because the overlap costs two PRs against one pin and whichever
 merges first makes the other stale.
@@ -437,11 +406,10 @@ The release policy is not written down anywhere else, so it is stated here and
   spelling, so it is renamed with a leading underscore rather than recorded.
 - The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
   both land together, and neither is re-cut.
-- `rebrew` is a hard runtime dependency and is not on the package index, so
-  recoverage must not be published first: the wheel would fail to resolve for
-  every installer, and it would leave the `rebrew` name unclaimed on the index,
-  where the next upload of that name installs into anyone resolving the wheel
-  as a dependency. Publish rebrew, confirm it resolves, then release.
+- `rebrew` is a hard runtime dependency pinned to a public GitHub wheel with
+  its SHA-256 in Requires-Dist. Publish and verify that artifact before
+  Recoverage. Release through GitHub assets; a PyPI publisher must first
+  replace direct dependencies with resolvable registry requirements.
 
 ## API Endpoints
 
@@ -626,12 +594,12 @@ simpler and strictly wider.
 
 ## Dependencies
 
-Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
+Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=4.1.0` (sibling path dep pinned in `[tool.uv.sources]`; the pinned
-  release, which ships `rebrew.metadata.bindings`, `rebrew.metadata.functions`, `rebrew coverage export --output snapshots/` and `rebrew.metadata.functions.stored_file_matches`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
+- Rebrew 5.1.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
+  live accounting, format-3 function metadata, source provenance and portable exports
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)
@@ -652,15 +620,9 @@ package PARTIALLY typed (stubs only), which this one is not.
 manifest, because nothing at runtime reads it and a dropped marker is invisible
 until someone else's mypy run goes quiet.
 
-`rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
-resolves every coverage-directory lookup through `rebrew.workspace`, so the path source
-in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is
-a relative `../rebrew`, which only holds in a sibling checkout. `make clone-rebrew`
-(populated from `tools/ci_clone_rebrew.sh`, the same script every CI job runs
-before `uv sync`) creates it. A git worktree sits elsewhere, so give it the
-sibling path itself: symlink `../rebrew` to a rebrew checkout, or point
-`[tool.uv.sources]` at one. `make setup REBREW_DIR=<path>` only moves the
-Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
+`rebrew` is a runtime import. Both normal uv syncs and the published wheel
+resolve its hash-pinned public artifact. A sibling checkout is optional for
+explicit upstream development only; it is never the default package source.
 
 ## Code Style
 
@@ -693,9 +655,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   fails on collection, in a published artifact. The second because
   `uv build` writes into `dist/` without clearing it: a wheel left by the
   previous version sits beside the new one and both get published. `make build`
-  also depends on `ensure-rebrew`, because its last step is a `uv run` that
-  syncs the environment, and that environment cannot resolve the rebrew path
-  dependency without the sibling checkout.
+  also depends on `ensure-rebrew`, a compatibility alias for the uv preflight,
+  because its last step syncs the public dependency environment.
 
   The `build` job in `.github/workflows/ci.yml` is the only CI job that
   produces the artifact, it `needs: test` so a red suite never attaches a

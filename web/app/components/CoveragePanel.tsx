@@ -302,7 +302,7 @@ function FunctionMeta({
       </MetaItem>
       <MetaItem label="Module">{filled(fn.module) ?? MSG.NA}</MetaItem>
       <MetaItem label="Compiler">{filled(fn.cflags) ?? MSG.NA}</MetaItem>
-      <MetaItem label="Marker">{filled(fn.markerType) ?? MSG.NA}</MetaItem>
+      <MetaItem label="Kind">{filled(fn.markerType) ?? MSG.NA}</MetaItem>
       {blocker === null ? null : (
         <MetaItem label="Blocker" fullWidth>
           <span className="meta-value">{blocker}</span>

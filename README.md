@@ -66,31 +66,30 @@ glance without loading the full SPA.
 
 ## Installation
 
-> [!IMPORTANT]
-> The wheel declares `rebrew>=4.1.0` as a hard runtime dependency, and rebrew
-> is not on the package index yet, so `pip install recoverage` stops at
-> resolution with "No matching distribution found for rebrew>=4.1.0". The
-> commands below are the install that works today: recoverage resolves rebrew
-> from a sibling checkout, so the tree must sit beside one. `git clone`
-> recoverage on its own, or any git worktree of it, leaves `uv sync` failing
-> with `Distribution not found at file:///.../rebrew`. This section becomes
-> `pip install recoverage` when rebrew is published.
+Install the published GitHub wheel into a virtual environment. Its dependency
+metadata fetches the exact hash-pinned Rebrew 5 wheel automatically; no local
+Rebrew checkout is required.
 
 ```bash
-make clone-rebrew   # the sibling rebrew into ../rebrew, at the pin in tools/ci_clone_rebrew.sh
+uv venv --python 3.13
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.2.0/recoverage-8.2.0-py3-none-any.whl"
+.venv/bin/recoverage serve
+```
+
+On Windows, launch `.venv\Scripts\recoverage.exe serve` instead. Run the
+server from your Rebrew project directory to view its canonical coverage.
+
+For contributors, clone this repository and run:
+
+```bash
 make setup          # uv sync --locked --extra dev
 make test           # or: make test-one T=tests/test_api.py
 uv run recoverage serve
 ```
 
-`make` is not part of a stock Windows toolchain, and Windows is a supported
-host, so the two lines there are the Linux and macOS bootstrap. On Windows the
-clone runs under the Git-for-Windows bash and the rest is the same `uv`; see
-the bootstrap section of `CONTRIBUTING.md` for the PowerShell spelling.
-
-CONTRIBUTING.md covers the rest of the contributor bootstrap, and
-`[tool.uv.sources]` in `pyproject.toml` points the dependency at a rebrew you
-already have.
+On Windows, use `uv sync --locked --extra dev` and the pytest command from
+[CONTRIBUTING.md](https://github.com/maci0/recoverage/blob/main/CONTRIBUTING.md). That guide also covers opt-in editable
+Rebrew development; a normal sync restores the public dependency.
 
 ### Optional runtime extras
 
@@ -832,7 +831,7 @@ recoverage/
 │   ├── lint_html.py          # Nu Html Checker over the static and served assets
 │   ├── smoke.py              # End-to-end server smoke run
 │   ├── _serve_harness.py     # Shared boot-and-probe harness for the two above
-│   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
+│   ├── ci_clone_rebrew.sh    # Optional guarded upstream source checkout
 │   ├── normalize_sdist.py     # Pins the sdist's mtimes/order/header for a reproducible build
 │   ├── flatten_rikalabs_strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   ├── vendor_manifest.py    # Inventories the vendored anti-slop tree file by file
@@ -913,19 +912,18 @@ check.
 | Job | Runner | What it enforces |
 |-----|--------|------------------|
 | `lint` | ubuntu, Python 3.13 | `ruff format --check`, `ruff check` and `mypy` (strict) over `src/`, `tools/`, plus `ruff check` over `tests/`, then `shellcheck` and `yamllint` |
-| `web-lint` | ubuntu, Python 3.13, bun 1.4.2, temurin 17 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, the Nu Html Checker over every static and served HTML/CSS asset, then `tsc --noEmit` over the strict `web/tsconfig.json` |
+| `web-lint` | ubuntu, Python 3.13, bun 1.4.3, temurin 27 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, the Nu Html Checker over every static and served HTML/CSS asset, then `tsc --noEmit` over the strict `web/tsconfig.json` |
 | `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
 | `build` | ubuntu, Python 3.13 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
 | `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against synthetic coverage documents and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt document to prove it reports `degraded` instead of healthy |
-| `sbom` | ubuntu | Three build artifacts: `make python-sbom` (`uv export --frozen --all-extras --hashes`) for the exact resolved Python tree behind a given build plus the rebrew tag and commit the path dependency was pinned at, and `make browser-sbom` for the npm packages `make web-build` compiles into the shipped browser assets, each with the version and tarball digest `bun.lock` pinned, plus the same browser half as an SPDX 2.3 document (`recoverage-browser-spdx`) a vulnerability scanner ingests, which carries the resolved versions, the digests and the grants `NOTICE` credits. The `lint` job runs `make license-inventory`, which reads the licenses off the resolved tree's own metadata and refuses anything that is not permissive |
+| `sbom` | ubuntu | Three build artifacts: `make python-sbom` (`uv export --locked --all-extras --hashes`) for the exact resolved Python tree behind a given build plus the Rebrew public artifact’s source tag and commit, and `make browser-sbom` for the npm packages `make web-build` compiles into the shipped browser assets, each with the version and tarball digest `bun.lock` pinned, plus the same browser half as an SPDX 2.3 document (`recoverage-browser-spdx`) a vulnerability scanner ingests, which carries the resolved versions, the digests and the grants `NOTICE` credits. The `lint` job runs `make license-inventory`, which reads the licenses off the resolved tree's own metadata and refuses anything that is not permissive |
 
 Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs
 tools through `uv run --locked`. `--locked` never rewrites `uv.lock` and also
 refuses to install one that no longer matches `pyproject.toml`, so a dependency
 edit that skipped `uv lock` fails the run instead of testing a tree the manifest
-does not describe. `sbom` skips the sync, and its one `uv export --frozen` stays
-frozen, because it is the job with no sibling `../rebrew` to resolve and reads
-the lock alone. Its browser half needs no environment at all: the wheel ships
+does not describe. `sbom` skips installation and exports the validated lock
+with `uv export --locked`. Its browser half needs no environment at all: the wheel ships
 `src/recoverage/assets/`, which is compiled from six npm devDependencies, and
 `uv.lock` cannot see them. Playwright and the
 `capstone`/`pygments` extras are never installed, so the
@@ -933,17 +931,11 @@ matrix is the same set on every runner.
 
 ### The sibling rebrew checkout
 
-`uv sync` resolves rebrew from `../rebrew`, which no GitHub runner has, so
-each job that installs the environment first runs
-`tools/ci_clone_rebrew.sh` (the same script `make clone-rebrew` wraps): it
-clones the tag in `REBREW_REF` into the workspace parent and fails unless the
-tag still resolves to the commit in `REBREW_SHA`, so a moved tag cannot
-silently change the path dependency. Those defaults are the one place the pin
-lives, and `tests/test_supply_chain.py` fails when a job
-grows a second way to fetch the sibling. The commit has to keep
-matching `uv.lock`. When rebrew's own dependencies change, `uv sync --locked`
-fails with a lock mismatch, and the fix is to re-lock in a tree laid out with
-the sibling and bump `REBREW_REF`/`REBREW_SHA` in the script.
+A sibling checkout is optional for upstream development. Normal installs and
+CI use the public hash-pinned wheel. `tools/ci_clone_rebrew.sh`, wrapped by
+`make clone-rebrew`, verifies its source tag/full commit and refuses to overwrite
+uncommitted work. See [the contributor setup](https://github.com/maci0/recoverage/blob/main/CONTRIBUTING.md) for explicitly
+installing an editable checkout and keeping that development session unsynced.
 
 ---
 

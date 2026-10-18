@@ -1057,7 +1057,7 @@ export function App() {
                 </span>
                 <input
                   id="search-input"
-                  type="search"
+                  type="text"
                   className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover data-filled:pe-32"
                   // With a term typed, `data-filled` widens the end padding so
                   // the text stays clear of the count and Clear drawn there.
@@ -1067,7 +1067,7 @@ export function App() {
                   // The editable-combobox pattern (ARIA 1.2): the field owns the
                   // list, the arrows walk it, and the row the reader is on is
                   // named by `aria-activedescendant` rather than by focus. A
-                  // plain `type="search"` announced nothing about the list at
+                  // plain text field announced nothing about the list at
                   // all, so a screen-reader user had no way to know matches
                   // existed or how many (WCAG 4.1.2).
                   role="combobox"

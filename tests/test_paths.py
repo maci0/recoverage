@@ -55,7 +55,7 @@ def _live_project(root: Path, *, bad: bool = False) -> None:
     (root / "rebrew-project.toml").write_text(
         '[project]\nname="live"\ndefault_target="good"\nshared_dir=""\n'
         '[compiler]\nprofile="msvc-6.0"\nincludes=""\nlibs=""\n'
-        '[targets.good]\nbinary="game.exe"\nreversed_dir="src"\nmarker="GOOD"\n'
+        '[targets.good]\nbinary="game.exe"\nreversed_dir="src"\nmodule="GOOD"\n'
         'format="pe"\n' + ('[targets.bad]\nbinary="bad.exe"\narch="invalid-arch"\n' if bad else "")
     )
     (root / "src").mkdir()

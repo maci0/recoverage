@@ -3,6 +3,26 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [8.2.0] - 2026-10-18
+
+### Changed
+
+- Install the hash-pinned public Rebrew 5.1.0 wheel for format-3 function
+  metadata and declaration provenance. Normal installs and CI no longer require
+  a sibling source checkout; editable upstream development is opt-in.
+- Refresh Python dependencies and frontend tools, including TypeScript 7,
+  Preact 11, uv 0.13.1 and the source-map-js security fix. The custom search
+  combobox uses the text-input role contract. Live-project test fixtures use
+  Rebrew's current `module` configuration key.
+
+### Fixed
+
+- Clicking a search result opens its block detail instead of closing the list
+  before the selection reaches the map.
+- Function details label the identity classification as Kind.
+
 ## [8.1.2] - 2026-10-16
 
 ### Fixed
@@ -34,8 +54,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   body bytes cannot be interpreted as a subsequent HTTP request.
 - Source roots resolving to the project directory itself are refused, including
   `.` and symlinks back to the root, so source routes cannot expose project secrets.
-
-## [Unreleased]
 
 ## [8.1.1] - 2026-10-15
 
