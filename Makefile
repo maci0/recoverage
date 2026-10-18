@@ -47,16 +47,7 @@ UV_SYNC_FLAGS ?= --locked --extra dev
 # still mean the same thing.
 UV_RUN := uv run --locked --extra dev
 
-# Every recipe that runs a STDLIB-ONLY tool: one that imports nothing outside
-# the interpreter, so it needs neither the project environment nor the sibling
-# rebrew checkout `[tool.uv.sources]` pins. `--no-project` is what makes that
-# true of `uv run` rather than of the recipe's argument: without it uv resolves
-# the project environment first, and the lock carries the rebrew path
-# dependency, so a checkout with no ../rebrew died with "Distribution not
-# found at file://…/rebrew" from inside a script that never imports rebrew.
-# The interpreter still comes from the same pin (.python-version) a synced
-# recipe gets. No --frozen: uv warns that it has no effect beside
-# --no-project, and --no-project already resolves nothing.
+# Stdlib-only inventory tools need no project environment or dependency sync.
 UV_STDLIB := uv run --no-project
 PYTHON := python
 
@@ -80,7 +71,7 @@ export PYTHONHASHSEED := $(PYTHON_HASH_SEED)
 # installs the same version: setup-uv has no version-file input, so ci.yml
 # carries the literal and tests/test_supply_chain.py fails when the two
 # disagree.  Bump both together.
-UV_VERSION ?= 0.12.14
+UV_VERSION ?= 0.13.1
 
 # The interpreter pin, read from the file that owns it rather than restated
 # here, so `make help` cannot name a version .python-version no longer has.
@@ -94,9 +85,8 @@ PYTHON_VERSION := $(shell cat .python-version)
 # `uv sync --locked` fails on the lock check.
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
-# The floor in pyproject.toml [project].dependencies; rebrew below it has no
-# rebrew.coverage_project, which owns live accounting and canonical history.
-REBREW_FLOOR ?= 4.1.0
+# Required Rebrew metadata reader version, pinned by the public artifact URL.
+REBREW_FLOOR ?= 5.0.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and
@@ -119,7 +109,7 @@ help:
 		'Contributor targets:' \
 		'  make setup              # uv sync (locked, dev extra): the one bootstrap command' \
 		'  make build              # build the wheel + sdist reproducibly into dist/' \
-		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
+		'  make clone-rebrew       # optional upstream source checkout into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
 		'                           # pytest options go in FLAGS="-k name", never bare on' \
@@ -151,8 +141,8 @@ help:
 		'' \
 		'Bootstrap (clean clone):' \
 		'  1. Install uv $(UV_VERSION)+ (https://docs.astral.sh/uv/); Python $(PYTHON_VERSION) is pinned in .python-version' \
-		'  2. make clone-rebrew    # ../rebrew must exist: pyproject.toml [tool.uv.sources]' \
-		'  3. make setup && make test-one T=tests/test_api.py' \
+		'  2. make setup           # installs the public hash-pinned Rebrew wheel' \
+		'  3. make test-one T=tests/test_api.py' \
 		'  Before a PR: make all' \
 		'' \
 		'Web lint additionally needs bun and a JDK on PATH (vnu-jar runs under java).'
@@ -167,38 +157,9 @@ ensure-uv:
 	  exit 1; \
 	fi
 
-# The sibling rebrew checkout is a hard path dependency, not an optional one:
-# recoverage imports rebrew.workspace for db path resolution and rebrew's
-# catalog/build-db for regen.  Name the missing checkout before uv reports it
-# as "Distribution not found at file://…/rebrew".
-#
-# Every target that reaches uv depends on this, not only the ones whose tool
-# imports rebrew: `uv run` and `uv sync` both resolve uv.lock, and the lock
-# carries the path dependency, so `make lint` on a clone with no sibling
-# checkout dies in uv before ruff ever starts.  The tool it would have run is
-# beside the point: the answer the contributor gets names neither the missing
-# checkout nor the command that fetches it.
+# Compatibility target for recipes that need the public dependency environment.
+# uv resolves the hash-pinned wheel; a sibling checkout is never inspected.
 ensure-rebrew: ensure-uv
-	@$(SET_STRICT) \
-	if [ ! -e "$(REBREW_DIR)/pyproject.toml" ]; then \
-	  echo "ERROR: sibling rebrew checkout missing at $(REBREW_DIR)"; \
-	  echo "pyproject.toml [tool.uv.sources] pins rebrew to path = \"../rebrew\", so 'uv sync'"; \
-	  echo "cannot resolve the environment without it (imports rebrew.workspace and regen)."; \
-	  echo "Run 'make clone-rebrew'; it checks out the tag/commit pinned in"; \
-	  echo "tools/ci_clone_rebrew.sh (REBREW_REF / REBREW_SHA), the same pin CI uses."; \
-	  exit 1; \
-	fi; \
-	ver=$$(awk -F'"' '/^__version__ = "/{print $$2; exit}' "$(REBREW_DIR)/src/rebrew/__init__.py"); \
-	if [ -f "$(REBREW_DIR)/src/rebrew/metadata/bindings.py" ]; then \
-	  :; \
-	else \
-	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver and ships no src/rebrew/metadata/bindings.py,"; \
-	  echo "which is what $(REBREW_FLOOR) is the floor for: the server imports source bindings"; \
-	  echo "and the function store from rebrew.metadata."; \
-	  echo "Re-run 'make clone-rebrew' to check out the pinned rebrew, then 'make setup'."; \
-	  echo "To develop against a different one: make clone-rebrew REBREW_REF=<tag> REBREW_SHA=<commit>"; \
-	  exit 1; \
-	fi
 
 warn-uv-version: ensure-uv
 	@$(SET_STRICT) \
@@ -232,11 +193,7 @@ setup: ensure-rebrew warn-uv-version
 # fact either way, so this costs the wheel nothing and fixes the one archive
 # whose bytes still followed the builder's own environment.
 #
-# ensure-rebrew, not just ensure-uv: the recipe ends in a `uv run`, which syncs
-# the project environment, and that environment cannot resolve the rebrew path
-# dependency without the sibling checkout. Without the preflight the build dies
-# on "Distribution not found at file://.../rebrew", which names neither the
-# cause nor the fix.
+# The final uv run syncs the public dependency environment.
 #
 # --build-constraints pins the build backend. setuptools is not in uv.lock (uv
 # resolves PEP 517 build requirements in an isolated env of its own), so
@@ -435,15 +392,7 @@ yaml-lint: ensure-lint-tools
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
 #
-# ensure-rebrew, unlike web-build / web-dev / typecheck-web beside it, which
-# are pure JS/TS: `bun run lint` is `lint:js && lint:html`, and lint:html is
-# `uv run --locked --extra dev python tools/lint_html.py`, which imports
-# recoverage.server and therefore rebrew. `uv run` resolves uv.lock on its own,
-# and the lock carries the rebrew path dependency, so on a checkout with no
-# sibling the HTML pass died with "Distribution not found at file://…/rebrew"
-# from inside a bun script, naming neither the missing checkout nor the command
-# that fetches it. The preflight is what every other uv-reaching target here
-# already had; this one reached uv through a package.json script and was missed.
+# HTML lint imports recoverage through a locked Python environment.
 web-lint: ensure-bun ensure-rebrew
 	@$(SET_STRICT) \
 	if ! command -v java >/dev/null 2>&1; then \
@@ -513,11 +462,7 @@ regen-oxlint: ensure-rebrew ensure-bun
 # re-vendor, and the bare `uv run python tools/vendor_manifest.py` the README
 # used to spell is the one place a contributor ran outside the locked env.
 #
-# `$(UV_STDLIB)` rather than `$(UV_RUN)`, for the reason `python-sbom` below
-# gives: the tool imports nothing outside the stdlib, so a checkout with no
-# sibling rebrew beside it can still re-vendor. `ensure-rebrew` would have said
-# otherwise, and the re-vendor is a task a contributor does on a tree they have
-# not necessarily bootstrapped yet.
+# This stdlib-only tool needs no environment bootstrap.
 vendor-manifest:
 	$(UV_STDLIB) $(PYTHON) tools/vendor_manifest.py
 
@@ -563,30 +508,17 @@ browser-sbom-spdx:
 # browser half, and until this target existed the Python half was the one
 # artifact a contributor could not reproduce without CI.
 #
-# --frozen, like the job's: it is the one invocation that reads uv.lock alone,
-# because --locked re-resolves the graph and the path dependency ../rebrew is
-# what the job has no checkout of. So this target needs no environment and no
-# sibling either, which is why it is the only target here with no
-# `ensure-rebrew` and no UV_RUN. `ensure-uv` and not `ensure-rebrew`, though:
-# the target needs no environment and no sibling, but it does shell out to the
-# uv binary, and without the preflight a checkout with no uv on PATH died on
-# "uv: not found" from inside make, naming neither the tool nor the install
-# line that fixes it. It prints to stdout rather than writing a
-# file, and the sbom job redirects it: the job names its own artifact, and a
-# file written here would be a second thing to ignore in a local run. The two
-# rebrew pin lines the export alone does not carry are appended here, read
-# from the one script that owns the pin, so the artifact a release ships and
-# the one a contributor prints name the same rebrew.
+# Export the validated lock plus the source tag/commit of its public Rebrew wheel.
 python-sbom: ensure-uv
 	@$(SET_STRICT) \
-	uv export --frozen --all-extras --format requirements-txt --hashes; \
+	uv export --locked --all-extras --format requirements-txt --hashes; \
 	ref=$$(sed -n 's/^REBREW_REF="$${REBREW_REF:-\(.*\)}"$$/\1/p' tools/ci_clone_rebrew.sh); \
 	sha=$$(sed -n 's/^REBREW_SHA="$${REBREW_SHA:-\(.*\)}"$$/\1/p' tools/ci_clone_rebrew.sh); \
 	if [ -z "$$ref" ] || [ -z "$$sha" ]; then \
 	  echo "ERROR: could not read the rebrew pin out of tools/ci_clone_rebrew.sh." >&2; \
 	  exit 1; \
 	fi; \
-	printf '\n# rebrew path-dependency pin\n# rebrew==%s @ %s\n' "$$ref" "$$sha"
+	printf '\n# rebrew public-artifact source pin\n# rebrew==%s @ %s\n' "$$ref" "$$sha"
 
 # The license the resolved Python tree is under, which `python-sbom`'s hashes
 # do not say. Unlike that target this one reads the INSTALLED environment

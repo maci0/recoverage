@@ -184,6 +184,8 @@ def test_asm_pane_renders_disassembly(page: Any):
     )
     # highlightInto() adds hljs's class; unhighlighted plain text would not.
     expect(asm.locator("code.hljs")).to_have_count(1, timeout=15000)
+    expect(page.locator("#panel dt", has_text=re.compile(r"^Kind$"))).to_be_visible()
+    expect(page.locator("#panel dt", has_text=re.compile(r"^Marker$"))).to_have_count(0)
 
 
 def test_search_lists_its_matches(page: Any):
@@ -228,10 +230,9 @@ def test_search_lists_its_matches(page: Any):
     expect(results.first).to_be_visible(timeout=15000)
     assert results.count() > 1, f"a term matching {results.count()} rows listed one"
 
-    # A row selects a block: the panel leaves its no-selection state.
+    # A row selects a block: an actual detail title must replace the placeholder.
     results.nth(1).click()
-    panel = page.locator("#panel")
-    expect(panel).not_to_contain_text("Click a block on the map", timeout=15000)
+    expect(page.locator("#panel-title")).to_be_visible(timeout=15000)
 
     # Escape clears the query, the list and the map's dimming together.
     page.focus("#search-input")

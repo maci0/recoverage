@@ -655,7 +655,7 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     orphan.write_text("int orphan(void) { return 2; }\n", encoding="utf-8")
     (tmp_path / "rebrew-project.toml").write_text(
         '[project]\ndefault_target = "NP"\n\n'
-        '[targets.NP]\nbinary = "NP.bin"\nmarker = "NP"\nreversed_dir = "src/NP"\n',
+        '[targets.NP]\nbinary = "NP.bin"\nmodule = "NP"\nreversed_dir = "src/NP"\n',
         encoding="utf-8",
     )
     # An empty image would warn at load and pytest treats that warning as an

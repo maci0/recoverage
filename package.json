@@ -2,7 +2,7 @@
   "name": "recoverage",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "description": "Frontend tooling for the recoverage dashboard (Preact + Tailwind build, JS/TS + HTML/CSS lint)",
   "scripts": {
     "lint": "bun run lint:js && bun run lint:html",
@@ -13,21 +13,21 @@
     "typecheck:web": "tsc --noEmit --project web/tsconfig.json"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.83.0",
+    "@oxlint/plugins": "1.88.0",
     "@preact/preset-vite": "2.10.6",
     "@rikalabs/oxlint-standards": "0.8.1",
-    "@shadcn/lint": "0.1.5",
+    "@shadcn/lint": "0.2.1",
     "@tailwindcss/vite": "4.3.3",
-    "@types/node": "24.13.4",
+    "@types/node": "26.6.5",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "highlight.js": "11.12.0",
-    "oxlint": "1.83.0",
-    "preact": "10.29.8",
+    "oxlint": "1.88.0",
+    "preact": "11.0.1",
     "tailwind-merge": "3.7.0",
     "tailwindcss": "4.3.3",
-    "typescript": "5.9.3",
-    "vite": "8.3.0",
-    "vnu-jar": "26.9.16"
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vnu-jar": "26.10.12"
   }
 }

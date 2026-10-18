@@ -98,6 +98,10 @@ export function SearchResults({
                 index === activeIndex && "is-active",
               )}
               data-active={index === activeIndex ? "" : undefined}
+              // Keep combobox focus until the click selects this row. Moving
+              // focus to a non-focusable option blurs the field and removes
+              // the list before its click handler can run.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => onPick(result)}
             >
               <span className="min-w-0 grow truncate" dir="auto">

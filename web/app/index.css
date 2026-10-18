@@ -91,12 +91,6 @@
     color: var(--color-text-faint);
   }
 
-  /* The search field has its own labelled Clear button, which every engine
-     shows; the WebKit-only glyph beside it was a second, unnamed one. */
-  input[type="search"]::-webkit-search-cancel-button {
-    appearance: none;
-  }
-
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
