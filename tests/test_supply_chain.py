@@ -89,11 +89,11 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v5.0.0", "REBREW_SHA": "8a5923528bc9615145b4762f822f8aaef8f91fd5"}
+_PINS = {"REBREW_REF": "v5.1.0", "REBREW_SHA": "8954de2e6ecbab6496e2fff4e77501abb5680771"}
 _REBREW_WHEEL = (
-    "https://github.com/maci0/rebrew/releases/download/v5.0.0/rebrew-5.0.0-py3-none-any.whl"
+    "https://github.com/maci0/rebrew/releases/download/v5.1.0/rebrew-5.1.0-py3-none-any.whl"
 )
-_REBREW_HASH = "82b860764a60e435b34927dff99cd3a573fd6c510323aba3360e4c7454921341"
+_REBREW_HASH = "8356029da54de881326f931170d87db42f43562cf7ad481b8a33dea384574e50"
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 # What _git_lines returns for a tree git cannot answer for. A check that read
@@ -1016,7 +1016,13 @@ class TestToolchainPins:
         assert claimed, "pyproject.toml claims no 3.x Python classifier"
         matrix = re.search(r"python-version:\s*\[([^\]]+)\]", _CI_YML.read_text(encoding="utf-8"))
         assert matrix, "the test job has no python-version matrix"
-        tested = set(re.findall(r'"([^"]+)"', matrix[1]))
+        test_job = _jobs()["test"]
+        assert "UV_PYTHON: ${{ matrix.python-version }}" in test_job, (
+            "uv would use .python-version instead of the interpreter selected by the matrix"
+        )
+        tested = {
+            ".".join(version.split(".")[:2]) for version in re.findall(r'"([^"]+)"', matrix[1])
+        }
         assert tested == claimed, (
             f"the matrix tests {sorted(tested)}, pyproject.toml claims {sorted(claimed)}"
         )

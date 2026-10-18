@@ -9,7 +9,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Install the hash-pinned public Rebrew 5.0.0 wheel for format-3 function
+- Install the hash-pinned public Rebrew 5.1.0 wheel for format-3 function
   metadata and declaration provenance. Normal installs and CI no longer require
   a sibling source checkout; editable upstream development is opt-in.
 - Refresh Python dependencies and frontend tools, including TypeScript 7,
