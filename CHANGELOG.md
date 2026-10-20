@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.4.0] - 2026-10-21
+
 ### Changed
 
 - Select Python 3.14.8 for contributor environments and the current CI lane.
