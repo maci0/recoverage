@@ -2,7 +2,7 @@
 # setuptools 77 is the first release implementing PEP 639 (SPDX license
 # expressions); the `license = "MIT"` field below fails validation on older
 # versions, so the floor must stay at or above that.
-requires = ["setuptools>=84.0.0"]
+requires = ["setuptools>=84.2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -47,7 +47,7 @@ dependencies = [
     "rcssmin>=1.1",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
-    "rebrew @ https://github.com/maci0/rebrew/releases/download/v5.2.0/rebrew-5.2.0-py3-none-any.whl#sha256=bf232f4844e8f3694291b3ca660e0ef79dbd8544a868567deb7d745a59c0f3f3",
+    "rebrew @ https://github.com/maci0/rebrew/releases/download/v5.4.0/rebrew-5.4.0-py3-none-any.whl#sha256=28eefabcf59c141ed17fde8fe2b24b8ff30723b94c9d2309ca65f43fb1ea38ae",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",

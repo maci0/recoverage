@@ -398,7 +398,7 @@ export function foldForSearch(text: string): string {
   return text
     .normalize("NFC")
     .toLowerCase()
-    .replace(FULL_FOLD_PATTERN, (character) => FULL_FOLD.get(character) ?? character);
+    .replaceAll(FULL_FOLD_PATTERN, (character) => FULL_FOLD.get(character) ?? character);
 }
 
 /** The name one cell is matched under, in the form the match set holds.
@@ -434,7 +434,7 @@ export function foldCellName(raw: string | number | undefined | null): string {
 const ASCII_SPACE = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/gu;
 
 export function trimSearch(text: string): string {
-  return text.replace(ASCII_SPACE, "");
+  return text.replaceAll(ASCII_SPACE, "");
 }
 
 /** FIRST STRONG ISOLATE / POP DIRECTIONAL ISOLATE, the pair HTML's `<bdi>`

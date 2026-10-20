@@ -303,12 +303,13 @@ document to the fields an SPDX reader requires, the versions `bun.lock`
 resolved, the digests it pinned, the licenses `NOTICE` credits, and the
 reproducible stamp.
 
-The interpreter is pinned in `.python-version` (3.13.16), which is what uv builds
+The interpreter is pinned in `.python-version` (3.14.8), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their
 `setup-python` steps take `python-version-file: .python-version`, and `bun`
 comes from `package.json`'s `packageManager` through `bun-version-file`. No
 job restates either version; `tests/test_supply_chain.py` fails if a literal
-comes back. The test matrix adds 3.14, and its `include` entries name 3.13.16
+comes back. The test matrix retains 3.13 alongside the selected 3.14 patch; its `include`
+entries name 3.14.8
 because make is not part of the Windows runner's toolchain, so that job spells
 out the pytest command instead of calling `make test`.
 
@@ -598,7 +599,7 @@ Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- Rebrew 5.2.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
+- Rebrew 5.4.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
   live accounting, format-3 function metadata, source provenance and portable exports
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)

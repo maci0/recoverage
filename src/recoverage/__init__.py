@@ -6,6 +6,7 @@ Module map (dependencies point one way, left to right):
   deps)
 - ``metrics``     — in-process RED + connection + regen counters (no in-package
   deps)
+- ``status_colors`` — shared terminal status palette (no in-package deps)
 - ``config``      — RECOVERAGE_* parsing, validation, startup banner (no
   in-package deps)
 - ``devserver``   — the WSGI serving stack: socket family, admission cap, socket

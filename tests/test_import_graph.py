@@ -44,6 +44,7 @@ _LEVELS: dict[str, int] = {
     "devserver": 0,
     "metrics": 0,
     "regen": 0,
+    "status_colors": 0,
     "_paths": 1,
     "documents": 1,
     "backup": 1,

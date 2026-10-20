@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Select Python 3.14.8 for contributor environments and the current CI lane.
+  Rebrew includes python-flirt 0.10.0, whose PyO3 binding supports Python through
+  3.14; retain the Python 3.13 compatibility lane.
+- Refresh locked dependencies and the hash-pinned Rebrew wheel to 5.4.0, with
+  matching source provenance; update setuptools build constraints and uv tooling.
+
 ## [8.3.0] - 2026-10-20
 
 ### Changed
