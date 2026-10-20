@@ -50,12 +50,6 @@ def _listen_once(**kwargs: Any) -> None:
     server.server_close()
 
 
-#: The SGR sequence Rich paints the bold cyan target heading of `stats` with.
-#: Named because the color opt-out test asserts on the color part of that
-#: sequence, and Rich keeps the bold attribute when color is dropped.
-CYAN_HEADING = "\x1b[1;38;5;67m"
-
-
 # ── Version command ───────────────────────────────────────────────
 
 
@@ -174,18 +168,17 @@ class TestColorOptOut:
         colored surface the CLI has, so the flag has to reach the Console.
 
         FORCE_COLOR is what makes Rich emit color into a pipe, the state a
-        redirected run is in, and the bold cyan target heading is the color
-        surface it paints.  Rich's no_color drops color and keeps text
-        attributes, so the bold that remains is not the assertion.
+        redirected run is in. Rich chooses the terminal's color encoding and
+        no_color keeps text attributes, so inspect colors independently of bold.
         """
         monkeypatch.setenv("FORCE_COLOR", "1")
         colored = runner.invoke(app, ["stats"], color=True)
         assert colored.exit_code == 0, colored.output
-        assert CYAN_HEADING in colored.stdout
+        assert any(span.style.color for span in Text.from_ansi(colored.stdout).spans)
 
         plain = runner.invoke(app, ["--no-color", "stats"], color=True)
         assert plain.exit_code == 0, plain.output
-        assert CYAN_HEADING not in plain.stdout
+        assert not any(span.style.color for span in Text.from_ansi(plain.stdout).spans)
 
 
 # ── Version command ───────────────────────────────────────────────
