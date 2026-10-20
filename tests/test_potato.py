@@ -2624,13 +2624,13 @@ class TestV4StateColors:
         return html[marker : html.index('"', marker)]
 
     def test_proven_renders_the_proven_fill(self) -> None:
-        assert self._cell_bgcolor("proven") == "#3f7a63"
+        assert self._cell_bgcolor("proven") == "#267e47"
 
     def test_legacy_near_matching_renders_the_near_fill(self) -> None:
         assert self._cell_bgcolor("near_matching") == "#6c7ea8"
 
-    def test_size_mismatch_renders_the_near_fill(self) -> None:
-        assert self._cell_bgcolor("size_mismatch") == "#6c7ea8"
+    def test_size_mismatch_renders_the_failure_fill(self) -> None:
+        assert self._cell_bgcolor("size_mismatch") == "#a05c54"
 
     def test_unknown_state_still_falls_back_to_the_unlit_fill(self) -> None:
         assert self._cell_bgcolor("some_future_state") == "#212124"
@@ -4243,12 +4243,17 @@ class TestFilterKeysCoverTheLegend:
 
         assert _state_survives_filter("verified", {"exact"})
         assert _state_survives_filter("near_matching", {"near_match"})
-        assert _state_survives_filter("size_mismatch", {"near_match"})
+        assert _state_survives_filter("size_mismatch", {"size_mismatch"})
+        assert not _state_survives_filter("size_mismatch", {"near_match"})
 
     def test_every_problem_state_survives_the_problem_filter(self) -> None:
         from recoverage.potato import COLORS, _state_survives_filter
 
-        problems = [s for s, color in COLORS.items() if color == COLORS["compile_error"]]
+        problems = [
+            s
+            for s, color in COLORS.items()
+            if color == COLORS["compile_error"] and s != "size_mismatch"
+        ]
         assert len(problems) > 1
         for state in problems:
             assert _state_survives_filter(state, {"problem"}), state
@@ -4388,6 +4393,8 @@ class TestSectionAccentsMatchSpa:
             ("reloc", "cell-reloc", "st-reloc"),
             ("near_match", "cell-near", "st-near"),
             ("proven", "cell-proven", "st-proven"),
+            ("library", "cell-library", "st-library"),
+            ("size_mismatch", "cell-fail", "st-fail"),
             ("stub", "cell-stub", "st-stub"),
             ("thunk", "cell-thunk", "st-thunk"),
             ("data", "cell-live", "st-live"),

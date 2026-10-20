@@ -104,17 +104,17 @@ _log = logging.getLogger("recoverage")
 # ground keeps the verdict fills apart. A token change there moves these too.
 _COLORS_PROBLEM = "#a05c54"  # cell-fail
 COLORS = {
-    "exact": "#2f7a56",  # cell-exact
-    "reloc": "#31806f",  # cell-reloc
+    "exact": "#359b64",  # cell-exact
+    "reloc": "#21787f",  # cell-reloc
     "near_match": "#6c7ea8",  # cell-near
     # Canonical spelling of near_match; the map palette is its own (rebrew's
     # document carries the terminal report's STATUS_HEX, a darker set).
     "near_matching": "#6c7ea8",
     # Post-verify semantic promotion, a state of its own rather than a match.
-    "proven": "#3f7a63",  # cell-proven
-    # SIZE_MISMATCH: not a match, so it shares the near-match steel blue.
-    "size_mismatch": "#6c7ea8",
+    "proven": "#267e47",  # cell-proven
+    "size_mismatch": _COLORS_PROBLEM,
     "stub": "#6b6b74",  # cell-stub
+    "library": "#a05a83",  # cell-library
     "padding": "#3a3a42",  # border-strong, as the SPA paints padding
     "data": "#4f7088",  # cell-live
     "thunk": "#7063a0",  # cell-thunk
@@ -125,7 +125,7 @@ COLORS = {
     # SPA paints the problem slot with.  DISPLACED (the link map places the
     # symbol at another VA) is a kind of drift: rebrew counts it in data_drift
     # and folds it into the `other` bucket beside drift.
-    "verified": "#2f7a56",
+    "verified": "#359b64",
     "drift": _COLORS_PROBLEM,
     "displaced": _COLORS_PROBLEM,
     "unchecked": _COLORS_PROBLEM,
@@ -145,12 +145,13 @@ _INK_PROBLEM = "#f08a80"  # st-fail
 STATE_INK = {
     "exact": "#4cc38a",  # st-exact
     "verified": "#4cc38a",
-    "reloc": "#4fc2b0",  # st-reloc
+    "reloc": "#33b6c4",  # st-reloc
     "near_match": "#a8b8ed",  # st-near
     "near_matching": "#a8b8ed",
-    "size_mismatch": "#a8b8ed",
-    "proven": "#86d4ad",  # st-proven
+    "size_mismatch": _INK_PROBLEM,
+    "proven": "#8ae1af",  # st-proven
     "stub": "#a3a3ab",  # st-stub
+    "library": "#e9a3cd",  # st-library
     "padding": "#a3a3ab",  # text-muted
     "data": "#6cb4e4",  # st-live
     "thunk": "#b8a7f0",  # st-thunk
@@ -214,18 +215,22 @@ _FALLBACK_PAGE_STYLE = (
 
 # The keys a ?filter= may name, and the cell states each one stands for.  A
 # filter is a key, not a state name, so the states the SPA packs onto one cell
-# state (its STATE_ID: VERIFIED onto exact, NEAR_MATCHING and SIZE_MISMATCH
+# state (its STATE_ID: VERIFIED onto exact, NEAR_MATCHING
 # onto near_match) stay reachable from the same pill here: without this, a
 # VERIFIED byte dimmed out under the exact filter in Potato Mode while the SPA
 # kept it lit.  The two renderers disagreed about what a filter shows.
 FILTER_STATES: dict[str, frozenset[str]] = {
     "exact": frozenset({"exact", "verified"}),
     "reloc": frozenset({"reloc"}),
-    "near_match": frozenset({"near_match", "near_matching", "size_mismatch"}),
+    "near_match": frozenset({"near_match", "near_matching"}),
     "stub": frozenset({"stub"}),
+    "library": frozenset({"library"}),
+    "size_mismatch": frozenset({"size_mismatch"}),
     "padding": frozenset({"padding"}),
     "proven": frozenset({"proven"}),
-    "problem": frozenset(s for s, color in COLORS.items() if color == _COLORS_PROBLEM),
+    "problem": frozenset(
+        s for s, color in COLORS.items() if color == _COLORS_PROBLEM and s != "size_mismatch"
+    ),
 }
 # The colour each pill is drawn in, which is the colour of one of its states.
 FILTER_COLORS: dict[str, str] = {
@@ -459,6 +464,8 @@ LEGEND_ITEMS = [
     ("near_match", "NEAR"),
     ("stub", "STUB"),
     ("proven", "PROVEN"),
+    ("library", "LIBRARY"),
+    ("size_mismatch", "SIZE_MISMATCH"),
     ("data", "data"),
     ("thunk", "thunk"),
     ("padding", "padding"),
@@ -2168,6 +2175,8 @@ FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
     # for the failures had no control to narrow the map with.
     ("proven", "V", "PROVEN"),
     ("problem", "X", "problem"),
+    ("library", "L", "LIBRARY"),
+    ("size_mismatch", "Z", "SIZE_MISMATCH"),
 )
 
 

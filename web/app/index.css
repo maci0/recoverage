@@ -63,6 +63,20 @@
   background-image: repeating-linear-gradient(to bottom, var(--color-text-muted) 0 1px, transparent 1px 4px);
 }
 
+/* A served figure a live reload just changed (`useMoves` in StatsStrip.tsx): one
+ * accent-soft tint behind it that fades in about a second. Colour only, no
+ * movement; the reduced-motion block below removes it with every animation.
+ * `text` and `text-muted` both clear 4.5:1 on `accent-soft`. */
+@utility count-changed {
+  animation: count-changed 1100ms var(--ease-out);
+}
+
+@keyframes count-changed {
+  from {
+    background-color: var(--color-accent-soft);
+  }
+}
+
 @layer base {
   body {
     margin: 0;

@@ -15,7 +15,7 @@
 
 import { count, plural } from "@/lib/format";
 
-/** Cells are packed into eight palette slots.
+/** Cells are packed into palette slots.
  *
  * Every state rebrew can write is listed: an unlisted one must not fall through
  * to 0, because `build_db` counts `verified` as an exact match and covered
@@ -31,8 +31,9 @@ const STATE_SLOTS = new Map<string, number>([
   ["reloc", 2],
   ["near_match", 3],
   ["near_matching", 3],
-  ["size_mismatch", 3],
+  ["size_mismatch", 9],
   ["stub", 4],
+  ["library", 8],
   ["padding", 5],
   ["proven", 6],
   ["compile_error", 7],
@@ -65,6 +66,8 @@ export const STATE_LABEL = [
   "padding",
   "PROVEN",
   "problem",
+  "LIBRARY",
+  "SIZE_MISMATCH",
 ];
 
 /** The face a state word is set in. A verdict is a code token (relumea brand
@@ -89,6 +92,8 @@ export const PALETTE_VARS = [
   "--color-border-strong",
   "--color-cell-proven",
   "--color-cell-fail",
+  "--color-cell-library",
+  "--color-cell-fail",
 ];
 
 /** The same fills as utility classes, in slot order, for the legend and the
@@ -103,22 +108,23 @@ export const SWATCH_CLASS = [
   "bg-border-strong",
   "bg-cell-proven",
   "bg-cell-fail",
+  "bg-cell-library",
+  "bg-cell-fail",
 ];
 
 /** The mark each slot draws over its fill, in slot order, as the utility the
  * legend and filter swatches use (`index.css`); the map draws the same tile on
- * the canvas. The relumea fills separate verdicts by hue at one lightness, and
- * EXACT, RELOC and PROVEN share its green while STUB and padding share its
- * grey. Steel blue NEAR is close to STUB in light mode, so a colour-blind reader
- * or anyone at a glance cannot tell those
- * apart by fill alone (WCAG 1.4.1). Every pair of fills closer than the ΔE
- * floor in tests/test_server.py carries different marks. */
+ * the canvas. The relumea fills separate verdicts mostly by hue; EXACT, RELOC
+ * and PROVEN are one success family, and STUB and padding share its grey. Steel
+ * blue NEAR is close to STUB in light mode, so a colour-blind reader or anyone
+ * at a glance cannot tell those apart by fill alone (WCAG 1.4.1). Every pair of
+ * fills closer than the ΔE floor in tests/test_server.py carries different marks. */
 export type Mark = "" | "mark-dots" | "mark-hatch" | "mark-rule";
-export const MARK_CLASS: ReadonlyArray<Mark> = ["", "", "mark-dots", "mark-dots", "", "mark-rule", "mark-hatch", ""];
+export const MARK_CLASS: ReadonlyArray<Mark> = ["", "", "mark-dots", "mark-dots", "", "mark-rule", "mark-hatch", "", "", "mark-hatch"];
 
 /** A packed state's filter key. A state the grid can paint but no button can
  * isolate would be unreachable by filter. */
-export const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
+export const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem", "library", "size_mismatch"];
 
 /** Whether a cell survives the active status filter.
  *
@@ -251,6 +257,8 @@ export const STATE_FILTERS = [
   { key: "padding", label: "padding", title: "Alignment filler between functions" },
   { key: "proven", label: "PROVEN", title: "Semantic equivalence proven" },
   { key: "problem", label: "problem", title: "Build or classification failure" },
+  { key: "library", label: "LIBRARY", title: "Library attribution; verification is separate" },
+  { key: "size_mismatch", label: "SIZE_MISMATCH", title: "Compiled size differs from the original" },
 ] as const;
 
 /** The swatch classes (fill and mark) a filter's cells paint with.

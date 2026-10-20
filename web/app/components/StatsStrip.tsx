@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { useRef } from "preact/compat";
 
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,8 @@ const BUCKET_KEY = {
   padding: "padding",
   proven: "proven",
   problem: "other",
+  library: "library",
+  size_mismatch: "size_mismatch",
 } as const satisfies Record<string, string>;
 
 /** The section `summary.coveragePercent` measures (`server._summary` divides
@@ -55,6 +58,10 @@ export function StatsStrip({
   onToggleFilter,
 }: StatsStripProps): ComponentChildren {
   const row = stats === null || section === null ? undefined : stats.sections[section];
+  const moves = useMoves(
+    stats === null || row === undefined ? null : `${stats.target}\n${section}`,
+    Object.fromEntries(STATE_FILTERS.map((entry) => [entry.key, row?.[BUCKET_KEY[entry.key]] ?? null])),
+  );
   return (
     <div className="stats mb-3 flex flex-col gap-3">
       <Summary
@@ -81,7 +88,7 @@ export function StatsStrip({
         </Button>
         {STATE_FILTERS.map((entry) => {
           const bucket = BUCKET_KEY[entry.key];
-          const blocks = row === undefined ? null : (row[bucket] ?? 0);
+          const blocks = row === undefined ? null : (row[bucket] ?? null);
           const on = filters.has(entry.key);
           return (
             <Button
@@ -107,7 +114,12 @@ export function StatsStrip({
               />
               <span className={verdictFace(entry.label)}>{entry.label}</span>
               {blocks === null ? null : (
-                <span className="font-mono tabular-nums text-text-muted">{count(blocks)}</span>
+                <span
+                  key={moves[entry.key] ?? 0}
+                  className={cn("font-mono tabular-nums text-text-muted", moves[entry.key] !== undefined && "count-changed")}
+                >
+                  {count(blocks)}
+                </span>
               )}
             </Button>
           );
@@ -115,6 +127,33 @@ export function StatsStrip({
       </div>
     </div>
   );
+}
+
+/** How many times each served figure has changed since its target and section
+ * were first shown here: a live reload moved it. The first reading, the empty
+ * gap while a reload refetches (scope null) and a switch of target or section
+ * are not moves. Kept in a ref and updated during render, so a re-render with
+ * the same figures counts nothing twice. A changed count remounts the figure
+ * (its key), which replays the one-shot tint even inside a running one. */
+function useMoves(scope: string | null, values: Record<string, number | null>): Record<string, number> {
+  const memory = useRef<{ scope: string | null; values: Record<string, number>; moves: Record<string, number> }>({
+    scope: null,
+    values: {},
+    moves: {},
+  });
+  if (scope !== null) {
+    if (memory.current.scope !== scope) {
+      memory.current = { scope, values: {}, moves: {} };
+    }
+    const now = memory.current;
+    for (const [key, value] of Object.entries(values)) {
+      if (value === null) continue;
+      const previous = now.values[key];
+      if (previous !== undefined && previous !== value) now.moves[key] = (now.moves[key] ?? 0) + 1;
+      now.values[key] = value;
+    }
+  }
+  return memory.current.moves;
 }
 
 /** The target's headline figure, or the line that stands in for it. The line
@@ -141,6 +180,7 @@ function Summary({
   section: string | null;
   sectionPct: number | null;
 }): ComponentChildren {
+  const moves = useMoves(stats?.target ?? null, { coverage: stats?.summary.coveragePercent ?? null });
   if (stats === null) {
     if (error !== null) {
       return <p className="m-0 text-data text-text-muted">Coverage summary unavailable: {error}</p>;
@@ -152,7 +192,13 @@ function Summary({
   const { summary } = stats;
   return (
     <p className="m-0 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <b className="text-figure font-semibold leading-title tracking-figure tabular-nums text-text">
+      <b
+        key={moves.coverage ?? 0}
+        className={cn(
+          "text-figure font-semibold leading-title tracking-figure tabular-nums text-text",
+          moves.coverage !== undefined && "count-changed",
+        )}
+      >
         {percentLabel(summary.coveragePercent)}
       </b>
       <span className="text-data text-text-muted">

@@ -1,12 +1,13 @@
 {
   "repository": "relumea/relumea-brand",
-  "commit": "e21769b488948061a10a2a694b23e83e625926fe",
+  "commit": "e2bde44ddb4344acd88f1b75bbcd00326d9504dc",
   "files": {
-    "web/app/system/tokens.css": "ff2a73b30ab31f026588d4b6506ddce72595f92dcf0d4d0c4f5b13be5cde1c7c",
+    "web/app/system/tokens.css": "5fcb05e6f7a9be154cdc526fa5e729ec4d93052bf10a6bc74dee392423dce24f",
     "web/app/system/icons/Icon.tsx": "f9126bf2a0ece973b5fee43e871c60d1596ae825b579a4772e2a9a906933738d",
     "web/app/system/icons/paths.ts": "61a4ee499379bbdff58bda6f564f24891b400b2a1088f5895cc8ccf9f74323b5",
     "web/app/system/icons/ProviderIcon.tsx": "6ca479d5da91808b0937ccf77cdefd0837d7e1f22a72405089b30b75953594ce",
     "web/app/system/icons/ProviderIcon.css": "a689f3f8094b9815ada7fc06cc45980efd2b9f449af8fd6026e8406d33776b8d",
+    "src/recoverage/status_colors.py": "04d3e00b0039eb9970bb58114a82c61f7fd557b23e51027b8b592ae875cd0e93",
     "web/app/system/icons/providers/README.md": "d4420621e8db61aaa7c9db46146ded60d9fa3765f56114873bf8711cf7649b1f",
     "web/app/system/icons/providers/github.svg": "693d7abe6f899646cc2e96856723b45e95f71885a54910b2749f6decdf7e1ee1"
   }

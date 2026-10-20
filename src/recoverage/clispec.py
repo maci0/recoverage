@@ -118,7 +118,8 @@ def build_schema(path: str | None = None) -> dict[str, Any]:
         "global_args": [
             {
                 "name": "--output",
-                "alias": "-o",
+                "short": "-o",
+                "type": "string",
                 "enum": ["auto", "text", "json"],
                 "default": "auto",
                 "description": (
@@ -128,15 +129,18 @@ def build_schema(path: str | None = None) -> dict[str, Any]:
             },
             {
                 "name": "--json",
+                "type": "boolean",
                 "description": "Write results to stdout as JSON. Same as -o json.",
             },
             {
                 "name": "--version",
-                "alias": "-V",
+                "short": "-V",
+                "type": "boolean",
                 "description": "Show version and exit.",
             },
             {
                 "name": "--no-color",
+                "type": "boolean",
                 "description": "Disable colored output. Honors NO_COLOR and TERM=dumb.",
             },
         ],

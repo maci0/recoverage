@@ -1453,7 +1453,7 @@ class TestSpaFilterControls:
         states = _web("states.ts")
         filters = states.split("export const STATE_FILTERS = [", 1)[1].split("] as const;", 1)[0]
         labels = re.findall(r'label: "([^"]+)"', filters)
-        assert len(labels) == 7, "a state the map paints has no pill"
+        assert len(labels) == 9, "a state the map paints has no pill"
         label_block = states.split("export const STATE_LABEL = [", 1)[1].split("];", 1)[0]
         legend = re.findall(r'"([^"]+)"', label_block)
         assert labels == legend[1:], "a pill spells a state in words the legend does not use"
@@ -1467,7 +1467,7 @@ class TestSpaFilterControls:
         raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", states, re.DOTALL).group(1)
         keys = [value.strip().strip('"') for value in raw.split(",") if value.strip()]
         assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
-        assert keys[6:] == ["proven", "problem"]
+        assert keys[6:] == ["proven", "problem", "library", "size_mismatch"]
 
 
 class TestSpaDimmedMapSaysSo:
@@ -4132,18 +4132,20 @@ class TestSpaStateVocabulary:
         assert slots["none"] == 0
 
     def test_palette_filter_and_label_tables_match_the_state_count(self) -> None:
-        """Slot 7 is the highest; every lookup table must be eight long.
+        """Slot 9 is SIZE_MISMATCH; every lookup table must be ten long.
 
         A short table makes `palette[slot]` undefined (silently `--none`) and
         `FILTER_KEY[slot]` undefined (a filter mismatch on every such cell),
         while a short `STATE_LABEL` prints "undefined" in the hover title.
         """
         states = _web("states.ts")
-        assert len(_array_items(states, "PALETTE_VARS")) == 8
+        assert len(_array_items(states, "PALETTE_VARS")) == 10
         raw_filters = re.search(r"export const FILTER_KEY = \[(.*?)\];", states).group(1)
-        assert len(re.findall(r'"([a-z_]*)"', raw_filters)) == 8
-        assert len(_array_items(states, "STATE_LABEL")) == 8
-        assert max(_packed_slots().values()) == 7
+        assert len(re.findall(r'"([a-z_]*)"', raw_filters)) == 10
+        assert len(_array_items(states, "STATE_LABEL")) == 10
+        assert _packed_slots()["library"] == 8
+        assert _packed_slots()["size_mismatch"] == 9
+        assert max(_packed_slots().values()) == 9
 
     def test_every_palette_variable_is_a_published_token(self) -> None:
         """The canvas resolves each name at paint time, and a name the token
@@ -4545,16 +4547,17 @@ class TestCellFillsAreDrawnPerTheme:
     `PALETTE_VARS` in `states.ts`, minus the unlit cell, which is the ground
     of an unread byte and is quiet on purpose.
 
-    The fills also sit at one lightness and differ by hue alone, with three
-    greens and two greys among them, so a pair closer than `SAME_HUE_DELTA_E`
+    The fills differ mostly by hue, with a success family (EXACT, RELOC,
+    PROVEN) and two greys among them, so a pair closer than `SAME_HUE_DELTA_E`
     must differ in its ink mark (`MARK_CLASS`), and the mark ink must clear the
     floor on the fill it is drawn over.  Padding's fill is the hairline token
     and is exempt from the fill floor; its mark is what makes it visible.
     """
 
     NON_TEXT_FLOOR = 3.0
-    # Measured on the relumea fills: the three greens pair at ΔE 5.9 to 15.6
-    # and every other pair is 20.8 or more apart.
+    # Measured on the relumea fills: the success family pairs at ΔE 11.2 to
+    # 39.4, NEAR and STUB at 19.2 (light) and 20.9 (dark), every other pair at
+    # 25.1 or more.
     SAME_HUE_DELTA_E = 20.0
     # The ink each mark is drawn in; padding is filler and takes the muted ink.
     MARK_INK: ClassVar[dict[str, str]] = {
@@ -4654,6 +4657,7 @@ class TestSpaTextTokensClearTheTextFloor:
         "st-exact",
         "st-reloc",
         "st-proven",
+        "st-library",
         "st-near",
         "st-stub",
         "st-fail",

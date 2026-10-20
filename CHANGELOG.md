@@ -5,6 +5,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-10-20
+
+### Changed
+
+- `recoverage schema` declares `type` on every global argument, and the short
+  form of `--output` and `--version` as `short`.
+- Upgrade the pinned Rebrew wheel and optional source checkout to 5.2.0.
+
+### Fixed
+
+- Share CLI color roles with Brand; render LIBRARY and SIZE_MISMATCH distinctly in both coverage views.
+
 ## [8.2.0] - 2026-10-18
 
 ### Changed

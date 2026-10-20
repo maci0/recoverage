@@ -98,11 +98,12 @@ it is mounted from.
 ### 2. Grid (`.map`, mounted by `components/CoverageMap.tsx`)
 * A canvas map that always renders every declared column: the section's `columns` value is stored on the element as `data-cols` and drives the lattice, the row height, and the arrow-key row step. Narrow screens shrink the cells (floor 6px desktop, 12px phone) instead of re-wrapping them onto extra rows, which left a blank band under short sections. Reading the column count from one place is what keeps the track count, row height, and keyboard step from drifting.
 * Cells take the relumea verdict fills (`cell-*` tokens in `web/app/system/tokens.css`), one opaque set per theme:
-  * **`EXACT`** (`cell-exact`, green): byte-for-byte match
-  * **`RELOC`** (`cell-reloc`, teal, dotted): match after masking relocations
+  * **`EXACT`** (`cell-exact`, emerald): byte-for-byte match
+  * **`RELOC`** (`cell-reloc`, cyan teal, dotted): match after masking relocations
   * **`NEAR`** (`cell-near`, steel blue, dotted): near-miss with structural differences (stored state `near_match`; a document may spell it `near_matching`, which renders identically)
-  * **`PROVEN`** (`cell-proven`, pale green, hatched): post-verify semantic-equivalence promotion (`proven`)
-  * **Size mismatch** (`cell-near`, steel blue, dotted): compiled size differs from the original (`size_mismatch`)
+  * **`PROVEN`** (`cell-proven`, mint in light and deep forest in dark, hatched): post-verify semantic-equivalence promotion (`proven`)
+  * **`SIZE_MISMATCH`** (`cell-fail`, red, hatched): compiled size differs from the original (`size_mismatch`)
+  * **`LIBRARY`** (`cell-library`, mulberry): library origin attribution (`library`), not a byte-verification result
   * **`STUB`** (`cell-stub`, grey): far off or placeholder. Red is kept for failure.
   * **Padding** (`border-strong`, hairline grey, ruled in `text-muted`): alignment padding. The brand has no padding verdict, so it takes the quietest fill that is not the unlit cell.
   * **Problem** (`cell-fail`, red): tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `displaced` / `unchecked` verdicts)
@@ -158,6 +159,7 @@ it is mounted from.
 * **Cell fills are opaque per theme**: a translucent fill's value is whatever sits behind it, so each theme has its own opaque set. `TestCellFillsAreDrawnPerTheme` in `tests/test_server.py` holds the fills at 3:1 against `surface` in both themes (WCAG 1.4.11).
 * **Potato Mode and the token page** use the same values, written as HTML attributes from the dark set (`BG_COLOR`, `PANEL_COLOR`, `BORDER_COLOR` in `potato.py`, `_UNAUTHORIZED_HTML` in `server.py`). `TestUnauthorizedPageMatchesTheTokenLayer` holds the token page against `tokens.css`.
 * **Transitions**: 150ms on `ease-standard`, the token default. `prefers-reduced-motion: reduce` turns every transition and animation off.
+* **Changed figures**: when a live reload changes a figure in the stats strip (the `.text` coverage headline or a pill's block count), that figure takes one `accent-soft` tint that fades over 1.1 s (`count-changed` in `web/app/index.css`, counted by `useMoves` in `StatsStrip.tsx`). A first load, the empty gap while a reload refetches and a switch of target or section do not tint. Colour only; reduced motion removes it.
 * **Scrollbars**: every scrolling region gets the standard thin scrollbar the theme's `--scroll-thumb` token names (`scrollbar-width`/`scrollbar-color`), so both engine families follow the palette.
 * **Loading Overlay**: A centered, muted label on an opaque `--panel` ground gives immediate visual feedback during data fetches. It carries no `backdrop-filter`: it sits over the lattice, and a blur there re-filters on every repaint of the grid beneath it.
 * **Print**: `assets/print.css`, linked with `media="print"` so it costs nothing at first paint.  Paper drops the controls and the copy/open affordances, keeps the status colours (`print-color-adjust: exact`), unclamps the code panes, and appends link targets after source links.
@@ -379,37 +381,36 @@ statuses are read against.
 ## Color Scheme & Styling (matches main UI)
 Cell states are the keys of `potato.COLORS`, spelled as `cells.state` spells them.
 
-| Cell state | Color | Hex |
-|------------|-------|-----|
-| `exact`, `verified` | Green | `#10b981` |
-| `reloc` | Blue | `#0ea5e9` |
-| `near_match`, `near_matching`, `size_mismatch` | Yellow | `#f59e0b` |
-| `proven` | Cyan | `#06b6d4` |
-| `stub` | Red | `#ef4444` |
-| `padding` | Silver | `#C0C0D4` |
-| `data` | Purple | `#8b5cf6` |
-| `thunk` | Orange | `#f97316` |
-| `drift`, `displaced`, `unchecked`, `compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown` | Violet | `#a855f7` |
-| `none` | Dark Gray | `#3F4958` |
-| Background | Dark | `#0f1216` |
-| Panel | Slate | `#151a21` |
-| Progress track | Dark Slate | `#22272e` |
-| Code Block | Darker | `#0a0d14` |
-| Border | Cyan-tinted | `#1c2a38` |
-| Accent | Cyan | `#06b6d4` |
-| Pane accent: C Source | Blue | `#3b82f6` |
-| Pane accent: Assembly | Red | `#ef4444` |
-| Pane accent: Data Inspector | Violet | `#a855f7` |
-| Pane accent: Original Bytes | Green | `#10b981` |
+| Cell state | Role | Dark fill |
+| --- | --- | --- |
+| `exact`, `verified` | EXACT emerald | `#359b64` |
+| `reloc` | RELOC cyan teal | `#21787f` |
+| `near_match`, `near_matching` | NEAR steel blue | `#6c7ea8` |
+| `size_mismatch` | Failure brick | `#a05c54` |
+| `proven` | PROVEN deep forest | `#267e47` |
+| `stub` | STUB gray | `#6b6b74` |
+| `library` | LIBRARY mulberry | `#a05a83` |
+| `padding` | Quiet separator | `#3a3a42` |
+| `data` | Data blue | `#4f7088` |
+| `thunk` | Structure violet | `#7063a0` |
+| `drift`, `displaced`, `unchecked`, `compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown` | Problem brick | `#a05c54` |
+| `none` | Unattempted ground | `#212124` |
 
-The four pane accents are `potato.ACCENT_C_SOURCE`, `ACCENT_ASM`, `ACCENT_DATA`,
-and `ACCENT_BYTES`, the same four values the SPA reads from
-`--accent-c-source`, `--accent-asm`, `--accent-data`, and `--accent-bytes`.
-Potato Mode spells them as constants because it has no CSS; the two lists are
-pinned to each other by `TestSectionAccentsMatchSpa` in `tests/test_potato.py`,
-so a pane cannot change hue in one renderer and not the other.
+Potato Mode spells the dark `cell-*` and `st-*` tokens as constants because it
+has no CSS. Cells use fills; words use inks. The parity tests include LIBRARY
+and SIZE_MISMATCH. SIZE_MISMATCH has its own labeled filter in both renderers;
+it never renders as NEAR. LIBRARY identifies origin, and verification remains
+separate. LIVE is activity only and is not a verification-result legend entry.
 
-The status rows are `potato.COLORS`, one row per colour. A state `build_db` can write that this table does not name is a bug: the legend beside the grid would be short a row, and `tests/test_potato.py` fails on it.
+Page grounds, code backgrounds, borders and pane headings also follow the dark
+brand tokens. Pane headings use muted text, rather than assigning a status hue
+to an arbitrary pane. The exact values live in `potato.py` and the synchronized
+web token file, with parity tests guarding the copies.
+
+CLI color roles come from the synchronized `status_colors.py` export. Rich
+and Click share the approved success, warning, failure and activity hues;
+`--no-color`, `NO_COLOR`, `TERM=dumb`, pipes and JSON retain their opt-outs.
+See the [canonical brand standard](../../relumea-brand/docs/brand/BRAND.md#cli-standard).
 
 ### Typography
 - **Body text**: `system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif` — proportional font for labels, headings, and UI chrome, matching the normal UI's body font stack.

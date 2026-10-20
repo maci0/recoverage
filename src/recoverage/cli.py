@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 import typer
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
+from rich.theme import Theme
 
 from recoverage import clock, config
 from recoverage._paths import coverage_source
@@ -36,6 +37,7 @@ from recoverage.devserver import (
     resolve_listen_port,
 )
 from recoverage.documents import COVERAGE_GLOB
+from recoverage.status_colors import RICH_STYLES
 
 #: The root help's examples, as (command, what it does), printed as one block
 #: with the comments in a column: typer hands the epilog to Rich as written, so
@@ -105,6 +107,9 @@ def _color_off() -> bool:
 
 
 def _secho(message: str, **styles: Any) -> None:
+    foreground = styles.get("fg")
+    if isinstance(foreground, str) and foreground in RICH_STYLES:
+        styles["fg"] = tuple(bytes.fromhex(RICH_STYLES[foreground].removeprefix("#")))
     typer.secho(message, color=False if _color_off() else None, **styles)
 
 
@@ -1912,7 +1917,9 @@ def stats(
         # resolved opt-out is passed through: a table is the widest colored
         # surface the CLI has, and it must honor the same three opt-outs
         # every _secho caller does.
-        console = Console(no_color=True if _color_off() else None)
+        console = Console(
+            no_color=True if _color_off() else None, highlight=False, theme=Theme(RICH_STYLES)
+        )
         for index, tid in enumerate(targets):
             data = _get_stats(snapshots, tid)
             # Blank line between targets, never before the first one: the
@@ -2423,7 +2430,9 @@ def backup(
     table.add_column("SHA-256")
     for name, size, digest in info.members:
         table.add_row(escape(name), f"{size:,}", digest[:16])
-    Console(no_color=True if _color_off() else None).print(table)
+    Console(
+        no_color=True if _color_off() else None, highlight=False, theme=Theme(RICH_STYLES)
+    ).print(table)
     _secho(
         f"Verified backup: {info.path}, {_counted(len(info.members), 'document', 'documents')}, "
         f"{info.total_bytes:,} bytes, taken {info.created}.",

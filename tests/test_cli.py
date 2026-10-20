@@ -53,7 +53,7 @@ def _listen_once(**kwargs: Any) -> None:
 #: The SGR sequence Rich paints the bold cyan target heading of `stats` with.
 #: Named because the color opt-out test asserts on the color part of that
 #: sequence, and Rich keeps the bold attribute when color is dropped.
-CYAN_HEADING = "\x1b[1;36m"
+CYAN_HEADING = "\x1b[1;38;5;67m"
 
 
 # ── Version command ───────────────────────────────────────────────
@@ -73,6 +73,11 @@ class TestColorOptOut:
     def _colored_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("NO_COLOR", raising=False)
         monkeypatch.setenv("TERM", "xterm-256color")
+
+    def test_success_uses_the_shared_rgb_palette(self) -> None:
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[38;2;30;134;79m" in result.output
 
     def test_color_enabled_by_default(self) -> None:
         result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)

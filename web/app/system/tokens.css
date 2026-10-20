@@ -84,8 +84,9 @@
 
   /* Verdict words (`st-*`) are text and clear 4.5:1 on every surface. */
   --color-st-exact: light-dark(#0f7a42, #4cc38a);
-  --color-st-reloc: light-dark(#0f6f68, #4fc2b0);
-  --color-st-proven: light-dark(#2a7154, #86d4ad);
+  --color-st-reloc: light-dark(#00686e, #33b6c4);
+  --color-st-proven: light-dark(#265937, #8ae1af);
+  --color-st-library: light-dark(#943a77, #e9a3cd);
   --color-st-thunk: light-dark(#5b3fa8, #b8a7f0);
   --color-st-near: light-dark(#445b99, #a8b8ed);
   --color-st-warn: light-dark(#8a5a00, #e3b65c);
@@ -99,10 +100,14 @@
   /* Verdict fills (`cell-*`): one per verdict, shared by the map and every
      legend. When a fill lived in two places, the map and its key disagreed.
      Each fill clears 3:1 against every ground and against `cell-unlit`
-     (WCAG 1.4.11), so a lit cell is told apart without its neighbours. */
-  --color-cell-exact: light-dark(#4c986c, #2f7a56);
-  --color-cell-reloc: light-dark(#4b9786, #31806f);
-  --color-cell-proven: light-dark(#64947b, #3f7a63);
+     (WCAG 1.4.11), so a lit cell is told apart without its neighbours.
+     EXACT, RELOC and PROVEN split by hue and lightness (emerald, cyan teal,
+     forest and mint), so a dense map separates them; check-status-colors.py holds
+     their minimum OKLab distance. */
+  --color-cell-exact: light-dark(#1f8249, #359b64);
+  --color-cell-reloc: light-dark(#258b93, #21787f);
+  --color-cell-proven: light-dark(#459873, #267e47);
+  --color-cell-library: light-dark(#a65d89, #a05a83);
   --color-cell-thunk: light-dark(#8f83b3, #7063a0);
   --color-cell-near: light-dark(#6f7fa7, #6c7ea8);
   --color-cell-stub: light-dark(#868a92, #6b6b74);

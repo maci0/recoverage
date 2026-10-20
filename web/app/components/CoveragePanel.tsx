@@ -83,8 +83,9 @@ const STATUS_INK = new Map<string, string>([
   ["NEAR", "text-st-near"],
   ["NEAR_MATCH", "text-st-near"],
   ["MATCHING", "text-st-near"],
-  ["SIZE_MISMATCH", "text-st-near"],
+  ["SIZE_MISMATCH", "text-st-fail"],
   ["STUB", "text-st-stub"],
+  ["LIBRARY", "text-st-library"],
   ["COMPILE_ERROR", "text-st-fail"],
   ["EXTRACT_ERROR", "text-st-fail"],
 ]);
