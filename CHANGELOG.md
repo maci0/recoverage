@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.4.2] - 2026-10-24
+
+### Changed
+
+- Update the hash-pinned Rebrew wheel and source provenance to 6.0.4, including
+  the audited dependency refresh and Guild workflow repairs.
+
 ## [8.4.1] - 2026-10-24
 
 ### Changed

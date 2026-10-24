@@ -89,11 +89,11 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v6.0.3", "REBREW_SHA": "daf2f74460ddb8d071f2b1761f224ea77ca43ec6"}
+_PINS = {"REBREW_REF": "v6.0.4", "REBREW_SHA": "7920ba5b882a4eda356d6f4ae2ae14d666677fb9"}
 _REBREW_WHEEL = (
-    "https://github.com/maci0/rebrew/releases/download/v6.0.3/rebrew-6.0.3-py3-none-any.whl"
+    "https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl"
 )
-_REBREW_HASH = "75eef347dce3a236d19a0349c0f801059bfbf698ce12047e9403798c445272e1"
+_REBREW_HASH = "b634d5240e533c6985fbed1f7d267959b0c551e4aee692c31b345d5012381777"
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 # What _git_lines returns for a tree git cannot answer for. A check that read
