@@ -746,8 +746,8 @@ wheels = [
 
 [[package]]
 name = "rebrew"
-version = "6.0.3"
-source = { url = "https://github.com/maci0/rebrew/releases/download/v6.0.3/rebrew-6.0.3-py3-none-any.whl" }
+version = "6.0.4"
+source = { url = "https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl" }
 dependencies = [
     { name = "capstone" },
     { name = "click" },
@@ -765,12 +765,12 @@ dependencies = [
     { name = "zstandard" },
 ]
 wheels = [
-    { url = "https://github.com/maci0/rebrew/releases/download/v6.0.3/rebrew-6.0.3-py3-none-any.whl", hash = "sha256:75eef347dce3a236d19a0349c0f801059bfbf698ce12047e9403798c445272e1" },
+    { url = "https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl", hash = "sha256:b634d5240e533c6985fbed1f7d267959b0c551e4aee692c31b345d5012381777" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "angr", marker = "extra == 'prove'", specifier = ">=10.0.4.post1,<11" },
+    { name = "angr", marker = "extra == 'prove'", specifier = ">=10.0.5,<11" },
     { name = "capstone", specifier = ">=5.0.9,<6" },
     { name = "click", specifier = ">=8.5.0,<9" },
     { name = "declib", marker = "extra == 'binsync'", specifier = ">=4.5.0,<5" },
@@ -780,7 +780,7 @@ requires-dist = [
     { name = "idna", specifier = ">=3.20,<4" },
     { name = "lief", specifier = ">=1.0.0,<2" },
     { name = "numpy", specifier = ">=2.5.4,<3" },
-    { name = "python-flirt", specifier = ">=0.10.0,<1" },
+    { name = "python-flirt", specifier = ">=0.10.2,<1" },
     { name = "rich", specifier = ">=15.0.0,<16" },
     { name = "tomlkit", specifier = ">=0.15.2,<1" },
     { name = "tree-sitter", specifier = ">=0.26.0,<1" },
@@ -833,7 +833,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-playwright", marker = "extra == 'playwright'", specifier = ">=0.9.0" },
     { name = "rcssmin", specifier = ">=1.1" },
-    { name = "rebrew", url = "https://github.com/maci0/rebrew/releases/download/v6.0.3/rebrew-6.0.3-py3-none-any.whl" },
+    { name = "rebrew", url = "https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.7" },
     { name = "typer", specifier = ">=0.27.2" },
