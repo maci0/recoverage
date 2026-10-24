@@ -58,22 +58,22 @@ export function stateSlot(state: string): number {
  * one, so hovering a cell says what the cell is instead of a raw index.
  * Verdicts keep their code casing (relumea brand guide, "Terminology"). */
 export const STATE_LABEL = [
-  "undocumented",
+  "UNDOCUMENTED",
   "EXACT",
   "RELOC",
-  "NEAR",
+  "NEAR_MATCHING",
   "STUB",
-  "padding",
+  "PADDING",
   "PROVEN",
-  "problem",
+  "PROBLEM",
   "LIBRARY",
   "SIZE_MISMATCH",
 ];
 
 /** The face a state word is set in. A verdict is a code token (relumea brand
  * guide, "Terminology"), so it takes the mono the status chip and the CLI
- * print it in; the descriptive words (`undocumented`, `padding`, `problem`)
- * are prose and stay in the sans. One rule for the pills and the legend, so
+ * print it in. All status labels use uppercase code tokens, including the
+ * aggregate labels. One rule for the pills and the legend, so
  * the two keys to one map cannot set one word two ways. */
 export function verdictFace(label: string): string {
   return label === label.toUpperCase() ? "font-mono tracking-chip" : "";
@@ -252,11 +252,11 @@ export function dimSummary(
 export const STATE_FILTERS = [
   { key: "exact", label: "EXACT", title: "Recompiled bytes identical" },
   { key: "reloc", label: "RELOC", title: "Identical except linker-filled addresses" },
-  { key: "near_match", label: "NEAR", title: "Close; the diff names the rest" },
+  { key: "near_match", label: "NEAR_MATCHING", title: "Close; the diff names the rest" },
   { key: "stub", label: "STUB", title: "Control flow still diverges" },
-  { key: "padding", label: "padding", title: "Alignment filler between functions" },
+  { key: "padding", label: "PADDING", title: "Alignment filler between functions" },
   { key: "proven", label: "PROVEN", title: "Semantic equivalence proven" },
-  { key: "problem", label: "problem", title: "Build or classification failure" },
+  { key: "problem", label: "PROBLEM", title: "Build or classification failure" },
   { key: "library", label: "LIBRARY", title: "Library attribution; verification is separate" },
   { key: "size_mismatch", label: "SIZE_MISMATCH", title: "Compiled size differs from the original" },
 ] as const;

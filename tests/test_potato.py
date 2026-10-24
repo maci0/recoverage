@@ -415,7 +415,7 @@ def test_null_va_section_renders_grid_and_panel(
     html = render_potato_url("/potato?target=NULLVA_POTATO&section=.bss")
     assert '<table id="grid"' in html, "grid rendered for a NULL-va section"
     # Cell titles show file-relative offsets: hex() of 0..16.
-    assert "0x0..0x10 | data" in html
+    assert "0x0..0x10 | DATA" in html
 
     panel = render_potato_url("/potato?target=NULLVA_POTATO&section=.bss&idx=0")
     assert "Block 0" in panel
@@ -424,15 +424,12 @@ def test_null_va_section_renders_grid_and_panel(
 
 @pytest.mark.parametrize(
     ("state", "word"),
-    [("none", "undocumented"), ("near_match", "NEAR"), ("compile_error", "COMPILE_ERROR")],
+    [("none", "UNDOCUMENTED"), ("near_match", "NEAR_MATCHING"), ("compile_error", "COMPILE_ERROR")],
 )
 def test_the_panel_names_a_state_the_way_the_legend_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, word: str
 ) -> None:
-    """The State row printed the raw state upper-cased: "NONE" beside a
-    legend and a dashboard that call it "undocumented", "NEAR_MATCH" beside
-    "NEAR". A problem state keeps its own name, which says more than the
-    legend's "problem"."""
+    """Panel and legend share canonical tokens; failures keep their specific name."""
     _write_doc(
         tmp_path,
         monkeypatch,
@@ -2619,7 +2616,7 @@ class TestV4StateColors:
         )
         # Anchor on this cell's own alt text: the sizing row in front of the
         # data row also carries bgcolor attributes.
-        anchor = html.index(f"0x0..0x1 | {state}")
+        anchor = html.index(f"0x0..0x1 | {state.upper()}")
         marker = html.rindex('bgcolor="', 0, anchor) + len('bgcolor="')
         return html[marker : html.index('"', marker)]
 
@@ -4683,13 +4680,13 @@ class TestRenderIsPinnedToOneSnapshot:
         html = render_potato_url(f"/potato?target={target}&section=.text")
         assert rewritten, "the mid-render rewrite never ran"
         assert loaded == [target], "the render loaded the documents more than once"
-        assert "0x0..0x10 | exact" in html, "the page paired the second build's cells"
-        assert "0x0..0x20 | stub" not in html
+        assert "0x0..0x10 | EXACT" in html, "the page paired the second build's cells"
+        assert "0x0..0x20 | STUB" not in html
 
         # And the rewrite was a real rebuild: the next render reads it.
         monkeypatch.setattr(potato, "_search_functions", real_search)
         after = render_potato_url(f"/potato?target={target}&section=.text")
-        assert "0x0..0x20 | stub" in after, "the mid-render rewrite was not a real rebuild"
+        assert "0x0..0x20 | STUB" in after, "the mid-render rewrite was not a real rebuild"
 
     @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
     def test_rebuild_after_the_token_is_taken_is_not_memoized(
@@ -4754,14 +4751,13 @@ class TestRenderedPageNamesAndStates:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The legend and the pills name a state the way the dashboard and the
-        CLI do: verdicts as their code tokens, and NEAR as N, never as the
-        "near-match" / M spelling no other surface used."""
+        CLI do: uppercase tokens, with NEAR_MATCHING keeping its N access key."""
         html = self._render(tmp_path, monkeypatch, "")
         legend = html[html.index('id="map"') :]
-        for token in ("EXACT", "RELOC", "NEAR", "STUB", "PROVEN"):
+        for token in ("EXACT", "RELOC", "NEAR_MATCHING", "STUB", "PROVEN", "PADDING", "PROBLEM"):
             assert f">{token}&nbsp;&nbsp;<" in legend, token
         assert "near-match" not in html
-        assert 'aria-label="NEAR, off"' in html
+        assert 'aria-label="NEAR_MATCHING, off"' in html
         assert 'accesskey="n"' in html
         assert "N:<font" in html and "M:<font" not in html
 

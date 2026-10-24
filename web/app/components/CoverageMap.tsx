@@ -248,7 +248,7 @@ export function CoverageMap({
         `Block ${count(index)}`,
         `${hex(base + (pack.starts[index] ?? 0), 8)} to ${hex(base + (pack.ends[index] ?? 0), 8)}`,
         STATE_LABEL[pack.states[index] ?? 0],
-        name === "" ? "no function" : isolate(String(name)),
+        name === "" ? "NO_FUNCTION" : isolate(String(name)),
       ].join(", ");
     },
     [pack, section.va],

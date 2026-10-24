@@ -23,7 +23,7 @@ block that covers it.
 
 | What | How |
 |---|---|
-| Defrag-style grid | One cell per chunk, colored by verdict: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` (steel blue), `STUB` (grey), problem (red), undocumented (unlit) |
+| Defrag-style grid | One cell per chunk, colored by verdict: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR_MATCHING` (steel blue), `STUB` (grey), `PROBLEM` (red), `UNDOCUMENTED` (unlit) |
 | Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
@@ -72,7 +72,7 @@ Rebrew checkout is required.
 
 ```bash
 uv venv --python 3.13
-uv pip install "https://github.com/maci0/recoverage/releases/download/v8.4.0/recoverage-8.4.0-py3-none-any.whl"
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.4.1/recoverage-8.4.1-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 
