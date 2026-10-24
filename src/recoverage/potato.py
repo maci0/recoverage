@@ -458,25 +458,24 @@ MARK_ON_DARK_SVG = (
 # states that share an existing row's colour (near_matching, verified) need no
 # entry of their own.  COLORS, not this list, is what must cover every state.
 LEGEND_ITEMS = [
-    ("none", "undocumented"),
+    ("none", "UNDOCUMENTED"),
     ("exact", "EXACT"),
     ("reloc", "RELOC"),
-    ("near_match", "NEAR"),
+    ("near_match", "NEAR_MATCHING"),
     ("stub", "STUB"),
     ("proven", "PROVEN"),
     ("library", "LIBRARY"),
     ("size_mismatch", "SIZE_MISMATCH"),
-    ("data", "data"),
-    ("thunk", "thunk"),
-    ("padding", "padding"),
-    ("compile_error", "problem"),
+    ("data", "DATA"),
+    ("thunk", "THUNK"),
+    ("padding", "PADDING"),
+    ("compile_error", "PROBLEM"),
 ]
 
 #: The word the panel's State row prints for a cell state: the legend's, so
-#: the row says "undocumented" where it said "NONE" and "NEAR" where it said
-#: "NEAR_MATCH".  A problem state keeps its own name (COMPILE_ERROR says more
-#: than the legend's "problem"), as does any state the legend does not list.
-_STATE_WORD = {state: word for state, word in LEGEND_ITEMS if word != "problem"}
+#: the row uses the same uppercase tokens as the legend. A problem state
+#: keeps its own name, as does any state the legend does not list.
+_STATE_WORD = {state: word for state, word in LEGEND_ITEMS if word != "PROBLEM"}
 
 
 # ── HTML Helpers ────────────────────────────────────────────────────────────────────────
@@ -2166,15 +2165,15 @@ def _accesskey_attr(used: set[str], key: str) -> _AccessKey:
 FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
     ("exact", "E", "EXACT"),
     ("reloc", "R", "RELOC"),
-    ("near_match", "N", "NEAR"),
+    ("near_match", "N", "NEAR_MATCHING"),
     ("stub", "S", "STUB"),
-    ("padding", "P", "padding"),
+    ("padding", "P", "PADDING"),
     # The two states the legend names that had no pill: a proven section
     # and a cell the build or the classifier failed on.  Both were
     # painted and both dimmed under every pill, so the operator looking
     # for the failures had no control to narrow the map with.
     ("proven", "V", "PROVEN"),
-    ("problem", "X", "problem"),
+    ("problem", "X", "PROBLEM"),
     ("library", "L", "LIBRARY"),
     ("size_mismatch", "Z", "SIZE_MISMATCH"),
 )
@@ -2651,7 +2650,8 @@ def _build_grid_html(
         # of the page), and the unsigned reading of a negative VA.
         title = (
             f"{hex_addr(sec_va + (cell.get('start') or 0), 1)}.."
-            f"{hex_addr(sec_va + (cell.get('end') or 0), 1)} | {state}"
+            f"{hex_addr(sec_va + (cell.get('end') or 0), 1)} | "
+            f"{_STATE_WORD.get(state.lower(), state.upper())}"
         )
         if funcs:
             title += f" | {funcs[0]}"

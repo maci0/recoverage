@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.4.1] - 2026-10-24
+
+### Changed
+
+- Display all coverage status labels in uppercase with underscores, including
+  `NEAR_MATCHING`, `PADDING`, `PROBLEM`, and `NO_FUNCTION` in both dashboards.
+
+- Update the hash-pinned Rebrew wheel and source provenance to 6.0.2.
+
 ## [8.4.0] - 2026-10-21
 
 ### Changed
