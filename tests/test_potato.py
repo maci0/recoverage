@@ -429,10 +429,7 @@ def test_null_va_section_renders_grid_and_panel(
 def test_the_panel_names_a_state_the_way_the_legend_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, word: str
 ) -> None:
-    """The State row printed the raw state upper-cased: "NONE" beside a
-    legend and a dashboard that call it "undocumented", "NEAR_MATCH" beside
-    "NEAR". A problem state keeps its own name, which says more than the
-    legend's "problem"."""
+    """Panel and legend share canonical tokens; failures keep their specific name."""
     _write_doc(
         tmp_path,
         monkeypatch,
@@ -4754,8 +4751,7 @@ class TestRenderedPageNamesAndStates:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The legend and the pills name a state the way the dashboard and the
-        CLI do: verdicts as their code tokens, and NEAR as N, never as the
-        "near-match" / M spelling no other surface used."""
+        CLI do: uppercase tokens, with NEAR_MATCHING keeping its N access key."""
         html = self._render(tmp_path, monkeypatch, "")
         legend = html[html.index('id="map"') :]
         for token in ("EXACT", "RELOC", "NEAR_MATCHING", "STUB", "PROVEN", "PADDING", "PROBLEM"):
