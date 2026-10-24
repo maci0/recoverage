@@ -4122,6 +4122,16 @@ class TestSpaStateVocabulary:
     three tables have to be the same length.
     """
 
+    def test_status_labels_are_uppercase_tokens_in_both_dashboards(self) -> None:
+        from recoverage.potato import FILTER_OPTS, LEGEND_ITEMS
+
+        labels = _array_items(_web("states.ts"), "STATE_LABEL")
+        labels.extend(label for _, label in LEGEND_ITEMS)
+        labels.extend(label for _, _, label in FILTER_OPTS)
+        assert all(re.fullmatch(r"[A-Z][A-Z0-9_]*", label) for label in labels)
+        assert "NEAR_MATCHING" in labels
+        assert "PADDING" in labels
+
     def test_state_slots_cover_every_known_cell_state(self) -> None:
         missing = sorted(known_cell_states() - set(_packed_slots()))
         assert missing == [], f"cell states the map paints as undocumented: {missing}"
@@ -4233,7 +4243,7 @@ class TestSpaStateVocabulary:
         map_source = _web("components/CoverageMap.tsx")
         assert "Block ${count(index)}" in map_source
         assert "STATE_LABEL[pack.states[index]" in map_source
-        assert "no function" in map_source
+        assert "NO_FUNCTION" in map_source
 
 
 class TestSpaNumericBoundaries:
