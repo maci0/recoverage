@@ -3276,6 +3276,16 @@ class TestBatchFunctionLookup:
         assert data["code"] == "bad_request"
         assert "not-a-va" in data["detail"]
 
+    def test_batch_nested_va_returns_a_bounded_error(self) -> None:
+        target = require_target()
+        nested = b"[" * 200 + b"0" + b"]" * 200
+        status, headers, body = self._post(target, b'{"vas": [' + nested + b"]}")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert data["detail"] == "VAs must be hex strings or integers"
+        assert len(data["error"]) < 200
+
     def test_batch_too_many_vas_400(self) -> None:
         import recoverage.api as api
 

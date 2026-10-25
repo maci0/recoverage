@@ -570,19 +570,20 @@ class TestQualifiedFlirtWheel:
 
     def test_this_environment_loads_the_qualified_module(self) -> None:
         libc, _version = platform.libc_ver()
+        abi = getattr(sys, "abiflags", "")
         if not (
             sys.platform == "linux"
             and platform.machine() == "x86_64"
             and sys.implementation.name == "cpython"
             and sys.version_info[:2] == (3, 15)
-            and sys.abiflags == ""
+            and abi == ""
             and libc == "glibc"
         ):
             pytest.skip(
                 "qualified cp315 manylinux wheel is for normal GIL glibc "
                 "CPython 3.15 linux x86_64, not "
                 f"{sys.version_info[:2]}/{sys.platform}/{platform.machine()}"
-                f"/abi={sys.abiflags!r}/libc={libc!r}"
+                f"/abi={abi!r}/libc={libc!r}"
             )
         spec = importlib.util.find_spec("flirt")
         assert spec is not None and spec.origin is not None, "python-flirt is not installed"

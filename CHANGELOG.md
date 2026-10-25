@@ -16,6 +16,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   qualified python-flirt 0.10.2+relumea.1 wheel. Other environments use that
   release's sdist. The PyPI 0.10.2 wheels are not selected.
 
+### Fixed
+
+- Reject deeply nested invalid VAs with a bounded diagnostic instead of a server error on Windows.
+
 ## [8.5.0] - 2026-10-25
 
 ### Changed

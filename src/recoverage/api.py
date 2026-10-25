@@ -17,6 +17,7 @@ import logging
 import math
 import queue
 import re
+import reprlib
 import threading
 from collections.abc import Callable, Generator, Mapping, Sequence
 from heapq import nlargest, nsmallest
@@ -2354,7 +2355,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
         )
 
     def invalid_va(entry: Any, detail: str) -> HTTPResponse:
-        return _json_err(400, {"error": f"invalid VA: {entry!r}", "detail": detail})
+        return _json_err(400, {"error": f"invalid VA: {reprlib.repr(entry)}", "detail": detail})
 
     va_ints: list[int] = []
     for entry in vas:
