@@ -303,7 +303,7 @@ def test_an_unreadable_document_is_logged_on_one_line(
     try:
         broken = db / "coverage-a\nb\u2028c.toml"
         broken.write_text("version = [\n", encoding="utf-8")
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pytest.skip("the filesystem cannot name a file with a line break")
 
     with caplog.at_level(logging.WARNING, logger="recoverage"):

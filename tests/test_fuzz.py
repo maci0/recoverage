@@ -557,7 +557,7 @@ def _requested_vas(seed: bytes) -> list[int]:
     """The VAs a body asks for, in the order ``_batch_request_vas`` keeps."""
     try:
         payload = json.loads(seed.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except UnicodeDecodeError, json.JSONDecodeError, RecursionError:
         return []
     if not isinstance(payload, dict) or not isinstance(payload.get("vas"), list):
         return []
@@ -2655,7 +2655,7 @@ class TestPathAndQueryDecoders:
             )
             try:
                 expected = raw.encode("latin-1").decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
+            except UnicodeEncodeError, UnicodeDecodeError:
                 expected = raw
             assert once == expected, f"{data!r}: decoded to {once!r}, expected {expected!r}"
             if raw.isascii():
@@ -4735,7 +4735,7 @@ def _escapes(candidate: Path, project_root: Path) -> bool:
     """Whether *candidate* names something outside *project_root*."""
     try:
         resolved = candidate.resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return True
     return not resolved.is_relative_to(project_root.resolve())
 
@@ -5209,7 +5209,7 @@ class TestFreshnessStamp:
             target.write_text("x")
             try:
                 os.utime(target, ns=(seconds * srv._NS_PER_SECOND,) * 2)
-            except (OSError, OverflowError, ValueError):
+            except OSError, OverflowError, ValueError:
                 # A platform whose own time_t cannot hold it.  The conversion
                 # itself is covered by the arm above on every platform; this
                 # one only asserts the round trip through a real file.

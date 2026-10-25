@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-10-25
+
+### Changed
+
+- **Breaking:** Require Python 3.14 or newer; upgrade older environments before installing.
+- Refresh all locked dependencies to their latest stable releases and use Python 3.14 exception syntax.
+- Use Rebrew 6.2.0 for the matching Python 3.14 runtime and dependency refresh.
+
 ## [8.4.2] - 2026-10-24
 
 ### Changed

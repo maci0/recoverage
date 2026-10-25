@@ -2313,7 +2313,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
         )
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except UnicodeDecodeError, json.JSONDecodeError, RecursionError:
         # RecursionError is a decode failure like the other two, not a crash:
         # the C scanner nests one frame per bracket, so `{"vas": [[[...` runs
         # out of stack in a body a kilobyte long. The byte cap bounds the body,

@@ -1583,7 +1583,7 @@ def handle_potato() -> bytes | Any:
         )
         return _db_unavailable_page(unreadable_documents())
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
-    except (OSError, ValueError, KeyError, TypeError):
+    except OSError, ValueError, KeyError, TypeError:
         _log.exception(
             "Potato mode render failed serving %s %s",
             _log_safe(request.method),
@@ -3363,7 +3363,7 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
         return
     try:
         wanted = int(fn_va_resolved)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         # A VA in a form this lookup cannot bind is a panel with no verify row,
         # not a failed request.
         return

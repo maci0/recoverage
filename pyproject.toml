@@ -2,7 +2,7 @@
 # setuptools 77 is the first release implementing PEP 639 (SPDX license
 # expressions); the `license = "MIT"` field below fails validation on older
 # versions, so the floor must stay at or above that.
-requires = ["setuptools>=84.2.0"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,7 +13,7 @@ description = "Coverage dashboard for binary-matching decompilation projects"
 # the published page shows the bare description. setuptools ships README.md in
 # the sdist either way; this is what puts it in the metadata.
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "MIT"
 # NOTICE carries the grants for the third-party code `make web-build` compiles
 # into the browser assets, which ship inside the wheel. Without it here a wheel
@@ -36,7 +36,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Disassemblers",
 ]
@@ -47,7 +46,7 @@ dependencies = [
     "rcssmin>=1.1",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
-    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl#sha256=b634d5240e533c6985fbed1f7d267959b0c551e4aee692c31b345d5012381777",
+    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.2.0/rebrew-6.2.0-py3-none-any.whl#sha256=7a1b6932d9731bbfa4ce43f05e1bc6a56720cfbbd579ccf55a6a8b35f51cd228",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",
@@ -132,7 +131,7 @@ addopts = "--ignore=tests/test_playwright.py --basetemp=.pytest-tmp"
 filterwarnings = ["error"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 
 [tool.mypy]
@@ -159,7 +158,7 @@ files = [
     "tests/test_target_files.py",
     "tests/test_documents.py",
 ]
-python_version = "3.13"
+python_version = "3.14"
 # Strict, minus the two checks this tree cannot pass:
 #   disallow_untyped_decorators — every route handler carries @app.route /
 #   @app.get, and bottle is untyped, so the decorator erases the signature.

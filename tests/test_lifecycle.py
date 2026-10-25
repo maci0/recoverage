@@ -93,7 +93,7 @@ def _own_zombie_pids() -> set[int]:
             stat = (entry / "stat").read_text()
             fields = stat[stat.rindex(")") + 1 :].split()
             state, ppid = fields[0], int(fields[1])
-        except (OSError, ValueError, IndexError):
+        except OSError, ValueError, IndexError:
             continue
         if ppid == me and state == "Z":
             zombies.add(int(entry.name))

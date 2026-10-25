@@ -403,3 +403,9 @@ of nothing.
 Do: unset the variable rather than setting it empty.
 `RECOVERAGE_TOKEN` is the one deliberate exception: empty there means
 authentication is off, and that is intended.
+
+## [8.5.0]
+
+Requires Python 3.14 or newer. Recreate older virtual environments with
+`uv sync --python 3.14.9` before upgrading. This runtime migration ships as a
+minor release at the maintainer's request.

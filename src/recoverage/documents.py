@@ -179,7 +179,7 @@ def _read_cached(path: Path, digest: str) -> dict[str, Any] | None:
     try:
         with slot.open("rb") as fh:
             entry = json.load(fh)
-    except (OSError, ValueError, RecursionError):
+    except OSError, ValueError, RecursionError:
         # Missing, unreadable, or not JSON: each is a miss, and the parse
         # that follows rewrites the slot.
         return None

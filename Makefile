@@ -71,7 +71,7 @@ export PYTHONHASHSEED := $(PYTHON_HASH_SEED)
 # installs the same version: setup-uv has no version-file input, so ci.yml
 # carries the literal and tests/test_supply_chain.py fails when the two
 # disagree.  Bump both together.
-UV_VERSION ?= 0.13.3
+UV_VERSION ?= 0.13.5
 
 # The interpreter pin, read from the file that owns it rather than restated
 # here, so `make help` cannot name a version .python-version no longer has.
@@ -86,7 +86,7 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # Required Rebrew metadata reader version, pinned by the public artifact URL.
-REBREW_FLOOR ?= 6.0.4
+REBREW_FLOOR ?= 6.2.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and

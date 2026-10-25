@@ -348,7 +348,10 @@ class TestDeclaredFloorsAreRecorded:
         classifiers = project["classifiers"]
         assert f"Programming Language :: Python :: {floor[1]}" in classifiers
         assert f"Programming Language :: Python :: {floor[1]}.{minor}" in classifiers
-        assert f"Programming Language :: Python :: {floor[1]}.{minor + 1}" in classifiers
+        for classifier in classifiers:
+            claimed = re.fullmatch(r"Programming Language :: Python :: (\d+)\.(\d+)", classifier)
+            if claimed:
+                assert (int(claimed[1]), int(claimed[2])) >= (int(floor[1]), minor)
 
     def test_unreleased_uses_canonical_section_headings(self) -> None:
         """Keep a Changelog headings, so a reader's tool groups the entries.

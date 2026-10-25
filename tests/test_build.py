@@ -734,7 +734,7 @@ class TestShippedMetadataNamesItsAuthor:
         )
 
     def test_the_python_3_only_classifier_is_declared(self) -> None:
-        """`requires-python = ">=3.13"` refuses every other line at install
+        """`requires-python = ">=3.14"` refuses every other line at install
         time; the classifier is the same statement for a reader browsing the
         index, and a package with only per-minor entries reads as if it also
         supports 2.x.

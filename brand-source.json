@@ -1,6 +1,6 @@
 {
   "repository": "relumea/relumea-brand",
-  "commit": "bfa9207311595f97d079d5b8a6c93e5f408dec60",
+  "commit": "36c575575f9186181664f73e320680af9c828246",
   "files": {
     "web/app/system/tokens.css": "5fcb05e6f7a9be154cdc526fa5e729ec4d93052bf10a6bc74dee392423dce24f",
     "web/app/system/icons/Icon.tsx": "f9126bf2a0ece973b5fee43e871c60d1596ae825b579a4772e2a9a906933738d",

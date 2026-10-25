@@ -136,7 +136,7 @@ def _have_html5_tidy() -> bool:
     """HTML Tidy 5 understands <main>; Apple's 2006 tidy does not."""
     try:
         proc = subprocess.run(["tidy", "-version"], capture_output=True, timeout=5)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError, subprocess.TimeoutExpired:
         return False
     text = b"".join((proc.stdout, proc.stderr)).decode("utf-8", "replace").lower()
     return "version 5" in text

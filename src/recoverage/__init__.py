@@ -41,4 +41,4 @@ and that every module here is named in this map, so a new module has to
 declare where it sits.
 """
 
-__version__ = "8.4.2"
+__version__ = "8.5.0"

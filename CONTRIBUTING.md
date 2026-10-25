@@ -6,7 +6,7 @@ edit-test loop, and the one command that reproduces CI before you push.
 ## Bootstrap (clean clone)
 
 Needs [uv](https://docs.astral.sh/uv/) 0.13.1 or newer. The interpreter is
-pinned in `.python-version` (3.13.16); uv downloads it if necessary.
+pinned in `.python-version` (3.14.9); uv downloads it if necessary.
 
 ```bash
 make setup          # uv sync --locked --extra dev
@@ -34,7 +34,7 @@ Use `--no-sync` for that development session. A normal `uv sync` or `uv run`
 restores the public hash-pinned wheel. No path override is committed.
 
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
-1.4.3) and a JDK on `PATH`, since `vnu-jar` validates the HTML and CSS
+1.4.4) and a JDK on `PATH`, since `vnu-jar` validates the HTML and CSS
 under `java`. CI tests Temurin 27. `make web-lint` names whichever is missing.
 
 `make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on

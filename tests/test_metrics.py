@@ -1006,7 +1006,7 @@ class TestProcessGrowthIsBounded:
     def _source(self, module: ModuleType) -> str:
         try:
             return inspect.getsource(module)
-        except (OSError, TypeError):
+        except OSError, TypeError:
             return ""
 
     def _growing_containers(self) -> dict[str, str]:

@@ -89,11 +89,11 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v6.0.4", "REBREW_SHA": "7920ba5b882a4eda356d6f4ae2ae14d666677fb9"}
+_PINS = {"REBREW_REF": "v6.2.0", "REBREW_SHA": "ecdd8715e1f18b6fb564a9e47957fcfae949380b"}
 _REBREW_WHEEL = (
-    "https://github.com/maci0/rebrew/releases/download/v6.0.4/rebrew-6.0.4-py3-none-any.whl"
+    "https://github.com/maci0/rebrew/releases/download/v6.2.0/rebrew-6.2.0-py3-none-any.whl"
 )
-_REBREW_HASH = "b634d5240e533c6985fbed1f7d267959b0c551e4aee692c31b345d5012381777"
+_REBREW_HASH = "7a1b6932d9731bbfa4ce43f05e1bc6a56720cfbbd579ccf55a6a8b35f51cd228"
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 # What _git_lines returns for a tree git cannot answer for. A check that read
@@ -420,7 +420,7 @@ class TestRbrewPin:
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
+            except UnicodeDecodeError, OSError:
                 continue
             for name, value in pins.items():
                 assert value not in text, f"{path.relative_to(_ROOT)} restates {name} ({value})"
@@ -526,7 +526,7 @@ def _git_lines(*args: str) -> list[str]:
             timeout=30,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return [_NO_GIT]
     if proc.returncode != 0:
         return [_NO_GIT]
