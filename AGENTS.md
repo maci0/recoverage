@@ -257,6 +257,14 @@ and refuses to overwrite uncommitted work. To test a chosen local checkout,
 use `uv pip install --editable ../rebrew` followed by `uv run --no-sync ...`.
 A normal sync restores the public wheel; never commit an editable path override.
 
+On normal GIL CPython 3.15, glibc, linux x86_64, `[tool.uv]
+override-dependencies` selects the published python-flirt 0.10.2+relumea.1
+manylinux wheel, and `uv sync` reapplies that selection. The marker is
+`python_version == '3.15'` plus platform and interpreter, so 3.16 does not
+take the cp315 wheel. It cannot name glibc or the free-threaded ABI: musl
+and 3.15t are not qualified. Every other resolution uses the maintained
+sdist from the same release, not the PyPI 0.10.2 wheels.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pushes to `main` and pull requests
@@ -303,12 +311,12 @@ document to the fields an SPDX reader requires, the versions `bun.lock`
 resolved, the digests it pinned, the licenses `NOTICE` credits, and the
 reproducible stamp.
 
-The interpreter is pinned in `.python-version` (3.14.9), which is what uv builds
+The interpreter is pinned in `.python-version` (3.15.1), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their
 `setup-python` steps take `python-version-file: .python-version`, and `bun`
 comes from `package.json`'s `packageManager` through `bun-version-file`. No
 job restates either version; `tests/test_supply_chain.py` fails if a literal
-comes back. The test matrix uses the selected 3.14 patch; its `include` entries name 3.14.9
+comes back. The test matrix uses the selected 3.15 patch; its `include` entries name 3.15.1
 because make is not part of the Windows runner's toolchain, so that job spells
 out the pytest command instead of calling `make test`.
 
@@ -598,7 +606,7 @@ Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- Rebrew 6.2.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
+- Rebrew 6.3.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
   live accounting, format-3 function metadata, source provenance and portable exports
 - `rich>=15.0.0` (terminal tables)
 - `typer>=0.27.2` (CLI framework)
@@ -666,16 +674,15 @@ explicit upstream development only; it is never the default package source.
   fails when the two archives differ, printing both hashes and adding
   `diffoscope`'s breakdown when the runner image carries it (it does not, so
   the hashes are what a reader gets).
-  The copy gets `../rebrew` as a symlink for the same reason the preflight
-  exists, and `SOURCE_DATE_EPOCH` is pinned to a constant in that job so the
-  two builds cannot disagree over anything but the tree. The step removes
+  `SOURCE_DATE_EPOCH` is exported from the commit timestamp for both builds,
+  matching the local release build even though the copy has no `.git`. The step removes
   every destination under `RUNNER_TEMP` before it extracts or links into it:
   both merge into what they find, and that directory outlives one execution of
   the step on a self-hosted runner or a retry, so the second build would
   otherwise package a file the tracked tree no longer has and the comparison
   would report a difference that is not one.
 
-- Python 3.14+, ruff for linting, mypy for types, 100-char line length.
+- Python 3.15+, ruff for linting, mypy for types, 100-char line length.
   The type gate is `strict = true` over `src/recoverage` and `tools/`, with
   two checks off and the reason next to them in `[tool.mypy]`:
   `disallow_untyped_decorators` (every route handler wears a `@app.route`,
@@ -1883,4 +1890,7 @@ explicit upstream development only; it is never the default package source.
   corpus entry there, not a new dependency.
 
 The maintainer selected 8.5.0 as a minor release for the Python 3.14 floor
-migration; this runtime migration is the only exception to the major-release rule.
+migration; explicitly selected runtime migrations are exceptions to the major-release rule.
+
+The maintainer also selected 8.6.0 as a minor release for the Python 3.15
+floor migration; this runtime migration has the same release-policy exception.

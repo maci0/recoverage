@@ -409,3 +409,9 @@ authentication is off, and that is intended.
 Requires Python 3.14 or newer. Recreate older virtual environments with
 `uv sync --python 3.14.9` before upgrading. This runtime migration ships as a
 minor release at the maintainer's request.
+
+## [8.6.0]
+
+Requires Python 3.15 or newer. Recreate older virtual environments with
+`uv sync --python 3.15.1` before upgrading. This runtime migration ships as a
+minor release at the maintainer's request.

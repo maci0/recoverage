@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.6.0] - 2026-10-25
+
+### Changed
+
+- **Breaking:** Require Python 3.15 or newer; recreate older environments before installing.
+- Select Python 3.15.1 for contributor environments and all CI jobs.
+- Use the verified Rebrew 6.3.0 release for the matching Python 3.15 runtime.
+- On normal GIL CPython 3.15, glibc, linux x86_64, `uv sync` keeps the
+  qualified python-flirt 0.10.2+relumea.1 wheel. Other environments use that
+  release's sdist. The PyPI 0.10.2 wheels are not selected.
+
 ## [8.5.0] - 2026-10-25
 
 ### Changed

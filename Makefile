@@ -86,7 +86,7 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # Required Rebrew metadata reader version, pinned by the public artifact URL.
-REBREW_FLOOR ?= 6.2.0
+REBREW_FLOOR ?= 6.3.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and

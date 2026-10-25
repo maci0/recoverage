@@ -790,6 +790,9 @@ class TestReproducibleBuild:
         )
         assert 'mkdir -p -- "$first" "$work"' in step, "the cleared trees are not recreated"
         assert "ln -s" not in step, "the rebuild still substitutes a sibling source checkout"
+        assert 'export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"' in step, (
+            "CI and the local release must build with the same commit timestamp"
+        )
 
     def test_the_build_recipe_refuses_an_asset_it_did_not_declare(self) -> None:
         """`[tool.setuptools.package-data]` is the glob `assets/*`, so the

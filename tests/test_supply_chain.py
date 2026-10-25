@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import ast
 import base64
+import hashlib
 import importlib.metadata
 import importlib.util
 import json
+import platform
 import re
 import subprocess
 import sys
@@ -89,11 +91,36 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v6.2.0", "REBREW_SHA": "ecdd8715e1f18b6fb564a9e47957fcfae949380b"}
+_PINS = {"REBREW_REF": "v6.3.0", "REBREW_SHA": "5a061567252087a6c9c96dd5a86eb62513ce5d2a"}
 _REBREW_WHEEL = (
-    "https://github.com/maci0/rebrew/releases/download/v6.2.0/rebrew-6.2.0-py3-none-any.whl"
+    "https://github.com/maci0/rebrew/releases/download/v6.3.0/rebrew-6.3.0-py3-none-any.whl"
 )
-_REBREW_HASH = "7a1b6932d9731bbfa4ce43f05e1bc6a56720cfbbd579ccf55a6a8b35f51cd228"
+_REBREW_HASH = "905f5968ad7e759062ab3430166e66546d943aa4f0fb54ec032ddb7e406e7a85"
+# Qualified native wheel for normal GIL CPython 3.15 on glibc linux x86_64.
+# The marker cannot name glibc or the free-threaded ABI.
+_FLIRT_WHEEL = (
+    "https://github.com/maci0/lancelot/releases/download/"
+    "python-flirt-v0.10.2-relumea.1/"
+    "python_flirt-0.10.2%2Brelumea.1-cp315-cp315-manylinux_2_28_x86_64.whl"
+    "#sha256=d5ba895cf144a69be1e93d7ff6edecd403660a9b544d1050c3e024569e9a055a"
+)
+_FLIRT_SDIST = (
+    "https://github.com/maci0/lancelot/releases/download/"
+    "python-flirt-v0.10.2-relumea.1/"
+    "python_flirt-0.10.2%2Brelumea.1.tar.gz"
+    "#sha256=5ad7a93c992d33478d97b8ce874fa7d5b92a121a949cd2a7e8f589e1a48fff01"
+)
+_FLIRT_MARKER = (
+    "sys_platform == 'linux' and platform_machine == 'x86_64' "
+    "and implementation_name == 'cpython' and python_version == '3.15'"
+)
+_FLIRT_PORTABLE_MARKER = (
+    "sys_platform != 'linux' or platform_machine != 'x86_64' "
+    "or implementation_name != 'cpython' or python_version != '3.15'"
+)
+_FLIRT_MODULE_HASH = "4bca0775a106b1e7ff0ed162ddcbe69872f0261ca90d942b73cbe59093f1467c"
+_FLIRT_OVERRIDE = f"python-flirt @ {_FLIRT_WHEEL} ; {_FLIRT_MARKER}"
+_FLIRT_PORTABLE = f"python-flirt @ {_FLIRT_SDIST} ; {_FLIRT_PORTABLE_MARKER}"
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 # What _git_lines returns for a tree git cannot answer for. A check that read
@@ -445,6 +472,127 @@ class TestRbrewPin:
             assert pinned.group(1) == _default(
                 _MAKEFILE.read_text(encoding="utf-8"), "UV_VERSION"
             ), "ci.yml installs a different uv than the Makefile's UV_VERSION"
+
+
+class TestQualifiedFlirtWheel:
+    """Normal GIL CPython 3.15 on glibc linux x86_64 keeps one native module.
+
+    The marker is `python_version == '3.15'`, so 3.16 does not take the cp315
+    wheel. It cannot name glibc or the free-threaded ABI, and this test does
+    not treat a musl or 3.15t match as qualification. Every other resolution
+    is the maintained sdist from the same release, not the PyPI 0.10.2 wheels.
+    """
+
+    def test_the_override_is_marked_and_hash_pinned(self) -> None:
+        manifest = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
+        overrides = manifest["tool"]["uv"]["override-dependencies"]
+        assert overrides == [_FLIRT_OVERRIDE, _FLIRT_PORTABLE]
+        joined = "".join(overrides)
+        assert "rebrew" not in joined
+        assert "python_full_version" not in joined
+        assert "files.pythonhosted.org" not in joined
+        assert ">=0.10.2" not in joined
+        lock = (_ROOT / "uv.lock").read_text(encoding="utf-8")
+        assert "d5ba895cf144a69be1e93d7ff6edecd403660a9b544d1050c3e024569e9a055a" in lock
+        assert "5ad7a93c992d33478d97b8ce874fa7d5b92a121a949cd2a7e8f589e1a48fff01" in lock
+        assert "f180d7fcdc110cbc5197d27c58fe7cd57adc2eead0a0b562d47ab0b0a85a3b20" not in lock
+
+    def test_the_marker_selects_the_wheel_only_on_cpython_315_linux_x86_64(self) -> None:
+        """3.16, macOS and Windows take the maintained sdist, not the cp315 wheel."""
+        from packaging.markers import Marker
+
+        wheel = Marker(_FLIRT_MARKER)
+        portable = Marker(_FLIRT_PORTABLE_MARKER)
+
+        def env(**values: str) -> dict[str, str]:
+            base = {
+                "python_version": "3.15",
+                "python_full_version": "3.15.1",
+                "implementation_name": "cpython",
+                "sys_platform": "linux",
+                "platform_machine": "x86_64",
+            }
+            base.update(values)
+            return base
+
+        cases = {
+            "linux-3.15": env(),
+            "linux-3.16": env(python_version="3.16", python_full_version="3.16.0"),
+            "darwin-3.15": env(sys_platform="darwin", platform_machine="arm64"),
+            "windows-3.15": env(sys_platform="win32", platform_machine="AMD64"),
+        }
+        assert wheel.evaluate(cases["linux-3.15"])
+        assert not portable.evaluate(cases["linux-3.15"])
+        for name in ("linux-3.16", "darwin-3.15", "windows-3.15"):
+            assert not wheel.evaluate(cases[name]), name
+            assert portable.evaluate(cases[name]), name
+        # No ABI or libc term: a 3.15t or musl host can match, and that match
+        # is not a qualification of those builds.
+        assert "glibc" not in _FLIRT_MARKER and "musllinux" not in _FLIRT_WHEEL
+
+    def test_the_lock_sends_3_16_and_other_platforms_to_the_sdist(self) -> None:
+        """The locked fork for 3.16, macOS and Windows is the maintained sdist."""
+        from packaging.markers import Marker
+
+        lock = tomllib.loads((_ROOT / "uv.lock").read_text(encoding="utf-8"))
+        forks = [pkg for pkg in lock["package"] if pkg["name"] == "python-flirt"]
+        wheel = next(pkg for pkg in forks if pkg["source"]["url"].endswith(".whl"))
+        sdist = next(pkg for pkg in forks if pkg["source"]["url"].endswith(".tar.gz"))
+        assert wheel["wheels"][0]["hash"] == (
+            "sha256:d5ba895cf144a69be1e93d7ff6edecd403660a9b544d1050c3e024569e9a055a"
+        )
+        assert sdist["sdist"]["hash"] == (
+            "sha256:5ad7a93c992d33478d97b8ce874fa7d5b92a121a949cd2a7e8f589e1a48fff01"
+        )
+
+        def matches(markers: list[str], **values: str) -> bool:
+            env = {
+                "python_version": "3.15",
+                "python_full_version": "3.15.1",
+                "implementation_name": "cpython",
+                "sys_platform": "linux",
+                "platform_machine": "x86_64",
+            }
+            env.update(values)
+            return any(Marker(marker).evaluate(env) for marker in markers)
+
+        wheel_markers = wheel["resolution-markers"]
+        sdist_markers = sdist["resolution-markers"]
+        assert matches(wheel_markers)
+        assert not matches(sdist_markers)
+        for values in (
+            {"python_version": "3.16", "python_full_version": "3.16.0"},
+            {"sys_platform": "darwin", "platform_machine": "arm64"},
+            {"sys_platform": "win32", "platform_machine": "AMD64"},
+        ):
+            assert not matches(wheel_markers, **values)
+            assert matches(sdist_markers, **values)
+
+    def test_this_environment_loads_the_qualified_module(self) -> None:
+        libc, _version = platform.libc_ver()
+        if not (
+            sys.platform == "linux"
+            and platform.machine() == "x86_64"
+            and sys.implementation.name == "cpython"
+            and sys.version_info[:2] == (3, 15)
+            and sys.abiflags == ""
+            and libc == "glibc"
+        ):
+            pytest.skip(
+                "qualified cp315 manylinux wheel is for normal GIL glibc "
+                "CPython 3.15 linux x86_64, not "
+                f"{sys.version_info[:2]}/{sys.platform}/{platform.machine()}"
+                f"/abi={sys.abiflags!r}/libc={libc!r}"
+            )
+        spec = importlib.util.find_spec("flirt")
+        assert spec is not None and spec.origin is not None, "python-flirt is not installed"
+        origin = Path(spec.origin)
+        modules = list(origin.parent.glob("flirt.cpython-315-x86_64-linux-gnu.so"))
+        if origin.name == "flirt.cpython-315-x86_64-linux-gnu.so":
+            modules.append(origin)
+        assert modules, f"qualified module missing beside {origin}"
+        digest = hashlib.sha256(modules[0].read_bytes()).hexdigest()
+        assert digest == _FLIRT_MODULE_HASH, modules[0]
 
 
 class TestSiblingCheckoutIsNotATrackedLink:

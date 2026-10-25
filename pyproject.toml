@@ -13,7 +13,7 @@ description = "Coverage dashboard for binary-matching decompilation projects"
 # the published page shows the bare description. setuptools ships README.md in
 # the sdist either way; this is what puts it in the metadata.
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 license = "MIT"
 # NOTICE carries the grants for the third-party code `make web-build` compiles
 # into the browser assets, which ship inside the wheel. Without it here a wheel
@@ -36,7 +36,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Disassemblers",
 ]
 dependencies = [
@@ -46,7 +46,7 @@ dependencies = [
     "rcssmin>=1.1",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
-    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.2.0/rebrew-6.2.0-py3-none-any.whl#sha256=7a1b6932d9731bbfa4ce43f05e1bc6a56720cfbbd579ccf55a6a8b35f51cd228",
+    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.3.0/rebrew-6.3.0-py3-none-any.whl#sha256=905f5968ad7e759062ab3430166e66546d943aa4f0fb54ec032ddb7e406e7a85",
     "rich>=15.0.0",
     "typer>=0.27.2",
     "zstandard>=0.22",
@@ -61,6 +61,7 @@ Issues = "https://github.com/maci0/recoverage/issues"
 [project.optional-dependencies]
 dev = [
     "mypy>=1.14",
+    "packaging>=26.3",
     "pytest>=9.1.1",
     "ruff>=0.16.7",
 ]
@@ -115,6 +116,17 @@ recoverage = ["assets/*", "py.typed"]
 
 [tool.uv]
 package = true
+# Managed scope is normal GIL CPython 3.15 on glibc linux x86_64. `uv sync`
+# reapplies the override, so a later sync cannot swap in another build of
+# the same version. `python_version == '3.15'` keeps the cp315 wheel off
+# 3.16. PEP 508 cannot name glibc or the free-threaded ABI, so a musl or
+# 3.15t host that matches the marker is not qualified. The complement is
+# the maintained sdist, not the PyPI 0.10.2 wheels, which do not install
+# on CPython 3.15.
+override-dependencies = [
+  "python-flirt @ https://github.com/maci0/lancelot/releases/download/python-flirt-v0.10.2-relumea.1/python_flirt-0.10.2%2Brelumea.1-cp315-cp315-manylinux_2_28_x86_64.whl#sha256=d5ba895cf144a69be1e93d7ff6edecd403660a9b544d1050c3e024569e9a055a ; sys_platform == 'linux' and platform_machine == 'x86_64' and implementation_name == 'cpython' and python_version == '3.15'",
+  "python-flirt @ https://github.com/maci0/lancelot/releases/download/python-flirt-v0.10.2-relumea.1/python_flirt-0.10.2%2Brelumea.1.tar.gz#sha256=5ad7a93c992d33478d97b8ce874fa7d5b92a121a949cd2a7e8f589e1a48fff01 ; sys_platform != 'linux' or platform_machine != 'x86_64' or implementation_name != 'cpython' or python_version != '3.15'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -131,7 +143,7 @@ addopts = "--ignore=tests/test_playwright.py --basetemp=.pytest-tmp"
 filterwarnings = ["error"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py315"
 line-length = 100
 
 [tool.mypy]
@@ -158,7 +170,7 @@ files = [
     "tests/test_target_files.py",
     "tests/test_documents.py",
 ]
-python_version = "3.14"
+python_version = "3.15"
 # Strict, minus the two checks this tree cannot pass:
 #   disallow_untyped_decorators — every route handler carries @app.route /
 #   @app.get, and bottle is untyped, so the decorator erases the signature.

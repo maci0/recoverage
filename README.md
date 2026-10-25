@@ -67,12 +67,12 @@ glance without loading the full SPA.
 ## Installation
 
 Install the published GitHub wheel into a virtual environment. Its dependency
-metadata fetches the exact hash-pinned Rebrew 5 wheel automatically; no local
+metadata fetches the exact hash-pinned Rebrew wheel automatically; no local
 Rebrew checkout is required.
 
 ```bash
-uv venv --python 3.14
-uv pip install "https://github.com/maci0/recoverage/releases/download/v8.4.1/recoverage-8.4.1-py3-none-any.whl"
+uv venv --python 3.15.1
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.6.0/recoverage-8.6.0-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 
@@ -911,11 +911,11 @@ check.
 
 | Job | Runner | What it enforces |
 |-----|--------|------------------|
-| `lint` | ubuntu, Python 3.14 | `ruff format --check`, `ruff check` and `mypy` (strict) over `src/`, `tools/`, plus `ruff check` over `tests/`, then `shellcheck` and `yamllint` |
-| `web-lint` | ubuntu, Python 3.14, bun 1.4.4, temurin 27 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, the Nu Html Checker over every static and served HTML/CSS asset, then `tsc --noEmit` over the strict `web/tsconfig.json` |
-| `test` | ubuntu 3.14, macos 3.14, windows 3.14 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
-| `build` | ubuntu, Python 3.14 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
-| `smoke` | ubuntu, Python 3.14 | boots `recoverage serve` against synthetic coverage documents and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt document to prove it reports `degraded` instead of healthy |
+| `lint` | ubuntu, Python 3.15 | `ruff format --check`, `ruff check` and `mypy` (strict) over `src/`, `tools/`, plus `ruff check` over `tests/`, then `shellcheck` and `yamllint` |
+| `web-lint` | ubuntu, Python 3.15, bun 1.4.4, temurin 27 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, the Nu Html Checker over every static and served HTML/CSS asset, then `tsc --noEmit` over the strict `web/tsconfig.json` |
+| `test` | ubuntu 3.15, macos 3.15, windows 3.15 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
+| `build` | ubuntu, Python 3.15 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
+| `smoke` | ubuntu, Python 3.15 | boots `recoverage serve` against synthetic coverage documents and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt document to prove it reports `degraded` instead of healthy |
 | `sbom` | ubuntu | Three build artifacts: `make python-sbom` (`uv export --locked --all-extras --hashes`) for the exact resolved Python tree behind a given build plus the Rebrew public artifact’s source tag and commit, and `make browser-sbom` for the npm packages `make web-build` compiles into the shipped browser assets, each with the version and tarball digest `bun.lock` pinned, plus the same browser half as an SPDX 2.3 document (`recoverage-browser-spdx`) a vulnerability scanner ingests, which carries the resolved versions, the digests and the grants `NOTICE` credits. The `lint` job runs `make license-inventory`, which reads the licenses off the resolved tree's own metadata and refuses anything that is not permissive |
 
 Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs
