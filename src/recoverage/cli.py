@@ -2003,7 +2003,7 @@ def export(
     The rows are the only thing on stdout, so a redirect or a pipe gets
     clean data. Exits 1 when the coverage directory holds no document or
     --target names a target no build has written, and the report goes to
-    stderr (to stdout as a JSON object under --format json).
+    stderr (as one JSON error object under --format json).
 
     --json is the spelling every other reporting command takes (stats,
     check, config), and it means --format json. Naming both, with a --format

@@ -56,12 +56,14 @@ recoverage/
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
+│   ├── REFERENCE.md        # CLI, configuration, HTTP API and WSGI hosting reference
 │   ├── USER_STORIES.md     # User stories with acceptance criteria
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── UPGRADING.md        # Before/after for every major that broke a consumer
 │   ├── ideas.md            # Future improvement ideas
 │   ├── RECOVERY.md         # Backup/restore runbook: what state exists, RPO/RTO, the
 │   │                        #   restore drill
+│   ├── archive/            # Dated logs moved out of current docs (threat model review log)
 │   ├── mascot.jpg          # The raccoon detective the README shows
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint_html.py, smoke.py, payload_budget.py,

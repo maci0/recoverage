@@ -193,11 +193,11 @@ def test_the_composition_root_wires_every_documented_route() -> None:
     """`recoverage.webapp.app` is what a WSGI host mounts, and it is complete.
 
     The composition root is the only import that mounts every route: importing
-    `recoverage.server` alone registers none, which the README now says in as
+    `recoverage.server` alone registers none, which docs/REFERENCE.md says in as
     many words. A route added to a route module without the root being reached
     (a module dropped from `webapp`, a route registered on a second app object)
     would leave a documented endpoint answering 404 in a mounted deployment
-    and nothing else in the suite would notice, so the table the README prints
+    and nothing else in the suite would notice, so the table docs/REFERENCE.md prints
     is read back off the app object.
     """
     documented = {
@@ -228,10 +228,10 @@ def test_the_composition_root_wires_every_documented_route() -> None:
 
 
 def test_an_unconfigured_mount_is_the_documented_posture() -> None:
-    """`configure_security()`'s defaults are what the README tells a WSGI host.
+    """`configure_security()`'s defaults are what docs/REFERENCE.md tells a WSGI host.
 
     A host that mounts the app and forgets the call gets no token, no CORS and
-    no `Host` allowlist, and the README documents that as the loopback
+    no `Host` allowlist, and docs/REFERENCE.md documents that as the loopback
     posture. If the defaults ever tighten, this fails and the prose is what has
     to change — an app whose default silently became remote-safe would not be
     wrong, but the paragraph would be.

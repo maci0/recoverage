@@ -3214,7 +3214,7 @@ class TestBatchFunctionLookup:
     def test_every_api_error_carries_the_full_envelope(self) -> None:
         """error + code + detail, whatever the endpoint or the status.
 
-        The README documents the trio as the contract every /api/* failure
+        docs/REFERENCE.md documents the trio as the contract every /api/* failure
         answers, so a handler that raises _json_err without one of the keys
         must not be able to ship.
         """

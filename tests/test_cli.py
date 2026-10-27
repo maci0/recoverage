@@ -1360,7 +1360,7 @@ class TestBrokenProjectFile:
 
 class TestCheckMissingDbExitCode:
     def test_missing_db_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A missing coverage set is an infrastructure error: README documents
+        """A missing coverage set is an infrastructure error: docs/REFERENCE.md documents
         exit 2 for `check` (coverage missing/unreadable), distinct from the
         gate-failure exit 1 a CI consumer acts on."""
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(tmp_path / "db"))
