@@ -4499,6 +4499,19 @@ class TestDataPayloadMemo:
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
 
         workers = 4
+        waiting = threading.Event()
+        followers: set[int] = set()
+        lock = threading.Lock()
+        real_wait = api._await_build_event
+
+        def observe_wait(event: threading.Event, deadline: float) -> bool:
+            with lock:
+                followers.add(threading.get_ident())
+                if len(followers) == workers - 1:
+                    waiting.set()
+            return real_wait(event, deadline)
+
+        monkeypatch.setattr(api, "_await_build_event", observe_wait)
         barrier = threading.Barrier(workers + 1)
         results: list[Any] = []
         errors: list[BaseException] = []
@@ -4515,12 +4528,11 @@ class TestDataPayloadMemo:
             t.start()
         barrier.wait(timeout=15)
 
-        # Give the followers time to reach the checkout point while the
-        # builder sits frozen in the coverage read; a duplicate build would show
-        # up as a second read.
-        time.sleep(0.3)
-        assert len(open_calls) <= 1, "concurrent cold miss started a duplicate build"
-        release.set()
+        try:
+            assert waiting.wait(timeout=15), "not every follower reached the in-flight build"
+            assert len(open_calls) <= 1, "concurrent cold miss started a duplicate build"
+        finally:
+            release.set()
 
         for t in threads:
             t.join(timeout=30)
@@ -4535,6 +4547,18 @@ class TestDataPayloadMemo:
         assert api._DATA_CACHE_BUILDING == {}
         assert len(api._DATA_CACHE) == 1
 
+    @staticmethod
+    def _observe_wait(monkeypatch: Any, built: threading.Event) -> threading.Event:
+        entered = threading.Event()
+        real_wait = built.wait
+
+        def wait(timeout: float | None = None) -> bool:
+            entered.set()
+            return real_wait(timeout)
+
+        monkeypatch.setattr(built, "wait", wait)
+        return entered
+
     def test_follower_waits_for_inflight_build_without_touching_db(
         self, tmp_path: Any, monkeypatch: Any
     ) -> None:
@@ -4548,6 +4572,7 @@ class TestDataPayloadMemo:
         assert snap is not None
         key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
         built = threading.Event()
+        entered = self._observe_wait(monkeypatch, built)
         api._DATA_CACHE_BUILDING[key] = (
             built,
             api.clock.monotonic() + api._DATA_CACHE_BUILD_WAIT_SECONDS,
@@ -4562,7 +4587,7 @@ class TestDataPayloadMemo:
         t.start()
         try:
             try:
-                t.join(timeout=1.0)
+                assert entered.wait(timeout=15), "follower never waited on the build event"
                 assert t.is_alive(), "follower did not wait for the in-flight build"
                 assert open_calls == [], "follower read coverage despite an in-flight build"
                 api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
@@ -4601,6 +4626,7 @@ class TestDataPayloadMemo:
         assert snap is not None
         key: tuple[tuple[int, int], str, str | None, bool] = (snap, "GAME", "nope", True)
         built = threading.Event()
+        entered = self._observe_wait(monkeypatch, built)
         api._DATA_CACHE_BUILDING[key] = (
             built,
             api.clock.monotonic() + api._DATA_CACHE_BUILD_WAIT_SECONDS,
@@ -4617,7 +4643,7 @@ class TestDataPayloadMemo:
         t = threading.Thread(target=follower)
         try:
             t.start()
-            t.join(timeout=0.3)
+            assert entered.wait(timeout=15), "follower never waited on the build event"
             assert t.is_alive(), "follower did not wait for the in-flight build"
             assert open_calls == [], "follower read coverage despite an in-flight build"
             built.set()

@@ -281,7 +281,9 @@ class TestDataSingleFlight:
 class TestConcurrentInvalidation:
     """The broadcast's cache clear running against readers, as a rebuild does."""
 
-    def test_readers_survive_a_concurrent_invalidation(self) -> None:
+    def test_readers_survive_a_concurrent_invalidation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Clear every derived memo while threads read through those memos.
 
         The clear runs on the SSE watcher's thread and the reads on request
@@ -290,48 +292,87 @@ class TestConcurrentInvalidation:
         build.  The assertion is the one an operator sees: every request is
         answered, and none of them is an error.
         """
+        from recoverage import potato
+
         stop = threading.Event()
+        reading = threading.Event()
+        cleared = threading.Event()
+        real_coverage_for = _server.coverage_for
+
+        def reading_snapshot(target: str) -> Any:
+            snapshot = real_coverage_for(target)
+            reading.set()
+            assert cleared.wait(timeout=30), "invalidation never released the captured snapshot"
+            return snapshot
+
+        monkeypatch.setattr(_server, "coverage_for", reading_snapshot)
+        monkeypatch.setattr(potato, "coverage_for", reading_snapshot)
+        steps = threading.Barrier(WORKERS + 1)
+        paths = (
+            "/api/targets/FAKEDLL/stats",
+            "/api/targets/FAKEDLL/data?section=.text",
+            "/api/targets/FAKEDLL/functions?limit=10",
+            "/potato?view=map",
+        )
+        rounds = 6
         churn_errors: list[BaseException] = []
         invalidations = 0
 
         def churn() -> None:
             nonlocal invalidations
-            while not stop.is_set():
-                try:
+            try:
+                # One invalidation races each herd; no free-running GIL contention.
+                for _ in range(rounds * len(paths)):
+                    reading.clear()
+                    cleared.clear()
+                    steps.wait(timeout=30)
+                    assert reading.wait(timeout=30), "no reader captured a snapshot"
                     api._clear_derived_caches()
                     invalidations += 1
-                except BaseException as exc:  # the failure is reported, not swallowed
+                    cleared.set()
+                    steps.wait(timeout=30)
+            except BaseException as exc:
+                if not stop.is_set():
                     churn_errors.append(exc)
-                    return
+                cleared.set()
+                steps.abort()
 
         clearer = threading.Thread(target=churn, daemon=True)
         clearer.start()
         failures: list[tuple[str, str, bytes]] = []
         fail_lock = threading.Lock()
+        requests = 0
         try:
 
             def worker(index: int) -> None:
-                for _ in range(6):
-                    for path in (
-                        "/api/targets/FAKEDLL/stats",
-                        "/api/targets/FAKEDLL/data?section=.text",
-                        "/api/targets/FAKEDLL/functions?limit=10",
-                        "/potato?view=map",
-                    ):
-                        status, headers, body = wsgi_get(path, _IDENTITY)
-                        if not status.startswith("200"):
+                nonlocal requests
+                try:
+                    for _ in range(rounds):
+                        for path in paths:
+                            steps.wait(timeout=30)
+                            status, headers, body = wsgi_get(path, _IDENTITY)
                             with fail_lock:
-                                failures.append((status, path, decode_body(body, headers)[:200]))
+                                requests += 1
+                                if not status.startswith("200"):
+                                    failures.append(
+                                        (status, path, decode_body(body, headers)[:200])
+                                    )
+                            steps.wait(timeout=30)
+                except BaseException:
+                    steps.abort()
+                    raise
 
             _in_parallel(worker)
         finally:
             stop.set()
+            reading.set()
+            cleared.set()
+            steps.abort()
             clearer.join(timeout=30)
-        # A churn thread that raised, or was made a no-op, would leave every
-        # reader green over a run that never invalidated anything, so the
-        # invalidations the readers raced are counted rather than assumed.
+        assert not clearer.is_alive(), "cache clearer did not stop"
         assert not churn_errors, churn_errors[:3]
-        assert invalidations > 0, "the memos were never invalidated during the read"
+        assert invalidations == rounds * len(paths)
+        assert requests == WORKERS * rounds * len(paths)
         assert not failures, failures[:3]
 
 
