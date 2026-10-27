@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-10-27
+
+### Changed
+
+- Defer module-level imports that are not read while a module loads, so the
+  CLI starts faster.
+
 ## [8.6.0] - 2026-10-25
 
 ### Changed
