@@ -135,8 +135,8 @@ and empty-coverage-directory warnings go to stderr, and the token is never
 printed. Use it as the preflight a unit file can gate on.
 
 The running server answers the same question over HTTP: `GET /api/health`
-carries a `config` block with the settings that process resolved, including
-`source` (the selected snapshot directory, or `live project`). Unlike `recoverage config`, it
+carries a `config` block with the settings that process resolved (`db` is left
+to the endpoint's own basename-only `db` block). Unlike `recoverage config`, it
 reads the server's environment, not the shell's, which under a unit file or a
 container spec are not the same thing. It is `null` in a process that never ran
 `serve`, and it is behind the token when one is set.
