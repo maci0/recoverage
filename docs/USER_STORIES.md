@@ -500,10 +500,10 @@ graph TD
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - CSS minified with `rcssmin` (the bundle arrives minified by Vite and is inlined unchanged), compressed with Brotli/Zstd/gzip
-- Total payload 49,908 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 53,235 B and gzip 58,020 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-09-29)
-- The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
+- Total payload 42,795 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 46,179 B and gzip 49,792 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-10-27)
+- The whole frontend except the highlighter is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
-- Highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted and there is no first-use fetch to fail
+- Highlight.js is the second bundle `/highlight.js`, served by the dashboard itself and loaded the first time a code pane renders, so the shell does not carry it and no CDN is involved
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
 - ETag caching returns `304 Not Modified` when the coverage documents are unchanged
 
@@ -589,7 +589,7 @@ graph LR
 
     subgraph "Phase 4: Iteration"
         K["Fix a function<br/>in src/"] --> L["Click Regenerate"]
-        L --> M["Regen coverage documents"]
+        L --> M["Refresh the live view"]
         M --> G
     end
 

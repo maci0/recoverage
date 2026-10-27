@@ -1,80 +1,25 @@
 # Recoverage API Improvement Ideas
 
-Ideas for extending and improving the recoverage REST API and CLI.
+Open ideas for extending the recoverage REST API and CLI. Shipped behavior is
+documented in [REFERENCE.md](REFERENCE.md) and recorded in the
+[changelog](../CHANGELOG.md).
 
 ---
 
 ## New API Endpoints
 
-### ~~`GET /api/targets/<target>/stats`~~ ✅ Implemented
-Lightweight summary endpoint returning only coverage stats (percentages, byte counts, function counts by status) without any cell/grid data. Useful for CI badges, external dashboards, and quick terminal checks.
-
-### ~~`GET /api/targets/<target>/functions`~~ ✅ Implemented
-Paginated function listing with optional filters (`?status=&search=&sort=&limit=&offset=`).
-
 ### `GET /api/targets/<target>/diff/<va>`
 Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew diff` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### `GET /api/targets/<target>/xrefs/<va>`
-Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
-
-### ~~`GET /api/targets/<target>/sections/<section>/bytes`~~ ✅ Implemented
-Raw byte slice endpoint with `?offset=N&size=M` params.
-
-### ~~`GET /api/health`~~ ✅ Implemented
-Simple health check returning server version, coverage directory name, total document size, newest document mtime (as epoch seconds and as an ISO-8601 UTC instant), optional extras installed, and available targets count.
+Cross-reference lookup: which functions call this VA, and which VAs this function calls. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### `POST /api/targets/<target>/functions/<va>/annotate`
-Write-back annotations to source files. Accept a JSON body with annotation key-value pairs (`NOTE`, `BLOCKER`, `STATUS`, etc.) and patch the corresponding `.c` file. Enables in-browser editing of annotations without leaving the dashboard.
-
----
-
-## Existing Endpoint Improvements
-
-### ~~`/api/targets/<target>/data` — Partial Loading~~ ✅ Implemented
-The `/data` endpoint supports `?section=.text` to load one section at a time.
-
-### ~~`/api/targets/<target>/functions/<va>` — Batch Mode~~ ✅ Implemented
-Batch function lookups via `POST /api/targets/<target>/functions` with a JSON object carrying a `vas` array:
-```json
-{ "vas": ["0x10001000", "0x10001050", "0x10001100"] }
-```
-Returns an array of function details in one round-trip (input order, unmatched VAs omitted).
-
-### ~~`/api/targets/<target>/asm` — Output Formats~~ ✅ Implemented
-Supports `?format=json` for structured instruction objects.
-
-### ~~Error Responses — Consistency~~ ✅ Implemented
-All error responses now carry `{ "error": "...", "code": "...", "detail": "..." }` with a stable machine-readable `code` (e.g. `not_found`, `rate_limited`).
-
-### ~~CORS Headers~~ ✅ Implemented
-Optional CORS support via `--cors`; cross-origin reads are allowlist-only via repeatable `--cors-origin` flags (the wildcard is never emitted).
-
----
-
-## CLI Improvements (Typer)
-
-### ~~`recoverage stats` Subcommand~~ ✅ Implemented
-Print a terminal-friendly coverage summary table (using `rich.table`) without starting the web server.
-
-### ~~`recoverage export` Subcommand~~ ✅ Implemented
-Export coverage data to JSON, CSV, or Markdown for use in CI pipelines, READMEs, and reports.
-
-### ~~`recoverage check` Subcommand~~ ✅ Implemented
-CI-oriented: exits non-zero if coverage drops below a threshold.
-
-### ~~`recoverage open` Subcommand~~ ✅ Implemented
-Open the browser to an existing running server (useful when `--no-open` was used at startup).
-
-### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run rebrew's catalog analysis and coverage-document writer from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`; there is no separate `rebrew coverage catalog` step to run first).
+Write annotations back from the dashboard. Accept a JSON body with annotation key-value pairs (`note`, `blocker`, `STATUS`, etc.) and write them through Rebrew's metadata owners; function documentation lives in dedicated Rebrew metadata, not in source comments. Enables in-browser editing of annotations without leaving the dashboard.
 
 ---
 
 ## WebSocket / SSE Support
-
-### ~~Live Reload via Server-Sent Events~~ ✅ Implemented
-`/api/events` pushes `db-updated` events when the coverage documents change (a background watcher polls the directory's per-document name, mtime and size; no extra dependency). The SPA auto-refreshes the grid without polling or manual reload clicks.
 
 ### Regen Progress
 Stream `/api/regen` progress as SSE events instead of blocking the request until completion (a long regen keeps the connection open for its whole run).
@@ -88,23 +33,3 @@ For very large targets, stream the `/data` JSON response using chunked transfer 
 
 ### Pre-compressed Cache Files
 Write `.br` and `.gz` cache files to disk for the inlined index and large JSON payloads. Avoids re-compressing on every cold start.
-
----
-
-## Security
-
-### ~~`--bind` Flag~~ ✅ Implemented
-`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated unless `serve --token` is given.
-
-### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
-The 5-second cooldown now exists server-side too: `/api/regen` returns 429
-with `retry_after` when called within `_REGEN_COOLDOWN_SECONDS` of the last
-accepted attempt, so direct API calls cannot hammer the rebuild pipeline.
-
-### ~~Token Auth~~ ✅ Implemented
-Optional `serve --token <secret>` requires every request to authenticate via
-`Authorization: Bearer <token>`, `?token=<token>`, or opening `/?token=<token>`
-once (the index route sets an HttpOnly cookie so the SPA works unchanged).
-Unauthenticated browsers asking for HTML get a short page pointing at the
-`?token=` parameter; it never echoes the token. API clients keep the
-`{error, code, detail}` JSON contract.
