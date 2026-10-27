@@ -3,8 +3,10 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
-source/refresh boundaries reviewed: 2026-10-16, against
-`__version__ = "8.7.0"` (`src/recoverage/__init__.py:44`) during release preparation.
+source/refresh boundaries reviewed: 2026-10-16. The document is maintained for
+`__version__ = "8.7.1"` (`src/recoverage/__init__.py:44`); releases since the
+review were not re-reviewed as a whole. For 8.7.1, only the basename-only
+health control below was re-checked, against its `/api/health` `config.source` fix.
 The historical whole-surface review below was recorded against commit `5fe9ea7` on 2026-10-03.
 
 The per-commit review log of the 2026-10-03 pass and the passes before it is

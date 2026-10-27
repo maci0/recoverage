@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.7.1] - 2026-10-27
+
 ### Fixed
 
 - `/api/health` reports a portable snapshot directory in `config.source` by
