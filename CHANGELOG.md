@@ -5,6 +5,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `/api/health` reports a portable snapshot directory in `config.source` by
+  its basename, not its absolute path. `live project` is unchanged.
+
 ## [8.7.0] - 2026-10-27
 
 ### Changed

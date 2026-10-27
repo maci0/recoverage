@@ -581,6 +581,44 @@ class TestHealthActiveConfig:
         assert "db" not in data["config"]
         assert "/srv/secret-project/db" not in decode_body(body, headers).decode()
 
+    @pytest.mark.parametrize(
+        ("snapshots", "reported"),
+        [(Path("/srv/secret-project/snapshots"), "snapshots"), (None, "live project")],
+    )
+    def test_source_is_reported_without_its_absolute_path(
+        self, monkeypatch: pytest.MonkeyPatch, snapshots: Path | None, reported: str
+    ) -> None:
+        """The rendering `serve` publishes names a portable directory by basename.
+
+        Built by `config.active_config`, the function `serve` calls, so the
+        test sees the keys the server really publishes: the snapshot
+        directory's absolute path stays off a polled endpoint, the way the
+        basename-only `db` block keeps it off.
+        """
+        import recoverage.server as server_mod
+        from recoverage import config
+
+        monkeypatch.setattr(server_mod, "ACTIVE_CONFIG", None, raising=False)
+        server_mod.configure_startup(
+            config.active_config(
+                port=9000,
+                bind="127.0.0.1",
+                allow_remote=False,
+                cors=False,
+                cors_origin=(),
+                token=None,
+                snapshots=snapshots,
+                log_level=logging.WARNING,
+                max_connections=64,
+                client_timeout=30,
+            )
+        )
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["config"]["source"] == reported
+        assert "/srv/secret-project" not in decode_body(body, headers).decode()
+
     def test_no_config_before_serve_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A mounted WSGI app never resolved a configuration; null says that,
         where a re-resolved default would be a value nobody set."""

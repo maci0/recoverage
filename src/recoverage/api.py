@@ -1482,14 +1482,19 @@ def _active_config() -> dict[str, str] | None:
     environment: the same flags, a different answer, and an operator who
     checks the wrong one.  This reads what the process actually resolved.
 
-    ``db`` is dropped: this endpoint names the coverage directory by its
-    basename only, and the ``db`` block beside it already answers the
-    question the absolute path was for.
+    This endpoint names the coverage directory by its basename only, and the
+    ``db`` block beside it already answers the question the absolute path
+    was for: ``source`` is cut to its basename (the ``live project``
+    sentinel holds no separator and passes through unchanged), and ``db``,
+    the key ``source`` replaced, stays dropped.
     """
     active = _server.ACTIVE_CONFIG
     if active is None:
         return None
-    return {key: value for key, value in active.items() if key != "db"}
+    config = {key: value for key, value in active.items() if key != "db"}
+    if "source" in config:
+        config["source"] = Path(config["source"]).name
+    return config
 
 
 def _stream_stats() -> dict[str, Any]:
