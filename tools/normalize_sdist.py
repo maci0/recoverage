@@ -23,13 +23,13 @@ Every ``*.tar.gz`` under the given directories is rewritten in place.
 
 from __future__ import annotations
 
-import contextlib
-import gzip
-import os
 import re
 import sys
-import tarfile
-from pathlib import Path
+lazy import contextlib
+lazy import gzip
+lazy import os
+lazy import tarfile
+lazy from pathlib import Path
 
 #: Modes a normalized member is recorded with. The executable bit is kept: a
 #: data file and a script must not come out the same.

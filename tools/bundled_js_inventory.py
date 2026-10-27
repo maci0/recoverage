@@ -29,16 +29,16 @@ is described to nobody but this project.
 
 from __future__ import annotations
 
-import argparse
-import base64
-import binascii
-import datetime as dt
-import json
-import os
 import re
-import sys
 from pathlib import Path
 from typing import Any, NamedTuple
+lazy import argparse
+lazy import base64
+lazy import binascii
+lazy import datetime as dt
+lazy import json
+lazy import os
+lazy import sys
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 PACKAGE_JSON = REPO_ROOT / "package.json"

@@ -36,22 +36,22 @@ a coverage document and a later backup would carry the earlier one.
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
-import io
-import json
 import logging
-import os
-import shutil
-import tarfile
-import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final
+lazy import contextlib
+lazy import hashlib
+lazy import io
+lazy import json
+lazy import os
+lazy import shutil
+lazy import tarfile
+lazy import tempfile
+lazy from datetime import UTC, datetime
+lazy from typing import Any, Final
 
-from recoverage import clock
-from recoverage.documents import COVERAGE_GLOB
+lazy from recoverage import clock
+lazy from recoverage.documents import COVERAGE_GLOB
 
 _log = logging.getLogger("recoverage")
 

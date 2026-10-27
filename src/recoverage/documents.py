@@ -34,27 +34,31 @@ equal to the one ``rebrew.coverage_toml.load_coverage_from`` builds.
 
 from __future__ import annotations
 
-import contextlib
-import gc
-import hashlib
-import io
-import json
 import logging
-import os
-import tempfile
 import threading
-import tomllib
-import unicodedata
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Final
+lazy import contextlib
+lazy import gc
+lazy import hashlib
+lazy import io
+lazy import json
+lazy import os
+lazy import tempfile
+lazy import tomllib
+lazy import unicodedata
+lazy from collections.abc import Mapping
+lazy from typing import Any, Final
 
-from rebrew.coverage_project import ProjectCoverageError, ProjectCoverageView, load_project_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, snapshot_from_document
-from rebrew.workspace import CONFIG_NAME
+lazy from rebrew.coverage_project import (
+    ProjectCoverageError,
+    ProjectCoverageView,
+    load_project_coverage,
+)
+lazy from rebrew.workspace import CONFIG_NAME
 
-from recoverage import clock, metrics
+lazy from recoverage import clock, metrics
 
 # The package logger, NOT getLogger(__name__): a filter is run only for the
 # records logged on the logger it is installed on, never for a child's, so

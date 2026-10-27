@@ -14,17 +14,17 @@ than on the adapter around them.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 import os
 import socket
-from collections.abc import Callable
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
-from wsgiref.types import InputStream
+lazy import contextlib
+lazy import json
+lazy from collections.abc import Callable
+lazy from wsgiref.types import InputStream
 
 from recoverage import config, metrics
 

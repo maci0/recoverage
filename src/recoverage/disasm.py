@@ -13,9 +13,9 @@ import functools
 import importlib.util
 import logging
 import threading
-from typing import Any
+lazy from typing import Any
 
-from recoverage.server import _load_dll, binary_stamp, hex_addr
+lazy from recoverage.server import _load_dll, binary_stamp, hex_addr
 
 _log = logging.getLogger("recoverage")
 

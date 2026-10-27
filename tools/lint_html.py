@@ -38,12 +38,12 @@ cannot start the checker says which input is missing rather than ending in a
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from pathlib import Path
+lazy import shutil
+lazy import subprocess
 
-from _serve_harness import (
+lazy from _serve_harness import (
     build_sample_db,
     get,
     report_server_exit,
@@ -52,8 +52,8 @@ from _serve_harness import (
     wait_for,
 )
 
-from recoverage.potato import _RENDER_ERROR_BODY, _db_unavailable_page, _no_data_page
-from recoverage.server import _UNAUTHORIZED_HTML
+lazy from recoverage.potato import _RENDER_ERROR_BODY, _db_unavailable_page, _no_data_page
+lazy from recoverage.server import _UNAUTHORIZED_HTML
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"

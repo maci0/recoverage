@@ -21,10 +21,10 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
 import sys
-import zipfile
-from pathlib import Path
+lazy import argparse
+lazy import zipfile
+lazy from pathlib import Path
 
 #: Where `[tool.setuptools.package-data]`'s `assets/*` glob puts the bundle in
 #: the wheel: the package directory plus the directory name itself.

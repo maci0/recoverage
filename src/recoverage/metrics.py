@@ -16,11 +16,11 @@ without a rule falls back to its first path segment, and
 
 from __future__ import annotations
 
-import math
-import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal
+lazy import math
+lazy import threading
+lazy from typing import Any, Final, Literal
 
 #: A request slower than this is counted separately and logged at WARNING.
 #: Above the slowest cold-start read the dashboard makes, far below anything

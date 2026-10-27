@@ -12,39 +12,23 @@ by the composition root.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
-import math
-import queue
 import re
-import reprlib
 import threading
-from collections.abc import Callable, Generator, Mapping, Sequence
-from heapq import nlargest, nsmallest
-from pathlib import Path
-from typing import Any
+lazy import json
+lazy import math
+lazy import queue
+lazy import reprlib
+lazy from collections.abc import Callable, Generator, Mapping, Sequence
+lazy from heapq import nlargest, nsmallest
+lazy from pathlib import Path
+lazy from typing import Any
 
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function, Global
-from rebrew.workspace import VA_MAX, parse_va_candidates
 from rebrew.workspace.status import COVERAGE_DB_STATUSES
+lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function, Global
+lazy from rebrew.workspace import VA_MAX, parse_va_candidates
 
-from recoverage import __version__, clock
-from recoverage import config as _config
-from recoverage import metrics as _metrics
 from recoverage import server as _server
-from recoverage._paths import coverage_source
-from recoverage.disasm import (
-    _target_width_bits,
-    capstone_unavailable_reason,
-    clear_disassembly_cache,
-    disassembly_available,
-    get_capstone_md,
-    get_disassembly,
-)
-from recoverage.regen import (
-    RegenError,
-    run_regen,
-)
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -77,6 +61,22 @@ from recoverage.server import (
     request,
     resolve_targets,
     response,
+)
+lazy from recoverage import __version__, clock
+lazy from recoverage import config as _config
+lazy from recoverage import metrics as _metrics
+lazy from recoverage._paths import coverage_source
+lazy from recoverage.disasm import (
+    _target_width_bits,
+    capstone_unavailable_reason,
+    clear_disassembly_cache,
+    disassembly_available,
+    get_capstone_md,
+    get_disassembly,
+)
+lazy from recoverage.regen import (
+    RegenError,
+    run_regen,
 )
 
 _log = logging.getLogger("recoverage")

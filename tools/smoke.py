@@ -18,11 +18,11 @@ this runs entirely inside recoverage's own CI.
 
 from __future__ import annotations
 
-import argparse
 import sys
-from pathlib import Path
+lazy import argparse
+lazy from pathlib import Path
 
-from _serve_harness import (
+lazy from _serve_harness import (
     build_sample_db,
     get,
     report_server_exit,

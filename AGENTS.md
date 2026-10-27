@@ -682,6 +682,9 @@ explicit upstream development only; it is never the default package source.
   otherwise package a file the tracked tree no longer has and the comparison
   would report a difference that is not one.
 
+- Module-level imports are `lazy` (PEP 810) unless the module reads the name
+  while loading (decorator, base class, default, class body, module statement)
+  or imports it only for side effects. Tests stay eager.
 - Python 3.15+, ruff for linting, mypy for types, 100-char line length.
   The type gate is `strict = true` over `src/recoverage` and `tools/`, with
   two checks off and the reason next to them in `[tool.mypy]`:

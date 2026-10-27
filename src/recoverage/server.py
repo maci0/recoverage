@@ -8,28 +8,26 @@ Project ``db_dir`` settings have no role in either mode.
 
 from __future__ import annotations
 
-import gzip
-import hashlib
-import hmac
 import importlib.util
-import ipaddress
 import itertools
-import json
 import logging
-import math
 import threading
-import unicodedata
-from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from operator import attrgetter, itemgetter
-from pathlib import Path, PurePath
-from types import MappingProxyType
 from typing import Any, Final, NamedTuple, cast
-from urllib.parse import quote, unquote, urlsplit
+lazy import gzip
+lazy import hashlib
+lazy import hmac
+lazy import ipaddress
+lazy import json
+lazy import math
+lazy import unicodedata
+lazy from collections import deque
+lazy from pathlib import Path, PurePath
+lazy from types import MappingProxyType
+lazy from urllib.parse import quote, unquote, urlsplit
 
-import brotli
-import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
 from rebrew.coverage_toml import (
     BUCKET_OF_STATE,
@@ -40,8 +38,10 @@ from rebrew.coverage_toml import (
     Global,
 )
 from rebrew.metadata.bindings import DATA_KINDS
-from rebrew.utils import floor_pct
-from rebrew.workspace import (
+lazy import brotli
+lazy import zstandard as zstd
+lazy from rebrew.utils import floor_pct
+lazy from rebrew.workspace import (
     CONFIG_NAME,
     MATCHED_STATUSES,
     WorkspaceConfigError,
@@ -53,8 +53,8 @@ from rebrew.workspace import (
 )
 
 from recoverage import clock, config, metrics
-from recoverage._paths import config_fingerprint, coverage_source
-from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
+lazy from recoverage._paths import config_fingerprint, coverage_source
+lazy from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different

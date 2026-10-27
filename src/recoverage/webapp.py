@@ -34,9 +34,9 @@ route registered; importing bare ``recoverage.server`` yields a routeless app.
 
 from __future__ import annotations
 
-from typing import Any
+lazy from typing import Any
 
-import bottle
+lazy import bottle
 
 import recoverage.api as _api  # mounts /api/* routes on server.app
 import recoverage.potato as _potato  # mounts /potato on server.app

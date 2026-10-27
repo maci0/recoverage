@@ -13,9 +13,9 @@ Run it from the repository root through the locked interpreter:
 
 from __future__ import annotations
 
-import sys
+lazy import sys
 
-from recoverage import server, ui
+lazy from recoverage import server, ui
 
 
 def main() -> int:

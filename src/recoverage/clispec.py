@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+lazy from typing import Any
 
-from recoverage import __version__
+lazy from recoverage import __version__
 
 _RETRY = (
     " No idempotency key is accepted, so a retry is not a safe substitute for"

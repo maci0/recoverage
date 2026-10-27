@@ -42,11 +42,11 @@ stdout and exits non-zero naming every license it refuses.
 
 from __future__ import annotations
 
-import sys
-import tomllib
-from importlib.metadata import Distribution, PackageNotFoundError, distribution
 from pathlib import Path
 from typing import NamedTuple
+lazy import sys
+lazy import tomllib
+lazy from importlib.metadata import Distribution, PackageNotFoundError, distribution
 
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _MANIFEST = _ROOT / "pyproject.toml"

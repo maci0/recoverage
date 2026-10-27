@@ -21,10 +21,10 @@ through the locked interpreter) and re-run `make web-lint`.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
-from typing import Any, cast
+lazy import json
+lazy from typing import Any, cast
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"

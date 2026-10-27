@@ -19,13 +19,13 @@ passes.
 
 from __future__ import annotations
 
-import argparse
-import fnmatch
-import hashlib
-import json
-import sys
 from pathlib import Path
 from typing import TypedDict
+lazy import argparse
+lazy import fnmatch
+lazy import hashlib
+lazy import json
+lazy import sys
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"

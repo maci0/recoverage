@@ -18,7 +18,7 @@ replay of the run inherits that cadence.  :func:`sleep` is that wait.
 
 from __future__ import annotations
 
-import time
+lazy import time
 
 __all__ = ["monotonic", "sleep", "wall_time"]
 

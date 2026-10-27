@@ -10,17 +10,16 @@ restating them; ``/potato`` is mounted by ``recoverage.potato``.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import threading
-from pathlib import Path, PurePath, PurePosixPath
 from typing import NamedTuple
+lazy import hashlib
+lazy from pathlib import Path, PurePath, PurePosixPath
 
-import rcssmin
-from bottle import static_file
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
+lazy import rcssmin
+lazy from bottle import static_file
+lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 
-import recoverage.server as _server
 from recoverage.server import (
     CACHE_REVALIDATE,
     SUPPORTED_ENCODINGS,
@@ -40,6 +39,7 @@ from recoverage.server import (
     select_static_variant,
     static_variant_key,
 )
+lazy import recoverage.server as _server
 
 # ── Index caching ──────────────────────────────────────────────────
 

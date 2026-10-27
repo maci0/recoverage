@@ -9,17 +9,17 @@ documents over HTTP, and always stop the server process.
 from __future__ import annotations
 
 import contextlib
-import http.client
-import os
-import socket
-import subprocess
-import sys
-import tempfile
-from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, cast
+lazy import http.client
+lazy import os
+lazy import socket
+lazy import subprocess
+lazy import sys
+lazy import tempfile
+lazy from collections.abc import Callable, Iterator
+lazy from typing import Any, cast
 
-from recoverage import clock
+lazy from recoverage import clock
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SCRATCH_DIR = REPO_ROOT / ".scratch"

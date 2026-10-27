@@ -7,29 +7,26 @@ highlighting via inline <font> tags.
 
 from __future__ import annotations
 
-import base64
 import functools
-import importlib.util
 import logging
-import math
 import re
-import struct
-import textwrap
 import threading
-import unicodedata
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from heapq import nsmallest
-from html import escape as _html_escape
-from pathlib import Path
 from typing import Any, NamedTuple, cast
-from urllib.parse import ParseResult, parse_qs, urlparse
+lazy import base64
+lazy import importlib.util
+lazy import math
+lazy import struct
+lazy import textwrap
+lazy import unicodedata
+lazy from collections.abc import Callable, Iterable, Mapping, Sequence
+lazy from heapq import nsmallest
+lazy from html import escape as _html_escape
+lazy from pathlib import Path
+lazy from urllib.parse import ParseResult, parse_qs, urlparse
 
 from bottle import HTTPResponse, SimpleTemplate
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
+lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 
-from recoverage import __version__
-from recoverage._paths import coverage_source
-from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -84,6 +81,9 @@ from recoverage.server import (
     verify_by_va,
     verify_payload,
 )
+lazy from recoverage import __version__
+lazy from recoverage._paths import coverage_source
+lazy from recoverage.disasm import disassembly_available, get_disassembly
 
 _log = logging.getLogger("recoverage")
 

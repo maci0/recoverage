@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+lazy from pathlib import Path
 
-from rebrew.workspace import CONFIG_NAME, find_root, read_config
+lazy from rebrew.workspace import CONFIG_NAME, find_root, read_config
 
-from recoverage import config
+lazy from recoverage import config
 
 
 def config_fingerprint(root: Path) -> tuple[int, int, int, int] | None:
