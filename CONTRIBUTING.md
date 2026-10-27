@@ -5,7 +5,8 @@ edit-test loop, and the one command that reproduces CI before you push.
 
 ## Bootstrap (clean clone)
 
-Needs [uv](https://docs.astral.sh/uv/) 0.13.1 or newer. The interpreter is
+Needs [uv](https://docs.astral.sh/uv/) 0.13.5 or newer (`UV_VERSION` in the
+`Makefile`, the version CI installs). The interpreter is
 pinned in `.python-version` (3.15.1); uv downloads it if necessary.
 
 ```bash
@@ -132,7 +133,7 @@ failing.
 `web/` has a dev server of its own, and it is the fast way to see a change:
 `make web-dev` (which is `bun install --frozen-lockfile` then `bun run
 dev:web`) serves `web/index.html` on `127.0.0.1:5173` and proxies
-`/api`, `/src` and `/original` to a running dashboard on
+`/api`, `/files`, `/src`, `/original` and `/highlight.js` to a running dashboard on
 `http://127.0.0.1:8001` (`RECOVERAGE_DEV_API` points it elsewhere). It needs a
 `recoverage serve` in another shell for the API half:
 
@@ -153,7 +154,10 @@ way.
 make all
 ```
 
-That is the local mirror of CI, and each target is the command CI runs:
+That is the local mirror of `.github/workflows/ci.yml`, which runs on every
+push to `main` and every pull request against it. A new push to a PR branch
+cancels the run in flight on that branch; runs on `main` are never cancelled.
+Each target is the command CI runs:
 
 | Target | CI job | Command |
 |--------|--------|---------|
@@ -251,4 +255,5 @@ run through `uv run --no-project`; `python-sbom` validates and exports the lock
 with `uv export --locked`. `make web-lint` also imports the application and
 therefore uses the normal public dependency environment.
 
-Conventions, architecture, and the design rules are in `AGENTS.md`.
+Conventions, the project layout, architecture, and the design rules are in
+`AGENTS.md`.
