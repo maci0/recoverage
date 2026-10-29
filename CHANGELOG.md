@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Update the hash-pinned Rebrew runtime to 6.8.0 and align its source provenance.
+
 ## [8.7.1] - 2026-10-27
 
 ### Fixed
