@@ -12,8 +12,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - The database watcher does not wait on the SSE poll interval while no
-  event-stream client is connected. The first subscriber wakes it. Connected
-  clients keep the 2 second interval.
+  event-stream client is connected. The first subscriber wakes it. An interval
+  already in progress ends when the last client disconnects. Connected clients
+  keep the 2 second interval.
 
 ## [8.7.1] - 2026-10-27
 

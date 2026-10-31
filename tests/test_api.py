@@ -3076,6 +3076,104 @@ class TestSseDbWatcher:
                 result.close()
             api._stop_db_watcher()
 
+    def test_disconnect_during_the_wait_returns_without_the_remaining_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An interval already in progress returns when the last client leaves.
+
+        The wait is ``_SSE_POLL_INTERVAL_SECONDS`` (2s) for as long as a client
+        is connected, so closing one of two streams leaves it blocked. Closing
+        the last stream returns it without the rest of that interval, and the
+        watcher parks instead of polling.
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS.clear()
+
+        staying_q: queue.Queue[bytes] = queue.Queue()
+        leaving_q: queue.Queue[bytes] = queue.Queue()
+        staying = api._SSEStream(staying_q, "10.0.0.1")
+        leaving = api._SSEStream(leaving_q, "10.0.0.2")
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS[staying_q] = "10.0.0.1"
+            api._SSE_CLIENTS[leaving_q] = "10.0.0.2"
+
+        wake = api._SSE_WATCHER_WAKE
+        real_wait = wake.wait
+        timeouts: list[float | None] = []
+        interval_entered = threading.Event()
+        interval_returned = threading.Event()
+        elapsed: list[float] = []
+
+        def recording_wait(timeout: float | None = None) -> bool:
+            timeouts.append(timeout)
+            if timeout is None:
+                return bool(real_wait(timeout))
+            interval_entered.set()
+            started = time.monotonic()
+            try:
+                return bool(real_wait(timeout))
+            finally:
+                elapsed.append(time.monotonic() - started)
+                interval_returned.set()
+
+        monkeypatch.setattr(wake, "wait", recording_wait)
+        stop = threading.Event()
+        outcome: list[bool] = []
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                outcome.append(api._db_watcher_wait(stop))
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=run, daemon=True)
+        try:
+            worker.start()
+            assert interval_entered.wait(2), "watcher never reached the interval wait"
+            assert timeouts == [api._SSE_POLL_INTERVAL_SECONDS], timeouts
+            assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
+
+            leaving.close()
+            with api._SSE_CLIENTS_LOCK:
+                assert staying_q in api._SSE_CLIENTS
+                assert leaving_q not in api._SSE_CLIENTS
+            time.sleep(0.1)
+            assert not interval_returned.is_set(), (
+                "closing one stream ended the wait while another client was connected"
+            )
+
+            closed_at = time.monotonic()
+            staying.close()
+            assert interval_returned.wait(1.0), (
+                "disconnect left the interval wait running for the rest of the poll"
+            )
+            assert time.monotonic() - closed_at < api._SSE_POLL_INTERVAL_SECONDS
+            assert elapsed and elapsed[0] < api._SSE_POLL_INTERVAL_SECONDS
+            assert worker.is_alive(), "the disconnect was treated as a finished interval"
+            deadline = time.monotonic() + 1.0
+            while len(timeouts) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert timeouts == [api._SSE_POLL_INTERVAL_SECONDS, None], timeouts
+            assert not errors, errors
+        finally:
+            stop.set()
+            leaving.close()
+            staying.close()
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.pop(staying_q, None)
+                api._SSE_CLIENTS.pop(leaving_q, None)
+                api._SSE_WATCHER_WAKE.notify_all()
+            worker.join(timeout=2)
+            api._stop_db_watcher()
+        assert not worker.is_alive()
+        assert not errors, errors
+        assert outcome == [False]
+
 
 # ── Threaded WSGI server ──────────────────────────────────────────
 

@@ -908,9 +908,10 @@ def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]
 # Each /api/events connection gets its own bounded queue; the route drains it
 # and streams frames.  With no client connected the watcher does not wait on
 # the poll interval.  The first subscriber wakes that wait, and a connected
-# client keeps the interval.  Client disconnects remove the queue when the
-# stream generator is closed (wsgiref closes the iterator on abrupt socket
-# teardown, which propagates GeneratorExit into the generator's ``finally``).
+# client keeps the interval.  The last disconnect ends an interval already in
+# progress.  Client disconnects remove the queue when the stream generator is
+# closed (wsgiref closes the iterator on abrupt socket teardown, which
+# propagates GeneratorExit into the generator's ``finally``).
 
 _SSE_POLL_INTERVAL_SECONDS = 2.0
 _SSE_HEARTBEAT_SECONDS = 15.0

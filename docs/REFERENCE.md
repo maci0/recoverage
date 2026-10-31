@@ -482,7 +482,8 @@ stream pins a server thread for its whole life, so `clients` against
 `max_clients` is the distance to the 503 the next tab gets.
 `serve` starts the poller thread at startup. While no `/api/events` client is
 connected, that thread does not wait on the poll interval; the first subscriber
-wakes it, and a connected client keeps the interval. `watcher_alive` is `null`
+wakes it, and a connected client keeps the interval. An interval already in
+progress ends when the last client disconnects. `watcher_alive` is `null`
 only in a process that never ran `serve`. A connected client with a dead poller
 answers `degraded`: every page still renders, none of them will ever refresh
 again.
