@@ -1741,9 +1741,9 @@ def serve(
         browser_timer.daemon = True
         browser_timer.start()
 
-    # Start the DB watcher at startup (not on first /api/events connection):
-    # without it, external rebuilds leave the target/dropdown caches stale
-    # for servers that never receive an SSE client (curl-only automation).
+    # Start the watcher thread before the listener accepts. It parks until the
+    # first /api/events client: an empty client set does not wait on the poll
+    # interval, and the handler wakes it on that first subscription.
     from recoverage.api import _ensure_db_watcher
 
     # Warm the SPA shell cache off the request path: the first page load

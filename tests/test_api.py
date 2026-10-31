@@ -2928,18 +2928,37 @@ def _sequential_snapshot(seq: list[tuple[int, int]]) -> Any:
 
 def _start_watcher(
     api: Any, monkeypatch: pytest.MonkeyPatch, snapshot: Any, broadcast: Any
-) -> tuple[threading.Event, threading.Thread]:
+) -> tuple[threading.Event, threading.Thread, queue.Queue[bytes]]:
     """Patch the watcher's inputs and start one loop thread at test speed.
 
-    Caller stops and joins the returned (stop, thread) pair.
+    The loop polls only while a client is registered, so this reserves one.
+    Caller stops the thread and drops that client (:func:`_finish_watcher`).
     """
     monkeypatch.setattr(api, "_snapshot_db_mtime", snapshot)
     monkeypatch.setattr(api, "_broadcast_db_updated", broadcast)
     monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
     stop = threading.Event()
+    client: queue.Queue[bytes] = queue.Queue()
+    with api._SSE_CLIENTS_LOCK:
+        api._SSE_CLIENTS[client] = "watcher-test"
     thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
     thread.start()
-    return stop, thread
+    return stop, thread, client
+
+
+def _finish_watcher(
+    api: Any,
+    stop: threading.Event,
+    thread: threading.Thread,
+    client: queue.Queue[bytes],
+) -> None:
+    """Stop a loop from :func:`_start_watcher` and drop the client it reserved."""
+    stop.set()
+    with api._SSE_CLIENTS_LOCK:
+        api._SSE_WATCHER_WAKE.notify_all()
+    thread.join(timeout=2)
+    with api._SSE_CLIENTS_LOCK:
+        api._SSE_CLIENTS.pop(client, None)
 
 
 class TestSseDbWatcher:
@@ -2949,7 +2968,7 @@ class TestSseDbWatcher:
         import recoverage.api as api
 
         calls: list[tuple[int, int]] = []
-        stop, thread = _start_watcher(
+        stop, thread, client = _start_watcher(
             api,
             monkeypatch,
             _sequential_snapshot([(111, 1), (111, 1), (222, 2)]),
@@ -2961,8 +2980,7 @@ class TestSseDbWatcher:
                 time.sleep(0.01)
             assert calls == [(222, 2)]
         finally:
-            stop.set()
-            thread.join(timeout=2)
+            _finish_watcher(api, stop, thread, client)
 
     def test_watcher_ignores_unchanged_mtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
@@ -2981,13 +2999,82 @@ class TestSseDbWatcher:
                 polled.set()
             return (111, 1)
 
-        stop, thread = _start_watcher(api, monkeypatch, snapshot, lambda s: calls.append(s))
+        stop, thread, client = _start_watcher(api, monkeypatch, snapshot, lambda s: calls.append(s))
         try:
             assert polled.wait(timeout=2), "the watcher never reached a second poll"
             assert calls == []
         finally:
-            stop.set()
-            thread.join(timeout=2)
+            _finish_watcher(api, stop, thread, client)
+
+    def test_zero_clients_do_not_wake_the_watcher_and_one_client_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Zero clients do not wake the watcher; one client does.
+
+        The idle wait has no timeout, so the poll interval cannot be what
+        returns it. The first ``/api/events`` subscriber wakes that wait, and
+        the next wait is ``_SSE_POLL_INTERVAL_SECONDS`` (still 2s).
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS.clear()
+
+        snapshots = {"n": 0}
+        timeouts: list[float | None] = []
+        idle_entered = threading.Event()
+        interval_seen = threading.Event()
+        wake = api._SSE_WATCHER_WAKE
+        real_wait = wake.wait
+
+        def recording_wait(timeout: float | None = None) -> bool:
+            timeouts.append(timeout)
+            if timeout is None:
+                idle_entered.set()
+                return bool(real_wait(timeout))
+            if not interval_seen.is_set():
+                # Timeout elapsed. One poll follows; further interval waits
+                # park until a subscriber or stop notifies, so the loop
+                # cannot spin on a zero-length fake timeout.
+                interval_seen.set()
+                return False
+            return bool(real_wait(None))
+
+        def snapshot() -> tuple[int, int]:
+            snapshots["n"] += 1
+            return (1, 1)
+
+        monkeypatch.setattr(wake, "wait", recording_wait)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", snapshot)
+        monkeypatch.setattr(api, "_broadcast_db_updated", lambda _snapshot: None)
+
+        result = None
+        try:
+            api._ensure_db_watcher()
+            assert idle_entered.wait(2), "watcher did not park with zero clients"
+            assert timeouts == [None], timeouts
+            time.sleep(0.05)
+            assert timeouts == [None], timeouts
+            assert snapshots["n"] == 1
+            watcher = api._DB_WATCHER_THREAD
+            assert watcher is not None and watcher.is_alive()
+
+            _status, _headers, chunks, result = wsgi_stream("/api/events", max_chunks=1)
+            assert chunks == [b": connected\n\n"]
+            deadline = time.monotonic() + 2
+            while snapshots["n"] < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert timeouts[0] is None
+            assert timeouts[1] == api._SSE_POLL_INTERVAL_SECONDS
+            assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
+            assert snapshots["n"] == 2
+            assert watcher.is_alive()
+        finally:
+            if result is not None:
+                result.close()
+            api._stop_db_watcher()
 
 
 # ── Threaded WSGI server ──────────────────────────────────────────
@@ -5644,7 +5731,7 @@ class TestDbWatcherResilience:
             if len(calls) == 1:
                 raise RuntimeError("boom")
 
-        stop, thread = _start_watcher(
+        stop, thread, client = _start_watcher(
             api,
             monkeypatch,
             _sequential_snapshot([(111, 1), (222, 2), (333, 3)]),
@@ -5659,8 +5746,7 @@ class TestDbWatcherResilience:
             assert calls == [(222, 2), (333, 3)]
             assert thread.is_alive()
         finally:
-            stop.set()
-            thread.join(timeout=2)
+            _finish_watcher(api, stop, thread, client)
 
 
 class TestDataEndpointUnreadableCoverage:
@@ -7576,6 +7662,9 @@ class TestDbWatcherLogging:
         stop = threading.Event()
         monkeypatch.setattr(api, "_snapshot_db_mtime", _flaky)
         monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.0)
+        client: queue.Queue[bytes] = queue.Queue()
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS[client] = "watcher-test"
 
         def _stop_after_two() -> None:
             while state["n"] < 3:
@@ -7584,11 +7673,17 @@ class TestDbWatcherLogging:
 
         stopper = threading.Thread(target=_stop_after_two, daemon=True)
         stopper.start()
-        with caplog.at_level(logging.ERROR, logger="recoverage"):
-            api._db_watcher_loop(stop)
-        stopper.join(timeout=1.0)
-        assert any("continuing to poll" in r.getMessage() for r in caplog.records)
-        assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)
+        try:
+            with caplog.at_level(logging.ERROR, logger="recoverage"):
+                api._db_watcher_loop(stop)
+            stopper.join(timeout=1.0)
+            assert any("continuing to poll" in r.getMessage() for r in caplog.records)
+            assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)
+        finally:
+            stop.set()
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_WATCHER_WAKE.notify_all()
+                api._SSE_CLIENTS.pop(client, None)
 
 
 class TestDataSearchIndexOptOut:

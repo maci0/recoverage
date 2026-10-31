@@ -9,6 +9,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Update the hash-pinned Rebrew runtime to 6.8.0 and align its source provenance.
 
+### Fixed
+
+- The database watcher does not wait on the SSE poll interval while no
+  event-stream client is connected. The first subscriber wakes it. Connected
+  clients keep the 2 second interval.
+
 ## [8.7.1] - 2026-10-27
 
 ### Fixed

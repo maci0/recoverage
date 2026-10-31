@@ -903,11 +903,12 @@ def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]
 
 # ── Server-Sent Events (live DB change notifications) ─────────────
 #
-# A single background watcher thread polls the coverage documents' mtime every
-# seconds and broadcasts a `db-updated` SSE frame to every connected client.
+# A single background watcher thread polls the coverage documents' mtime and
+# broadcasts a `db-updated` SSE frame to every connected client.
 # Each /api/events connection gets its own bounded queue; the route drains it
-# and streams frames.  When no client is connected the watcher keeps polling
-# (cheap), and client disconnects are handled by removing the queue when the
+# and streams frames.  With no client connected the watcher does not wait on
+# the poll interval.  The first subscriber wakes that wait, and a connected
+# client keeps the interval.  Client disconnects remove the queue when the
 # stream generator is closed (wsgiref closes the iterator on abrupt socket
 # teardown, which propagates GeneratorExit into the generator's ``finally``).
 
@@ -929,6 +930,10 @@ _SSE_MAX_CLIENTS = 32  # cap on concurrent /api/events streams (thread DoS guard
 #: Membership, ``len`` and the cap all read the same way off a dict.
 _SSE_CLIENTS: dict[queue.Queue[bytes], str] = {}
 _SSE_CLIENTS_LOCK = threading.Lock()
+# Same lock as the client map. The watcher waits on it: no timeout while the
+# map is empty, ``_SSE_POLL_INTERVAL_SECONDS`` while it is not. Notify only
+# under the lock, on the empty/non-empty transition and on stop.
+_SSE_WATCHER_WAKE = threading.Condition(_SSE_CLIENTS_LOCK)
 _DB_WATCHER_THREAD: threading.Thread | None = None
 _DB_WATCHER_STOP = threading.Event()
 _DB_WATCHER_LOCK = threading.Lock()
@@ -997,12 +1002,38 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
             )
 
 
+def _db_watcher_wait(stop: threading.Event) -> bool:
+    """Block until the next poll is due, or until *stop* is set.
+
+    Returns True when one poll interval elapsed with a client still connected.
+    Returns False when *stop* is set.
+
+    An empty client set waits with no timeout, so ``_SSE_POLL_INTERVAL_SECONDS``
+    cannot wake the watcher while nobody is listening. The first subscriber
+    notifies that wait. While a client is connected the wait is that interval.
+    The last disconnect notifies too, which ends an interval wait already in
+    progress instead of leaving it to fire with nobody connected.
+    """
+    with _SSE_WATCHER_WAKE:
+        while not stop.is_set():
+            if not _SSE_CLIENTS:
+                _SSE_WATCHER_WAKE.wait()
+                continue
+            notified = _SSE_WATCHER_WAKE.wait(_SSE_POLL_INTERVAL_SECONDS)
+            if stop.is_set():
+                return False
+            if not notified and _SSE_CLIENTS:
+                return True
+        return False
+
+
 def _db_watcher_loop(stop: threading.Event) -> None:
-    """Poll the coverage documents' mtime every few seconds and broadcast changes.
+    """Poll the coverage documents' mtime and broadcast changes.
 
     The first snapshot is the baseline; any later change (including the file
     appearing or disappearing) broadcasts an event.  Runs until ``stop`` is
-    set, which also serves as the poll sleep so tests can drive it quickly.
+    set.  A connected client waits ``_SSE_POLL_INTERVAL_SECONDS``.  An empty
+    client set waits with no timeout, and the first subscriber wakes it.
 
     Each iteration is guarded: this is a daemon thread nobody joins, so an
     unguarded exception would kill live-reload silently for the remaining
@@ -1019,10 +1050,7 @@ def _db_watcher_loop(stop: threading.Event) -> None:
     """
     try:
         last = _snapshot_db_mtime()
-        while not stop.is_set():
-            stop.wait(_SSE_POLL_INTERVAL_SECONDS)
-            if stop.is_set():
-                break
+        while _db_watcher_wait(stop):
             try:
                 snapshot = _snapshot_db_mtime()
                 if snapshot != last:
@@ -1079,7 +1107,7 @@ def _stop_db_watcher() -> None:
     The stop event is set under _DB_WATCHER_LOCK so stop and
     :func:`_ensure_db_watcher` are mutually exclusive: set-then-lock let a
     concurrent ensure observe the still-alive thread and return, after which
-    the join here retired it — a stopped watcher with SSE clients registered
+    the join here retired it: a stopped watcher with SSE clients registered
     and nothing left to restart it.
 
     A join that times out KEEPS the reference. Nulling it would let the next
@@ -1087,12 +1115,20 @@ def _stop_db_watcher() -> None:
     the wedged one, which then un-wedges, sees stop cleared, and keeps
     broadcasting duplicates as an untracked thread forever. With the
     reference retained, ensure returns early while the thread is alive and
-    stop stays set — the wedged loop retires itself at its next loop check,
+    stop stays set. The wedged loop retires itself at its next loop check,
     and a later stop retries the join.
+
+    The stop event is not enough on its own to finish the join. An empty
+    client set parks on ``_SSE_WATCHER_WAKE`` with no timeout, so the notify
+    under the client lock is what lets that wait return and see the event.
+    Nothing takes ``_DB_WATCHER_LOCK`` while holding the client lock: the
+    stream handler releases the client lock before ``_ensure_db_watcher``.
     """
     global _DB_WATCHER_THREAD
     with _DB_WATCHER_LOCK:
         _DB_WATCHER_STOP.set()
+        with _SSE_CLIENTS_LOCK:
+            _SSE_WATCHER_WAKE.notify_all()
         if _DB_WATCHER_THREAD is not None:
             _DB_WATCHER_THREAD.join(timeout=_DB_WATCHER_JOIN_TIMEOUT)
             if _DB_WATCHER_THREAD.is_alive():
@@ -1161,7 +1197,9 @@ class _SSEStream:
         self._stop.set()
         self._wake_stopped_get()
         with _SSE_CLIENTS_LOCK:
-            _SSE_CLIENTS.pop(self._queue, None)
+            removed = _SSE_CLIENTS.pop(self._queue, None)
+            if removed is not None and not _SSE_CLIENTS:
+                _SSE_WATCHER_WAKE.notify_all()
         # The END of a stream is a lifecycle event, not a bookkeeping step:
         # every other movement of this peer is on the record (the queue-full
         # warning names it, the cap refusal names it, the per-request line
@@ -1259,6 +1297,8 @@ def handle_api_events() -> Any:
         else:
             client_queue = queue.Queue(maxsize=_SSE_QUEUE_MAX)
             _SSE_CLIENTS[client_queue] = peer
+            if len(_SSE_CLIENTS) == 1:
+                _SSE_WATCHER_WAKE.notify_all()
     if client_queue is None:
         # Refusals reach /api/health's error count, but a health snapshot
         # says "the cap is full", not "the cap has been full since 10:04
@@ -1294,7 +1334,9 @@ def handle_api_events() -> Any:
         _ensure_db_watcher()
     except BaseException:
         with _SSE_CLIENTS_LOCK:
-            _SSE_CLIENTS.pop(client_queue, None)
+            removed = _SSE_CLIENTS.pop(client_queue, None)
+            if removed is not None and not _SSE_CLIENTS:
+                _SSE_WATCHER_WAKE.notify_all()
         raise
 
     response.content_type = "text/event-stream"
