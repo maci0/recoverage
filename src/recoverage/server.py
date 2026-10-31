@@ -3290,6 +3290,65 @@ def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
             cache.pop(old_key, None)
 
 
+class _OpenedFileEtag(NamedTuple):
+    """One opened file's bytes and the validator hashed from them."""
+
+    raw: bytes
+    etag: str
+
+
+#: ``(path, accepted-encoding key)`` -> the validator for those exact bytes.
+#: A code pane re-reads the opened file on every selection. The validator is a
+#: hash of the whole file, so hashing it again on an unchanged file repeated
+#: the work the previous request had already paid. Entries are dropped oldest
+#: first; the cap is a count of files a session actually has open, not a guess
+#: at how many the tree holds.
+_OPENED_FILE_ETAGS: dict[tuple[str, str], _OpenedFileEtag] = {}
+_OPENED_FILE_ETAG_LOCK = threading.Lock()
+_OPENED_FILE_ETAG_MAX = 8
+
+
+def _build_opened_file_etag(path: str, encoding_key: str, raw: bytes) -> str:
+    """Hash *raw* into the strong validator for the opened file at *path*.
+
+    The content digest, not the stat: a rewrite of the same length inside one
+    timestamp tick leaves the stat alone, and a stat-derived tag would then
+    answer 304 for bytes the client never received. *encoding_key* is part of
+    the validator because one file compressed two ways is two bodies.
+    """
+    return _safe_etag("repofile", path, encoding_key, hashlib.sha256(raw).hexdigest())
+
+
+def _opened_file_etag(path: str, encoding_key: str, raw: bytes) -> str:
+    """Validator for an opened file, built once and reused until its bytes change.
+
+    The comparison is the bytes themselves. A matching stat is not enough: the
+    file can be replaced with the same length at the same timestamp, and the
+    validator has to move with the bytes the response is about to send.
+    """
+    key = (path, encoding_key)
+    with _OPENED_FILE_ETAG_LOCK:
+        entry = _OPENED_FILE_ETAGS.get(key)
+        if entry is not None:
+            _touch(_OPENED_FILE_ETAGS, key)
+            cached_raw: bytes | None = entry.raw
+            cached_etag = entry.etag
+        else:
+            cached_raw = None
+            cached_etag = ""
+    if cached_raw is not None and cached_raw == raw:
+        return cached_etag
+    etag = _build_opened_file_etag(path, encoding_key, raw)
+    with _OPENED_FILE_ETAG_LOCK:
+        current = _OPENED_FILE_ETAGS.get(key)
+        if current is not None and current.raw == raw:
+            _touch(_OPENED_FILE_ETAGS, key)
+            return current.etag
+        _evict_oldest(_OPENED_FILE_ETAGS, _OPENED_FILE_ETAG_MAX)
+        _OPENED_FILE_ETAGS[key] = _OpenedFileEtag(raw, etag)
+    return etag
+
+
 def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None = 256) -> str:
     """Format bytes as the canonical 16-bytes-per-line hex dump.
 

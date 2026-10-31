@@ -8,6 +8,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Update the hash-pinned Rebrew runtime to 6.8.0 and align its source provenance.
+- A repeat request for an opened source file reuses that file's ETag until its bytes change. The response bytes for an unchanged file stay the same.
 
 ## [8.7.1] - 2026-10-27
 
