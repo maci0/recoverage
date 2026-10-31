@@ -28,6 +28,7 @@ from recoverage.server import (
     _finalized,
     _header,
     _if_none_match_matches,
+    _opened_file_etag,
     _project_dir,
     _safe_etag,
     app,
@@ -598,9 +599,10 @@ def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
     a version: a rebuild can write a source file of the same length, and two
     writes inside one filesystem timestamp tick leave the mtime the same too,
     so a stat-derived tag answers 304 for a body the pane would then render
-    from a copy the client still holds. The read the hash needs is the read the
-    200 would have done anyway, and on the 304 it is a few hundred kilobytes of
-    hashing.
+    from a copy the client still holds. The hash is computed once per opened
+    file and reused until those bytes change, so a later selection of the same
+    file does not hash the body again. The read still happens: the response is
+    the file, and the cached validator is kept only while the bytes match.
 
     The accepted-encoding KEY is folded in rather than the chosen encoding, for
     the reason :func:`_asset_etag` gives: one file compressed two ways is two
@@ -608,12 +610,7 @@ def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
     function of the same header that picks the encoding, so it separates every
     pair of bodies the two could ever differ over.
     """
-    return _safe_etag(
-        "repofile",
-        str(candidate),
-        static_variant_key(accept_encoding),
-        hashlib.sha256(raw).hexdigest(),
-    )
+    return _opened_file_etag(str(candidate), static_variant_key(accept_encoding), raw)
 
 
 # Compressed static assets, memoized per (filename, accepted-encoding set).
