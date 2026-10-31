@@ -2809,6 +2809,109 @@ class TestSseEvents:
                 result.close()
             api._stop_db_watcher()
 
+    def test_disconnect_ends_the_stream_poll_wait(self) -> None:
+        """close() ends a blocked frame read; a live client keeps the poll.
+
+        The handler sits in ``queue.get`` for ``_SSE_QUEUE_POLL_SECONDS``
+        between frames. That wait has to return when the stream is closed,
+        because the stop event is the disconnect signal and the poll interval
+        is otherwise the whole delay. A second client is still inside its own
+        ``get`` for the production timeout, and a frame still wakes that
+        ``get`` at once. ``_SSE_POLL_INTERVAL_SECONDS`` stays 2s: the watcher
+        is a separate loop and this does not shorten it.
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
+        assert api._SSE_QUEUE_POLL_SECONDS >= 1.0
+
+        disconnected_q: queue.Queue[bytes] = queue.Queue()
+        connected_q: queue.Queue[bytes] = queue.Queue()
+        timeouts: list[float | None] = []
+        connected_entered = threading.Event()
+
+        def connected_get(block: bool = True, timeout: float | None = None) -> bytes:
+            timeouts.append(timeout)
+            connected_entered.set()
+            return queue.Queue.get(connected_q, block, timeout)
+
+        connected_q.get = connected_get  # type: ignore[method-assign]
+
+        disconnected_entered = threading.Event()
+        real_get = disconnected_q.get
+
+        def disconnected_get(block: bool = True, timeout: float | None = None) -> bytes:
+            disconnected_entered.set()
+            return real_get(block, timeout)
+
+        disconnected_q.get = disconnected_get  # type: ignore[method-assign]
+
+        disconnected = api._SSEStream(disconnected_q, "10.0.0.1")
+        connected = api._SSEStream(connected_q, "10.0.0.2")
+        disconnected_gen = iter(disconnected)
+        connected_gen = iter(connected)
+        assert next(disconnected_gen) == b": connected\n\n"
+        assert next(connected_gen) == b": connected\n\n"
+
+        disconnected_got: list[bytes] = []
+        connected_got: list[bytes] = []
+        disconnected_done = threading.Event()
+        connected_done = threading.Event()
+        errors: list[BaseException] = []
+
+        def pull(gen: Any, got: list[bytes], done: threading.Event) -> None:
+            try:
+                got.append(next(gen))
+            except StopIteration:
+                pass
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        workers = [
+            threading.Thread(
+                target=pull,
+                args=(disconnected_gen, disconnected_got, disconnected_done),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=pull,
+                args=(connected_gen, connected_got, connected_done),
+                daemon=True,
+            ),
+        ]
+        api._SSE_CLIENTS[connected_q] = "10.0.0.2"
+        try:
+            for worker in workers:
+                worker.start()
+            assert disconnected_entered.wait(2), "disconnected stream never reached its poll"
+            assert connected_entered.wait(2), "connected stream never reached its poll"
+            assert timeouts == [api._SSE_QUEUE_POLL_SECONDS], timeouts
+            assert not connected_done.is_set()
+
+            started = time.monotonic()
+            disconnected.close()
+            assert disconnected_done.wait(0.5), (
+                "disconnect left the stream blocked in queue.get for the poll interval"
+            )
+            assert time.monotonic() - started < api._SSE_QUEUE_POLL_SECONDS
+            assert disconnected_got == [], disconnected_got
+            assert not connected_done.is_set()
+
+            api._broadcast_db_updated((123, 4))
+            assert connected_done.wait(0.5), "a frame did not wake the connected stream"
+            assert connected_got and connected_got[0].startswith(b"event: db-updated\n")
+            assert not errors, errors
+        finally:
+            disconnected.close()
+            connected.close()
+            api._SSE_CLIENTS.pop(connected_q, None)
+            for worker in workers:
+                worker.join(timeout=2)
+            api._stop_db_watcher()
+
 
 def _sequential_snapshot(seq: list[tuple[int, int]]) -> Any:
     """Snapshot stub yielding *seq*'s values in order, then repeating the last."""

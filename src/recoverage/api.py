@@ -917,6 +917,9 @@ _SSE_HEARTBEAT_SECONDS = 15.0
 # clock.  Below the heartbeat interval so a ping is never more than one
 # poll late, and a named constant so a test can shorten the wait.
 _SSE_QUEUE_POLL_SECONDS = 1.0
+# close() queues this object so a handler blocked in Queue.get returns when
+# the stream stop event is set.  The frame loop matches it by identity.
+_SSE_STOP_FRAME = b"\x1e"
 _SSE_QUEUE_MAX = 32  # per-client buffer; slow clients drop events, not memory
 _SSE_MAX_CLIENTS = 32  # cap on concurrent /api/events streams (thread DoS guard)
 
@@ -1119,6 +1122,11 @@ class _SSEStream:
     ``_release`` also writes the stream's end at DEBUG: the peer is stored
     beside the queue precisely so every later line about this stream can name
     it, and a disconnect was the one movement of the peer that named nothing.
+
+    ``close`` sets ``_stop`` and queues :data:`_SSE_STOP_FRAME`, so a handler
+    blocked in ``Queue.get`` returns instead of finishing
+    ``_SSE_QUEUE_POLL_SECONDS``.  A client that is still connected keeps
+    waiting that same timeout.
     """
 
     def __init__(self, client_queue: queue.Queue[bytes], peer: str = "unknown") -> None:
@@ -1126,12 +1134,32 @@ class _SSEStream:
         self._peer = peer
         self._gen: Generator[bytes] | None = None
         self._released = False
+        self._stop = threading.Event()
         self._opened_at = clock.monotonic()
+
+    def _wake_stopped_get(self) -> None:
+        """Unblock ``Queue.get`` after ``_stop`` is set.
+
+        ``Queue.get`` waits on the queue.  ``_stop`` is an event, so the
+        sentinel is what makes ``get`` return.  A full queue drops one frame
+        to make room for it: the client is already gone.
+        """
+        for _ in range(_SSE_QUEUE_MAX + 1):
+            try:
+                self._queue.put_nowait(_SSE_STOP_FRAME)
+                return
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    return
 
     def _release(self) -> None:
         if self._released:
             return
         self._released = True
+        self._stop.set()
+        self._wake_stopped_get()
         with _SSE_CLIENTS_LOCK:
             _SSE_CLIENTS.pop(self._queue, None)
         # The END of a stream is a lifecycle event, not a bookkeeping step:
@@ -1171,14 +1199,18 @@ class _SSEStream:
         try:
             yield b": connected\n\n"
             last_heartbeat = clock.monotonic()
-            while True:
+            while not self._stop.is_set():
                 try:
                     frame = self._queue.get(timeout=_SSE_QUEUE_POLL_SECONDS)
                 except queue.Empty:
                     frame = None
+                if frame is _SSE_STOP_FRAME or self._stop.is_set():
+                    break
                 if frame is not None:
                     yield frame
                 now = clock.monotonic()
+                if self._stop.is_set():
+                    break
                 if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
                     yield b": ping\n\n"
                     last_heartbeat = now
