@@ -8,6 +8,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Update the hash-pinned Rebrew runtime to 6.8.0 and align its source provenance.
+- Potato Mode builds a section's coverage map once per opened file and reuses
+  it for a later block selection. The rendered bytes of that file stay the same.
 
 ### Fixed
 

@@ -1760,6 +1760,8 @@ def clear_cells_cache() -> None:
     """Clear the memoized potato grid payloads (called on DB rebuild)."""
     with _GRID_CACHE_LOCK:
         _GRID_CACHE.clear()
+    with _COVERAGE_MAP_LOCK:
+        _COVERAGE_MAP_CACHE.clear()
     with _PARENT_INDEX_LOCK:
         _PARENT_INDEX.clear()
     with _POTATO_STATS_CACHE_LOCK:
@@ -2555,38 +2557,68 @@ _CELL_SIZE = 26
 _CELL_INSET = 2
 
 
-def _build_grid_html(
+class _MapPiece(NamedTuple):
+    """One fragment of a coverage map.
+
+    ``orig_idx`` is the block a selection of this fragment outlines, or None
+    for a row break. ``selected`` is the outlined spelling of the fragment's
+    first piece; later pieces of a wrapped span keep ``selected`` empty and
+    always render ``plain``.
+    """
+
+    orig_idx: int | None
+    plain: str
+    selected: str | None
+
+
+class _CoverageMap(NamedTuple):
+    """The lattice of one opened file, selection outline held aside."""
+
+    head: str
+    pieces: tuple[_MapPiece, ...]
+    tail: str
+
+
+#: ``(snapshot, target, section, columns, page, filters, search, matched names)``.
+#: The selection index is absent on purpose: two clicks in one opened file are
+#: two outlines over one lattice.
+_MapKey = tuple[object, ...]
+_COVERAGE_MAP_CACHE: dict[_MapKey, _CoverageMap] = {}
+_COVERAGE_MAP_LOCK = threading.Lock()
+_COVERAGE_MAP_CACHE_MAX = 4
+
+
+def _render_coverage_map(cmap: _CoverageMap, sel_idx: int | None) -> str:
+    """The map with *sel_idx* outlined, or with no outline when *sel_idx* matches nothing."""
+    parts = [cmap.head]
+    for piece in cmap.pieces:
+        if piece.selected is not None and piece.orig_idx == sel_idx:
+            parts.append(piece.selected)
+        else:
+            parts.append(piece.plain)
+    parts.append(cmap.tail)
+    return "".join(parts)
+
+
+def _coverage_map(
     merged_cells: list[dict[str, Any]],
     sec_data: dict[str, Any],
     grid_columns: int,
     active_filters: set[str],
     search_query: str,
     search_matched_fns: set[str],
-    idx_str: str,
     target: str,
     section: str,
-    page_offset: int = 0,
-) -> str:
-    """Render the coverage grid as an HTML table.
+    page_offset: int,
+) -> _CoverageMap:
+    """The coverage lattice for one opened file, built without a selection.
 
-    The lattice is a picture of a byte range, not tabular data: it has no
-    headers, no row or column relationship, and reading it as a table gives a
-    screen reader a grid-shaped announcement and nothing about any block. It is
-    ``role="presentation"`` so its links are reached in reading order instead,
-    each named by the same address range and state its ``title`` carries.
-
-    grid_columns controls the number of cells per row. A sizing row of empty
-    cells painted in the grid background is emitted first so the browser
-    allocates uniform column widths regardless of colspan usage in data rows.
-
-    *page_offset* is the index of this page's first row within the whole merged
-    list, needed only to reconstruct ``orig_idx`` for rows that carry none:
-    _merge_cells returns the parsed cells untouched when a section cannot merge
-    anything, and those cells have no ``orig_idx`` of their own.
+    A click names a byte range or a span inside the file. The outline is the
+    only part of the lattice that click changes, so both spellings of the
+    first piece of each block are stored here and a later selection joins the
+    one it needs. The bytes of every unselected cell are the bytes this build
+    wrote.
     """
-    if grid_columns <= 0:
-        raise ValueError(f"grid_columns must be positive, got {grid_columns}")
-    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     # One cell is one link, so the cell and the image inside it are the target
     # size SC 2.5.8 asks for rather than the pitch a denser map would prefer.
     # The page renders at most _MAX_RENDERED_COLUMNS (1080px), which is what it
@@ -2597,12 +2629,10 @@ def _build_grid_html(
     sizing_tds = "".join(
         f'<td bgcolor="{BG_COLOR}" width="{cell_w}" height="1"></td>' for _ in range(grid_columns)
     )
-    grid_html_parts = [
-        (
-            f'<table id="grid" role="presentation" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
-            f"<tr>{sizing_tds}</tr><tr>"
-        )
-    ]
+    head = (
+        f'<table id="grid" role="presentation" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
+        f"<tr>{sizing_tds}</tr><tr>"
+    )
 
     # Link/attribute fragments that are identical for every cell on the page,
     # hoisted out of the loop (quoting + escaping ~2k times per render was
@@ -2618,13 +2648,33 @@ def _build_grid_html(
     # ~2k cells, and _state_survives_filter is the per-cell form of it.
     lit_states = _lit_states(active_filters)
 
-    # Selection target parsed ONCE for the whole page: comparing each cell's
-    # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
-    try:
-        sel_idx: int | None = parse_ascii_int(idx_str)
-    except ValueError:
-        sel_idx = None
+    def _piece(
+        take: int,
+        w: int,
+        *,
+        outlined: bool,
+        link: str,
+        escaped_title: str,
+        bgcolor: str,
+    ) -> str:
+        # One image for both cells: the selection is an inset of the same
+        # link, and building the markup twice is how the alt text and the
+        # title drift apart between the two.
+        inset = _CELL_INSET if outlined else 0
+        img = (
+            f'<a href="{link}" title="{escaped_title}">'
+            f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
+            f'border="0" alt="{escaped_title}"></a>'
+        )
+        if outlined:
+            return (
+                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{take}">'
+                f'<table role="presentation" border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
+                f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
+            )
+        return f'<td bgcolor="{bgcolor}" width="{w}" height="{cell_h}" colspan="{take}">{img}</td>'
 
+    pieces: list[_MapPiece] = []
     curr_col = 0
     # Sections without file backing (.bss) carry a NULL va (the api.py /asm
     # and /bytes endpoints document and guard this shape): fall back to 0 so
@@ -2643,7 +2693,6 @@ def _build_grid_html(
             and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
-        selected = orig_idx == sel_idx
         link = f"{link_prefix}&idx={orig_idx}{link_suffix}"
         funcs = cell.get("functions", [])
         # hex_addr at width 1: the shortest spelling (this title is on every cell
@@ -2674,43 +2723,135 @@ def _build_grid_html(
         # the next; the selection outline goes on the FIRST piece only, so
         # `id="sel"` stays the one id it is.
         left = span
+        first_piece = True
         while left > 0:
             if curr_col >= grid_columns:
-                grid_html_parts.append("</tr><tr>")
+                pieces.append(_MapPiece(None, "</tr><tr>", None))
                 curr_col = 0
             take = min(left, grid_columns - curr_col)
             w = cell_w * take
-            # One image for both cells: the selection is an inset of the same
-            # link, and building the markup twice is how the alt text and the
-            # title drift apart between the two.
-            inset = _CELL_INSET if selected else 0
-            img = (
-                f'<a href="{link}" title="{escaped_title}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
-                f'border="0" alt="{escaped_title}"></a>'
+            pieces.append(
+                _MapPiece(
+                    orig_idx,
+                    _piece(
+                        take,
+                        w,
+                        outlined=False,
+                        link=link,
+                        escaped_title=escaped_title,
+                        bgcolor=bgcolor,
+                    ),
+                    _piece(
+                        take,
+                        w,
+                        outlined=True,
+                        link=link,
+                        escaped_title=escaped_title,
+                        bgcolor=bgcolor,
+                    )
+                    if first_piece
+                    else None,
+                )
             )
-            if selected:
-                grid_html_parts.append(
-                    f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{take}">'
-                    f'<table role="presentation" border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                    f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
-                )
-            else:
-                grid_html_parts.append(
-                    f'<td bgcolor="{bgcolor}" width="{w}" height="{cell_h}" colspan="{take}">{img}</td>'
-                )
             curr_col += take
             left -= take
-            selected = False
+            first_piece = False
 
+    tail_parts: list[str] = []
     remaining = grid_columns - curr_col
     if remaining > 0:
-        grid_html_parts.append(
+        tail_parts.append(
             f'<td bgcolor="{BG_COLOR}" width="{cell_w * remaining}"'
             f' height="{cell_h}" colspan="{remaining}"></td>'
         )
-    grid_html_parts.append("</tr></table>")
-    return "".join(grid_html_parts)
+    tail_parts.append("</tr></table>")
+    return _CoverageMap(head, tuple(pieces), "".join(tail_parts))
+
+
+def _build_grid_html(
+    merged_cells: list[dict[str, Any]],
+    sec_data: dict[str, Any],
+    grid_columns: int,
+    active_filters: set[str],
+    search_query: str,
+    search_matched_fns: set[str],
+    idx_str: str,
+    target: str,
+    section: str,
+    page_offset: int = 0,
+    *,
+    snap: tuple[int, int] | None = None,
+) -> str:
+    """Render the coverage grid as an HTML table.
+
+    The lattice is a picture of a byte range, not tabular data: it has no
+    headers, no row or column relationship, and reading it as a table gives a
+    screen reader a grid-shaped announcement and nothing about any block. It is
+    ``role="presentation"`` so its links are reached in reading order instead,
+    each named by the same address range and state its ``title`` carries.
+
+    grid_columns controls the number of cells per row. A sizing row of empty
+    cells painted in the grid background is emitted first so the browser
+    allocates uniform column widths regardless of colspan usage in data rows.
+
+    *page_offset* is the index of this page's first row within the whole merged
+    list, needed only to reconstruct ``orig_idx`` for rows that carry none:
+    _merge_cells returns the parsed cells untouched when a section cannot merge
+    anything, and those cells have no ``orig_idx`` of their own.
+
+    *snap* is the render's coverage-document token. When it is present the
+    lattice is built once for that opened file and reused for a later
+    selection; the selection outline is applied on the way out. A missing
+    token builds and returns, which is what a direct call with no snapshot does.
+    """
+    if grid_columns <= 0:
+        raise ValueError(f"grid_columns must be positive, got {grid_columns}")
+    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
+    # Selection target parsed ONCE for the whole page: comparing each cell's
+    # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
+    try:
+        sel_idx: int | None = parse_ascii_int(idx_str)
+    except ValueError:
+        sel_idx = None
+
+    key: _MapKey | None = None
+    if snap is not None:
+        key = (
+            snap,
+            target,
+            section,
+            grid_columns,
+            page_offset,
+            frozenset(active_filters),
+            search_query,
+            frozenset(search_matched_fns) if search_query else frozenset(),
+        )
+        with _COVERAGE_MAP_LOCK:
+            cached = _COVERAGE_MAP_CACHE.get(key)
+            if cached is not None:
+                _touch(_COVERAGE_MAP_CACHE, key)
+        if cached is not None:
+            return _render_coverage_map(cached, sel_idx)
+
+    built = _coverage_map(
+        merged_cells,
+        sec_data,
+        grid_columns,
+        active_filters,
+        search_query,
+        search_matched_fns,
+        target,
+        section,
+        page_offset,
+    )
+    # Same watermark as the cell memo: a rebuild that moved the token while
+    # this lattice was walked must not be filed under the token the next
+    # request will ask for.
+    if key is not None and _snapshot_db_mtime() == snap:
+        with _COVERAGE_MAP_LOCK:
+            _evict_oldest(_COVERAGE_MAP_CACHE, _COVERAGE_MAP_CACHE_MAX)
+            _COVERAGE_MAP_CACHE[key] = built
+    return _render_coverage_map(built, sel_idx)
 
 
 #: The columns this table renders, and therefore the ones it can be ordered by:
@@ -3013,6 +3154,7 @@ def _render_grid_view(
         target=target,
         section=section,
         page_offset=page_offset,
+        snap=snap,
     )
     if page_count > 1:
         grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)

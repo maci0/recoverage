@@ -38,6 +38,7 @@ def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixture
             "test_lifecycle",
             "test_fuzz",
             "test_concurrency",
+            "test_coverage_map_once",
             "test_metrics",
             "test_perf",
         }

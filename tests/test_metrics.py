@@ -933,6 +933,9 @@ class TestProcessGrowthIsBounded:
         # beside the disassembly memo on a rebuild.
         "recoverage.disasm._WIDTH_MEMO": ("_WIDTH_MEMO_MAX", "count"),
         "recoverage.potato._GRID_CACHE": ("_GRID_CACHE_MAX", "count"),
+        # The Potato coverage lattice for one opened file. A later selection
+        # outlines a block on the map this row already holds.
+        "recoverage.potato._COVERAGE_MAP_CACHE": ("_COVERAGE_MAP_CACHE_MAX", "count"),
         "recoverage.potato._PARENT_INDEX": ("_PARENT_INDEX_MAX", "count"),
         "recoverage.potato._POTATO_STATS_CACHE": ("_POTATO_STATS_CACHE_MAX", "count"),
         "recoverage.potato._SECTION_DATA_CACHE": ("_SECTION_DATA_CACHE_MAX", "count"),
