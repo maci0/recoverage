@@ -163,6 +163,7 @@ files = [
     "tests/test_backup.py",
     "tests/test_clispec.py",
     "tests/test_concurrency.py",
+    "tests/test_coverage_map_once.py",
     "tests/test_frontend_import_graph.py",
     "tests/test_import_graph.py",
     "tests/test_lint_html.py",
