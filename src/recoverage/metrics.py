@@ -241,7 +241,7 @@ class RequestStats:
         if from_status == to_status:
             return
         old, new = status_bucket(from_status), status_bucket(to_status)
-        delta = 1 if to_status >= 500 else -1
+        delta = int(to_status >= 500) - int(from_status >= 500)
         with self._lock:
             self._by_status[old] = self._by_status.get(old, 0) - 1
             if self._by_status[old] <= 0:

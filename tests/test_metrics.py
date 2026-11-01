@@ -644,6 +644,14 @@ class TestStats:
         assert snap["by_status"] == {"4xx": 1}
         assert snap["total"] == 1
 
+    def test_reclassify_within_error_bucket_keeps_one_error(self) -> None:
+        metrics.REQUESTS.finish("/api/x", 500, 5.0)
+        metrics.REQUESTS.reclassify("/api/x", 500, 503)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["by_status"] == {"5xx": 1}
+        assert snap["errors"] == 1
+        assert snap["by_route"]["/api/x"]["errors"] == 1
+
     def test_reset_leaves_the_in_flight_gauge_alone(self) -> None:
         """`reset` zeroes lifetime counters, not the gauge.
 
@@ -945,6 +953,7 @@ class TestProcessGrowthIsBounded:
         # here from `potato._FUNCTION_ROWS` when the API list endpoint started
         # reading the same derived set instead of re-deriving it per request.
         "recoverage.server._SNAPSHOT_INDEX": ("_SNAPSHOT_INDEX_MAX", "count"),
+        "recoverage.server._OPENED_FILE_ETAGS": ("_OPENED_FILE_ETAG_MAX", "count"),
         # The route module's cache invalidators, registered once per route
         # module by the composition root at import. No bound constant: the
         # list is closed by the import graph, which `tests/test_import_graph.py`

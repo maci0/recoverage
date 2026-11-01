@@ -3,6 +3,14 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [8.8.1] - 2026-11-01
+
+### Fixed
+
+- Keep health error counts accurate when a server error is reclassified as another server error.
+
 ## [8.8.0] - 2026-11-01
 
 ### Changed
