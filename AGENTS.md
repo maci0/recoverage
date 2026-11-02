@@ -313,12 +313,12 @@ document to the fields an SPDX reader requires, the versions `bun.lock`
 resolved, the digests it pinned, the licenses `NOTICE` credits, and the
 reproducible stamp.
 
-The interpreter is pinned in `.python-version` (3.15.1), which is what uv builds
+The interpreter is pinned in `.python-version` (3.15.2), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their
 `setup-python` steps take `python-version-file: .python-version`, and `bun`
 comes from `package.json`'s `packageManager` through `bun-version-file`. No
 job restates either version; `tests/test_supply_chain.py` fails if a literal
-comes back. The test matrix uses the selected 3.15 patch; its `include` entries name 3.15.1
+comes back. The test matrix uses the selected 3.15 patch; its `include` entries name 3.15.2
 because make is not part of the Windows runner's toolchain, so that job spells
 out the pytest command instead of calling `make test`.
 

@@ -5,9 +5,9 @@ edit-test loop, and the one command that reproduces CI before you push.
 
 ## Bootstrap (clean clone)
 
-Needs [uv](https://docs.astral.sh/uv/) 0.13.5 or newer (`UV_VERSION` in the
+Needs [uv](https://docs.astral.sh/uv/) 0.13.6 or newer (`UV_VERSION` in the
 `Makefile`, the version CI installs). The interpreter is
-pinned in `.python-version` (3.15.1); uv downloads it if necessary.
+pinned in `.python-version` (3.15.2); uv downloads it if necessary.
 
 ```bash
 make setup          # uv sync --locked --extra dev

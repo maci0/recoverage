@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.8.2] - 2026-11-02
+
+### Changed
+
+- Update Python and browser dependencies, refresh the verified Rebrew release pin, and update development runtimes.
+
 ## [8.8.1] - 2026-11-01
 
 ### Fixed

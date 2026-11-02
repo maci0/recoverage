@@ -48,13 +48,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -99,13 +99,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -158,15 +158,15 @@ jobs:
         os: [ubuntu-24.04]
         # Keep in sync with the Python classifiers in pyproject.toml;
         # tests/test_supply_chain.py fails when they drift apart.
-        python-version: ["3.15.1"]
+        python-version: ["3.15.2"]
         # The README claims recoverage "runs independently on any machine",
         # and pip users run it on all three OSes; exercise that claim on at
         # least one non-Linux runner per OS instead of asserting it untested.
         include:
           - os: macos-latest
-            python-version: "3.15.1"
+            python-version: "3.15.2"
           - os: windows-latest
-            python-version: "3.15.1"
+            python-version: "3.15.2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -176,13 +176,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -224,13 +224,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -343,13 +343,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -382,13 +382,13 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
           # cache differently. setup-uv has no version-file input; the literal
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
-          version: "0.13.5"
+          version: "0.13.6"
           enable-cache: true
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:

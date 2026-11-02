@@ -71,8 +71,8 @@ metadata fetches the exact hash-pinned Rebrew wheel automatically; no local
 Rebrew checkout is required.
 
 ```bash
-uv venv --python 3.15.1
-uv pip install "https://github.com/maci0/recoverage/releases/download/v8.8.1/recoverage-8.8.1-py3-none-any.whl"
+uv venv --python 3.15.2
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.8.2/recoverage-8.8.2-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 
