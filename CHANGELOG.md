@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.9.0] - 2026-11-04
+
+### Changed
+
+- Pin the verified Rebrew release to 6.16.0.
+
 ## [8.8.2] - 2026-11-02
 
 ### Changed

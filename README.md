@@ -72,7 +72,7 @@ Rebrew checkout is required.
 
 ```bash
 uv venv --python 3.15.2
-uv pip install "https://github.com/maci0/recoverage/releases/download/v8.8.2/recoverage-8.8.2-py3-none-any.whl"
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.9.0/recoverage-8.9.0-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 
