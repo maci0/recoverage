@@ -334,6 +334,32 @@ recoverage schema serve             # only the serve command
 
 A command path that matches no command exits 2.
 
+### `recoverage ops call`
+
+Answer one of the relumea backend's coverage ops: the JSON request on stdin,
+the JSON reply on stdout. This is the transport the backend's dispatch worker
+uses; a person running the CLI wants `check` or `export` instead.
+
+```bash
+recoverage ops call recoverage.coverage_gate < gate.json
+recoverage ops call recoverage.coverage_export < export.json
+```
+
+Two ops are answered. `recoverage.coverage_gate` takes `project_dir`,
+`sha256`, `min_coverage` and an optional `section`, and replies with the
+document `check --json` prints plus a `reason` when nothing was checked.
+`recoverage.coverage_export` takes `project_dir`, `sha256` and `format` (`json`,
+`csv` or `md`), and replies with `format`, `content_type` and the rendered
+`body`. Both name a target by the SHA-256 of its binary, resolved through
+rebrew's project config rather than by `--target` name.
+
+A request is refused, with a JSON `{"error", "detail", "status"}` on stdout and
+exit 2, when it is not JSON, names an unknown field, misses a required one, or
+names an op that does not exist. `--workspace` (or `RECOVERAGE_OPS_WORKSPACE`)
+confines every `project_dir` to that directory; without it the worker trusts
+any absolute path. Nothing is written to stderr except a log line for a failure
+the worker could not classify.
+
 ---
 
 ## API Endpoints

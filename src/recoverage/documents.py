@@ -351,10 +351,15 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
 
 
 def _project_view(source: Path) -> ProjectCoverageView | None:
+    from recoverage._paths import current_project_override
     from recoverage.config import snapshot_override
 
     override = snapshot_override()
-    if (override is not None and override.resolve() == source.resolve()) or not (
+    # An op's explicit project wins over the environment: RECOVERAGE_SNAPSHOTS
+    # selects the dashboard's portable exports, not the project a request
+    # names, so the same directory must still be read live.
+    named = current_project_override()
+    if (override is not None and named is None and override.resolve() == source.resolve()) or not (
         source / CONFIG_NAME
     ).exists():
         return None

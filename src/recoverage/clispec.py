@@ -68,6 +68,11 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
         "read_only",
     ),
     _command(
+        "ops call",
+        "Answer one dispatched op: the JSON request on stdin, the reply on stdout.",
+        "read_only",
+    ),
+    _command(
         "regen",
         "Refresh the live project view without writing coverage files.",
         "non_idempotent",

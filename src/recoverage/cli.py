@@ -27,7 +27,7 @@ from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
 from rich.theme import Theme
 
-from recoverage import clock, config
+from recoverage import clock, config, ops
 from recoverage._paths import coverage_source
 from recoverage.devserver import (
     _KeepAliveRequestHandler,
@@ -37,6 +37,14 @@ from recoverage.devserver import (
     resolve_listen_port,
 )
 from recoverage.documents import COVERAGE_GLOB
+from recoverage.reporting import (
+    CSV_HEADER,
+    Verdict,
+    csv_row,
+    gate,
+    markdown_lines,
+    section_row,
+)
 from recoverage.status_colors import RICH_STYLES
 
 #: The root help's examples, as (command, what it does), printed as one block
@@ -371,30 +379,6 @@ _VERDICT_COLORS: dict[str, str] = {
     "FAIL": typer.colors.RED,
 }
 
-# Leading characters spreadsheets (Excel, LibreOffice) interpret as formulas
-# or control sequences when a CSV cell starts with them.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-# Line terminators a Markdown reader breaks on and `str.splitlines` splits on,
-# beyond the CR and LF the table's own rows are made of.  A section name or
-# target id carrying U+2028 or U+2029 came from a PE image, so it is a value a
-# hostile sample plants, and it turns one table row into two: the export
-# renders ragged and the row after it reads as a section that does not exist.
-# Folding them to a space is what the CR/LF arms already do, and it keeps the
-# value recognisable, which an escape sequence would not.
-_MD_LINE_BREAKS = str.maketrans(
-    {
-        "\r": " ",
-        "\n": " ",
-        "\u2028": " ",
-        "\u2029": " ",
-    }
-)
-
-# The one character a pipe inside a table cell ends, and the escape the export
-# writes in its place (GFM's own spelling, so the file stays readable).
-_MD_PIPE = "\\|"
-
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
 _REBUILD_HINT = "(inspect project inputs or RECOVERAGE_SNAPSHOTS)"
@@ -488,22 +472,6 @@ def _utf8_stream(stream: IO[str]) -> IO[str]:
     if buffer is None:
         return stream
     return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace", newline="")
-
-
-def _csv_safe(value: Any) -> Any:
-    """Neutralize spreadsheet formula injection (CWE-1236) in exported cells.
-
-    Target ids and section names originate in analyzed PE binaries, so a
-    malicious sample can plant a section named ``=HYPERLINK(...)`` or
-    ``@SUM(...)`` that Excel executes when the exported file is opened.
-    Prefixing with an apostrophe forces text interpretation (the standard
-    OWASP mitigation); a non-string cell (the numbers the rows carry) passes
-    through untouched.  A string that merely looks numeric is prefixed like any
-    other, because ``-`` and ``+`` are formula prefixes too.
-    """
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
-        return f"'{value}"
-    return value
 
 
 def _checked_port(value: int | str) -> int:
@@ -1818,38 +1786,6 @@ def serve(
             browser_timer.cancel()
 
 
-#: Per-section values the table, CSV and Markdown renders all print, in the
-#: order they print them.  ONE list: `stats`, `export --format csv` and
-#: `export --format md` are the same table in three spellings, and a key added
-#: to one and forgotten in another renders a header and a body that disagree.
-#: The table and the Markdown export head the verdict columns with the verdict
-#: tokens the dashboard prints (EXACT, RELOC, NEAR, STUB); the CSV keeps the
-#: JSON keys, which are what a script joins on. Every format lists the sections
-#: in the order the coverage document does, which is the load order rebrew
-#: writes and the order the dashboard's tabs follow, not alphabetical (which
-#: put .bss first and the section carrying the work last).
-_SECTION_COLUMNS: tuple[str, ...] = (
-    "size_bytes",
-    "total_cells",
-    "exact",
-    "reloc",
-    "near_match",
-    "stub",
-    "coverage_pct",
-)
-
-
-def _section_row(sec: dict[str, Any]) -> list[Any]:
-    """One section's :data:`_SECTION_COLUMNS` values, in that order.
-
-    ``.get(..., 0)`` for every key, not a mix: a NULL section size is
-    schema-legal (.bss carries one) and reaches the CLI as 0 from
-    ``_section_stats``, so a missing key and a zero-sized section read the
-    same in every format.
-    """
-    return [sec.get(field, 0) for field in _SECTION_COLUMNS]
-
-
 def _export_write_failed(
     exc: OSError | UnicodeError, output_format: str, progress: str
 ) -> NoReturn:
@@ -1930,7 +1866,8 @@ def stats(
             # escape(): the target id is a value out of a coverage document,
             # and Rich reads square brackets in a printed string or a table
             # cell as markup. The CSV and Markdown arms route the same value
-            # through _csv_safe / _md_safe for the same reason.
+            # through reporting.csv_safe / reporting.md_safe for the same
+            # reason.
             console.print(f"[bold cyan]{escape(tid)}[/bold cyan]")
 
             if data["summary"]:
@@ -1962,7 +1899,7 @@ def stats(
             table.add_column("Coverage", justify="right", style="bold")
 
             for sec_name, sec in data["sections"].items():
-                size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
+                size, cells, exact, reloc, near_match, stub, coverage_pct = section_row(sec)
                 table.add_row(
                     escape(sec_name),
                     f"{size:,} B",
@@ -2022,8 +1959,6 @@ def export(
         output_format = ExportFormat.json
     json_output = output_format is ExportFormat.json
 
-    from recoverage.server import pct_1dp
-
     with _open_targets(target, json_output=json_output) as (snapshots, targets):
         all_data = [_get_stats(snapshots, tid, json_output=json_output) for tid in targets]
 
@@ -2054,12 +1989,10 @@ def export(
         total = sum(len(data["sections"]) for data in all_data)
         try:
             writer = csv.writer(stream, lineterminator=os.linesep)
-            writer.writerow(["target", "section", *_SECTION_COLUMNS])
+            writer.writerow(CSV_HEADER)
             for data in all_data:
                 for sec_name, sec in data["sections"].items():
-                    writer.writerow(
-                        [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
-                    )
+                    writer.writerow(csv_row(data["target"], sec_name, sec))
                     written += 1
             stream.flush()
         except BrokenPipeError:
@@ -2084,91 +2017,18 @@ def export(
                     stream.detach()
 
     elif output_format == ExportFormat.md:
-
-        def _md_safe(s: str) -> str:
-            return s.replace("|", _MD_PIPE).translate(_MD_LINE_BREAKS)
-
         written = 0
         total = sum(len(data["sections"]) for data in all_data)
         try:
-            for index, data in enumerate(all_data):
-                # Blank line between targets, never before the first one: a
-                # redirected file must not start with an empty line.
-                if index:
-                    typer.echo()
-                typer.echo(f"## {_md_safe(data['target'])}\n")
-                # Same columns as the CSV export, minus the per-target key the
-                # "## <target>" heading above already carries.  Header,
-                # separator, and body must agree on the count or the table
-                # renders ragged.
-                # Figures right-aligned, the way the table prints them.
-                typer.echo("| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |")
-                typer.echo("|---------|-----:|------:|------:|------:|-----:|-----:|---------:|")
-                for sec_name, sec in data["sections"].items():
-                    size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
-                    typer.echo(
-                        f"| {_md_safe(sec_name)}"
-                        f" | {size:,} B | {cells:,}"
-                        f" | {exact:,} | {reloc:,} | {near_match:,}"
-                        f" | {stub:,} | {pct_1dp(coverage_pct):.1f}% |"
-                    )
-                    written += 1
+            for data in all_data:
+                for line in markdown_lines([data]):
+                    typer.echo(line)
+                written += len(data["sections"])
         except BrokenPipeError:
             # main() owns `export | head`; see the CSV arm above.
             raise
         except (OSError, UnicodeError) as exc:
             _export_write_failed(exc, "Markdown", f"after {written} of {total} section rows")
-
-
-def _section_verdict(
-    pct: float,
-    untracked: bool,
-    section_requested: bool,
-    min_coverage: float,
-) -> tuple[str, dict[str, Any], str]:
-    """Classify one section against the gate: (status, JSON extras, human text).
-
-    *pct* is the UNROUNDED coverage percentage — callers recompute it from
-    the raw covered/total byte counts, because the gate must decide on the
-    true ratio: comparing the 2dp display value _section_stats stores lets
-    99.9997% pass a --min-coverage 100 gate.  The quoted value is the same
-    floored-to-2dp percentage /stats serves (server.coverage_pct), so a
-    verdict never quotes a number the dashboard does not, and a FAIL line
-    cannot read "coverage 100.00% < 100.00%".
-
-    Sections whose cells are all "none" carry no coverage signal — the grid
-    only records match states in .text — so they must not fail the gate.
-    An explicitly requested untracked section still fails: the user asked to
-    gate something that is not being recorded.
-    """
-    if untracked and section_requested:
-        return (
-            "FAIL",
-            {"reason": "no tracked cells; coverage is not recorded for this section"},
-            "has no tracked cells; coverage is not recorded for this section",
-        )
-    if untracked:
-        return (
-            "SKIP",
-            {"reason": "no tracked cells; coverage is not recorded"},
-            "has no tracked cells; coverage is not recorded",
-        )
-    # Compare the unrounded ratio, print it floored to 2dp (see docstring).
-    # The /100 denominator cancels the helper's own ×100: what matters is that
-    # the value is floored, so 99.9997% cannot be quoted as 100.00% beside a
-    # FAIL verdict that just compared it against 100.00%.
-    shown = floor_pct(pct, 100, 2)
-    if pct < min_coverage:
-        return (
-            "FAIL",
-            {"coverage_pct": shown},
-            f"coverage {shown:.2f}% < {min_coverage:.2f}%",
-        )
-    return (
-        "PASS",
-        {"coverage_pct": shown},
-        f"coverage {shown:.2f}% >= {min_coverage:.2f}%",
-    )
 
 
 def _checked_min_coverage(value: str, json_output: bool) -> float:
@@ -2246,77 +2106,44 @@ def check(
         snapshots,
         targets,
     ):
-        failed = False
-        checked = 0
-        compared = 0
-        verdicts: list[dict[str, Any]] = []
-        for tid in targets:
-            data = _get_stats(snapshots, tid, json_output=json_output)
-            sections_to_check = data["sections"]
-            if section:
-                if section not in sections_to_check:
-                    # A per-section verdict, so it belongs on stdout with the
-                    # PASS/FAIL lines: `check 2>/dev/null` must not drop the
-                    # sections it declined to gate.  Under --json, stdout is
-                    # the machine channel, so the note moves to stderr.
-                    _secho(
-                        f"SKIP: {tid} has no section {section}",
-                        fg=typer.colors.YELLOW,
-                        err=json_output,
-                    )
-                    continue
-                sections_to_check = {section: sections_to_check[section]}
+        stats = [(tid, _get_stats(snapshots, tid, json_output=json_output)) for tid in targets]
 
-            for sec_name, sec in sections_to_check.items():
-                checked += 1
-                covered = sec.get("covered_bytes") or 0
-                untracked = covered <= 0
-                if not untracked:
-                    compared += 1
-                # Gate on the unrounded byte ratio; sec["coverage_pct"] is
-                # display-rounded to 2dp (see _section_verdict).  total_bytes
-                # == 0 implies covered == 0 (cell spans are non-negative, so
-                # covered <= total), i.e. an untracked section whose verdict
-                # never reads pct, so no fallback value can reach a comparison.
-                total_bytes = sec.get("total_bytes") or 0
-                pct = covered / total_bytes * 100 if total_bytes else 0.0
-                status, extra, human = _section_verdict(pct, untracked, bool(section), threshold)
-                if status == "FAIL":
-                    failed = True
-                verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})
-                if not json_output:
-                    _secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
+    outcome = gate(stats, min_coverage=threshold, section=section)
+    skipped = set(outcome.skipped_targets)
+    by_target: dict[str, list[Verdict]] = {}
+    for verdict in outcome.verdicts:
+        by_target.setdefault(verdict.target, []).append(verdict)
 
-    if checked == 0:
+    for tid, _ in stats:
+        if tid in skipped:
+            # A per-section verdict, so it belongs on stdout with the
+            # PASS/FAIL lines: `check 2>/dev/null` must not drop the sections
+            # it declined to gate.  Under --json, stdout is the machine
+            # channel, so the note moves to stderr.
+            _secho(
+                f"SKIP: {tid} has no section {section}",
+                fg=typer.colors.YELLOW,
+                err=json_output,
+            )
+            continue
+        if json_output:
+            continue
+        for verdict in by_target.get(tid, ()):
+            _secho(
+                f"{verdict.status}: {tid} {verdict.section} {verdict.human}",
+                fg=_VERDICT_COLORS[verdict.status],
+            )
+
+    if outcome.reason is not None:
         _fail(
-            "Error: no sections matched; nothing was checked.",
-            "no sections matched; nothing was checked",
-            1,
-            json_output,
-        )
-    if compared == 0 and not failed:
-        # Every section was skipped as untracked and nothing failed — a
-        # project with no recorded coverage must not pass vacuously.  An
-        # explicit --section on an untracked section already produced a FAIL
-        # verdict above; that verdict (and the JSON results array) must reach
-        # the caller instead of being replaced by this generic error.
-        _fail(
-            "Error: no tracked sections; nothing was checked.",
-            "no tracked sections; nothing was checked",
+            f"Error: {outcome.reason}.",
+            outcome.reason,
             1,
             json_output,
         )
     if json_output:
-        typer.echo(
-            _dumps(
-                {
-                    "passed": not failed,
-                    "min_coverage": threshold,
-                    "results": verdicts,
-                }
-            )
-        )
-    if failed:
+        typer.echo(_dumps(outcome.document()))
+    if not outcome.passed:
         raise typer.Exit(1)
 
 
@@ -2667,6 +2494,11 @@ def schema_cmd(
             kind="usage",
         )
     typer.echo(_dumps(document))
+
+
+# The op worker is a group of its own so `ops call` reads as one command path
+# while the backend's wire names stay `recoverage.<op>`.
+app.add_typer(ops.app, name="ops")
 
 
 # Group flags that answer the invocation themselves, so ``recoverage --help``

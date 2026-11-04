@@ -62,6 +62,27 @@ Export coverage data to stdout as JSON, CSV or Markdown.
 .B check
 Check coverage against a threshold (CI gate).
 .TP
+.B ops
+Answer the relumea backend's recoverage ops over stdin/stdout.
+.B ops call
+.I op
+reads one JSON request on stdin and writes the JSON reply on stdout; a
+refusal prints an object naming the error, its detail and its status, and
+exits 2. The ops are
+.B recoverage.coverage_gate
+and
+.BR recoverage.coverage_export ;
+a request names an absolute
+.I project_dir
+and the sha256 of a target's binary.
+.BI \-\-workspace " DIR"
+confines every request
+.I project_dir
+to
+.I DIR
+(env:
+.BR RECOVERAGE_OPS_WORKSPACE ).
+.TP
 .B regen
 Refresh the live project view without generating files. Progress and errors go to
 stderr. Portable snapshots are read-only; unset RECOVERAGE_SNAPSHOTS to refresh a
@@ -338,6 +359,14 @@ log nothing at all.
 Explicit portable/offline snapshot directory. Leave unset for live project reads;
 live services set their working directory inside the project. A file path is a
 configuration error. Backup and restore operate only on explicit portable exports.
+.TP
+.B RECOVERAGE_OPS_WORKSPACE
+Default for
+.B ops call
+.BR \-\-workspace :
+the directory every request
+.I project_dir
+must resolve inside. The backend sets it when it dispatches an op.
 .TP
 .B RECOVERAGE_MAX_CONNECTIONS
 Cap on concurrent client connections. There is no flag for it: it sizes the

@@ -79,6 +79,8 @@ recoverage/
 │   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
+│   ├── test_ops.py           # The backend op worker: gate/export replies, refusals, target
+│   │                         #   resolution, workspace confinement, project override
 │   ├── test_lifecycle.py     # Lifecycle: live refresh, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
@@ -118,7 +120,11 @@ recoverage/
     │                        #   (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
-    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen,
+    ├── reporting.py         # Rows, CSV/Markdown escaping, export rendering and gate verdicts,
+    │                        #   shared by `export`/`check` and the op worker
+    ├── ops.py               # The backend's recoverage ops (`ops call <op>`): JSON request on
+    │                        #   stdin, JSON reply on stdout, target named by binary SHA-256
+    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, ops, regen,
     │                        #   backup, restore, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,

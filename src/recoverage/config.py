@@ -70,6 +70,7 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_FUZZ_SEED",
         "RECOVERAGE_LOG_LEVEL",
         "RECOVERAGE_MAX_CONNECTIONS",
+        "RECOVERAGE_OPS_WORKSPACE",
         "RECOVERAGE_PORT",
         "RECOVERAGE_TOKEN",
     }

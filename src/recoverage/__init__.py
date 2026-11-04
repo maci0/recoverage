@@ -22,6 +22,9 @@ Module map (dependencies point one way, left to right):
   cross-cutting wiring (auth/log/security-header hooks, 500 handler,
   OPTIONS preflight catch-all) but no content routes; configured at
   startup via ``configure_security()``
+- ``reporting``   — the report's rows, escaping, exports and gate verdict, shared
+  by the CLI and the ops so every surface prints the same numbers (imports
+  server for the 1dp figure)
 - ``potato``      — server-side HTML renderer (imports server+disasm+_paths)
 - ``ui``          — SPA/static routes (imports server; /potato is mounted by
   potato)
@@ -31,7 +34,9 @@ Module map (dependencies point one way, left to right):
 - ``webapp``      — composition root: imports api+ui+potato so ``app`` has
   every route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports
-  server+regen for config and stats helpers)
+  server+regen for config and stats helpers, and reports through ``reporting``)
+- ``ops``         — the ``recoverage.*`` ops the backend dispatches: one JSON
+  request on stdin, one reply on stdout (imports documents+reporting+_paths)
 - ``clispec``     — clispec 0.3 document for the CLI (no in-package imports)
 - ``__main__``    — ``python -m recoverage``; forwards argv to ``cli.main``
 

@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `recoverage ops call` answers the relumea backend's `recoverage.coverage_gate`
+  and `recoverage.coverage_export` ops: one JSON request on stdin, one JSON
+  reply on stdout, and a target named by its binary's SHA-256. `--workspace`
+  or `RECOVERAGE_OPS_WORKSPACE` confines the request `project_dir`.
+
 ## [8.9.0] - 2026-11-04
 
 ### Changed

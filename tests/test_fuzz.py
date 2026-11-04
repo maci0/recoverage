@@ -109,7 +109,7 @@ from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
 from typer.main import get_command
 from typer.testing import CliRunner
 
-from recoverage import cli, config, devserver, potato
+from recoverage import cli, config, devserver, potato, reporting
 from recoverage import server as srv
 from recoverage.api import (
     _MAX_BATCH_BODY_BYTES,
@@ -4231,7 +4231,7 @@ class TestFunctionVaSegment:
 # commands parse nothing a stranger typed, but they RENDER what a coverage
 # document holds into a table, a JSON document, a CSV file and a Markdown
 # file, and those four formats each have their own escaping rule
-# (`cli._csv_safe`, `cli._md_safe`, `json.dumps`, Rich's markup parser).  An
+# (`reporting.csv_safe`, `reporting.md_safe`, `json.dumps`, Rich's markup parser).  An
 # escaped value that arrives at the file mangled, or an unescaped one that
 # lands in it, is a defect no HTTP status code can show, and the CSV and
 # Markdown arms are the two a reader opens in a spreadsheet.
@@ -4401,10 +4401,11 @@ class TestCliRendersHostileDocumentValues:
         # The pair assertion across the write boundary: what the reader reads
         # back is what the writer was handed, and the two string cells are the
         # ones the formula guard is responsible for.
-        assert row[0] == cli._csv_safe(target), f"target cell mangled: {row[0]!r}"
-        assert row[1] == cli._csv_safe(section), f"section cell mangled: {row[1]!r}"
-        assert section in cli._csv_safe(section), "the guard prefixed a name it should not have"
-        if section.startswith(cli._CSV_FORMULA_PREFIXES):
+        guarded = reporting.csv_safe(section)
+        assert row[0] == reporting.csv_safe(target), f"target cell mangled: {row[0]!r}"
+        assert row[1] == guarded, f"section cell mangled: {row[1]!r}"
+        assert section in guarded, "the guard prefixed a name it should not have"
+        if guarded != section:
             assert row[1].startswith("'"), f"a formula cell reached the file unprefixed: {row[1]!r}"
 
     def _assert_markdown(self, text: str, section: str) -> None:
@@ -4420,7 +4421,7 @@ class TestCliRendersHostileDocumentValues:
         assert _md_cells(body) == _md_cells(header), (
             f"ragged Markdown row ({_md_cells(body)} vs {_md_cells(header)} cells): {body!r}"
         )
-        assert section.replace("|", cli._MD_PIPE).translate(cli._MD_LINE_BREAKS) in body, (
+        assert reporting.md_safe(section) in body, (
             f"the section name did not survive the Markdown export: {body!r}"
         )
 
