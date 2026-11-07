@@ -136,6 +136,9 @@ _NO_GIT = "<git unavailable>"
 # (TestPythonAnalysisIsEnforced::test_a_new_test_module_cannot_join_untyped).
 _UNTYPED_TEST_MODULES = {
     "test_api.py": "untyped WSGI request helpers and a read that cannot be narrowed",
+    "test_coverage_input.py": "untyped retained input fixtures",
+    "test_ops_retained.py": "untyped retained operation fixtures",
+    "test_ops_serve.py": "subprocess and HTTP helpers over the untyped retained fixtures",
     "test_build.py": "sdist and wheel helpers that hand back untyped values",
     "test_cli.py": "stub buffers passed where the stdlib declares a concrete buffer type",
     "test_config.py": "a PurePosixPath handed to a reader declared to take a Path",

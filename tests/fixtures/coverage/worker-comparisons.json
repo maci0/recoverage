@@ -1,0 +1,132 @@
+{
+  "binary_sha256": "a052ff350dbd40517ed10e190f2b2a352f598c08f324ec585d41452aa9ebcaf2",
+  "compiler": "gcc-14.2.0",
+  "outcomes": [
+    {
+      "candidate": "int add(int a, int b) { return a + b; }\n",
+      "result": {
+        "source": "src/add.c",
+        "symbol": "add",
+        "va": "0x401120",
+        "size": 4,
+        "status": "EXACT",
+        "match_count": 4,
+        "total": 4,
+        "reloc_count": 0,
+        "obj_size": 4,
+        "context_hash": null,
+        "mismatches": []
+      }
+    },
+    {
+      "candidate": "int add(int a, int b) { return a - b; }\n",
+      "result": {
+        "source": "src/add.c",
+        "symbol": "add",
+        "va": "0x401120",
+        "size": 4,
+        "status": "SIZE_MISMATCH",
+        "match_count": 0,
+        "total": 5,
+        "reloc_count": 0,
+        "obj_size": 5,
+        "context_hash": null,
+        "mismatches": [
+          {
+            "offset": 0,
+            "target": "0x8d",
+            "got": "0x89"
+          },
+          {
+            "offset": 1,
+            "target": "0x04",
+            "got": "0xf8"
+          },
+          {
+            "offset": 2,
+            "target": "0x37",
+            "got": "0x29"
+          },
+          {
+            "offset": 3,
+            "target": "0xc3",
+            "got": "0xf0"
+          }
+        ]
+      }
+    },
+    {
+      "candidate": "int add(int a, int b) { return a + b*2; }\n",
+      "result": {
+        "source": "src/add.c",
+        "symbol": "add",
+        "va": "0x401120",
+        "size": 4,
+        "status": "NEAR_MATCHING",
+        "match_count": 3,
+        "total": 4,
+        "reloc_count": 0,
+        "obj_size": 4,
+        "context_hash": null,
+        "mismatches": [
+          {
+            "offset": 2,
+            "target": "0x37",
+            "got": "0x77"
+          }
+        ]
+      }
+    },
+    {
+      "candidate": "int main(void) { return 0; }\n",
+      "result": {
+        "source": "src/main.c",
+        "symbol": "main",
+        "va": "0x401020",
+        "size": 15,
+        "status": "STUB",
+        "match_count": 0,
+        "total": 15,
+        "reloc_count": 0,
+        "obj_size": 3,
+        "context_hash": null,
+        "mismatches": [
+          {
+            "offset": 0,
+            "target": "0xbe",
+            "got": "0x31"
+          },
+          {
+            "offset": 1,
+            "target": "0x03",
+            "got": "0xc0"
+          },
+          {
+            "offset": 2,
+            "target": "0x00",
+            "got": "0xc3"
+          }
+        ]
+      }
+    }
+  ],
+  "unqualified_relocation": {
+    "binary_sha256": "b22d8a243b80cdff66c674e770220ad400ab8bfbb5313dc0f679e6acbdf7ce2f",
+    "compiler": "mingw-16.2.0",
+    "candidate": "extern int value;\nint read_value(void) { return value; }\n",
+    "source_binding": "/* ADDRESS: SAMPLE 0x403004 */\nint value;\n",
+    "result": {
+      "source": "src/read_value.c",
+      "symbol": "read_value",
+      "va": "0x401560",
+      "size": 6,
+      "status": "RELOC",
+      "match_count": 6,
+      "total": 6,
+      "reloc_count": 1,
+      "obj_size": 6,
+      "context_hash": null,
+      "mismatches": []
+    }
+  }
+}

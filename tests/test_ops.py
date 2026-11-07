@@ -379,3 +379,89 @@ class TestProjectOverride:
         reply = _reply(_gate(project, min_coverage=0))
         assert reply["passed"] is True
         assert seen == [project.resolve()]
+
+
+def test_map_matches_dashboard_and_json_export(project: Path) -> None:
+    request = {"project_dir": str(project), "sha256": SHA256}
+    result = _reply(request, op="recoverage.coverage_map")
+    exported = _reply(_export(project), op="recoverage.coverage_export")
+    row = json.loads(exported["body"])["items"][0]
+    assert result["stats"] == {k: v for k, v in row.items() if k != "target"}
+    assert result["sections"][".text"]["cells"]
+    assert result["section_cell_stats"][".text"]["total_cells"] == len(
+        result["sections"][".text"]["cells"]
+    )
+
+
+def test_decomp_dev_export_uses_rebrew_report(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rebrew.report
+
+    def report(cfg: Any, output: Path) -> dict[str, Any]:
+        assert cfg.target_name == PROJECT
+        output.write_text('{"version": 2, "measures": {}, "units": []}', encoding="utf-8")
+        return {}
+
+    monkeypatch.setattr(rebrew.report, "generate_decomp_dev_report", report)
+    result = _reply(_export(project, "decomp.dev"), op="recoverage.coverage_export")
+    assert result["content_type"] == "application/json"
+    assert json.loads(result["body"]) == {"version": 2, "measures": {}, "units": []}
+
+
+def test_decomp_dev_export_real_project(tmp_path: Path) -> None:
+    """The wire body is Rebrew's real objdiff report, not cell coverage."""
+    import shutil
+
+    from rebrew.config import load_config
+    from rebrew.report import generate_decomp_dev_report
+
+    retained = next(
+        (
+            parent / "rebrew-test-projects/bench-rebrew"
+            for parent in Path(__file__).resolve().parents
+            if (parent / "rebrew-test-projects/bench-rebrew").is_dir()
+        ),
+        Path(),
+    )
+    if not (retained / "original/bench.exe").is_file():
+        pytest.skip("retained rebrew-test-projects fixture is unavailable")
+    root = tmp_path / "project"
+    shutil.copytree(retained, root, ignore=shutil.ignore_patterns(".rebrew", "*.lock"))
+    binary = root / "original/bench.exe"
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    output = tmp_path / "report.json"
+    summary = generate_decomp_dev_report(load_config(root, target="bench"), output)
+    expected = json.loads(output.read_text(encoding="utf-8"))
+    reply = _reply(
+        {"project_dir": str(root), "sha256": digest, "format": "decomp.dev"},
+        op="recoverage.coverage_export",
+    )
+    report = json.loads(reply["body"])
+    assert reply["format"] == "decomp.dev"
+    assert reply["content_type"] == "application/json"
+    assert report == expected
+    assert set(report) == {"version", "measures", "units"}
+    assert report["version"] == 2
+    measures = report["measures"]
+    assert measures["total_functions"] == summary["total_functions"] > 0
+    assert measures["matched_functions"] == summary["matched_functions"]
+    assert measures["total_code"] == summary["total_code"] > 0
+    assert measures["matched_code"] == summary["matched_code"]
+    assert isinstance(report["units"], list)
+    assert len(report["units"]) == summary["units"] > 0
+    for unit in report["units"]:
+        assert isinstance(unit["name"], str)
+        assert isinstance(unit["measures"], dict)
+        assert unit["functions"]
+        for function in unit["functions"]:
+            assert isinstance(function["name"], str)
+            assert isinstance(function["address"], int)
+            assert function["size"] > 0
+            assert 0 <= function["fuzzy_match_percent"] <= 100
+
+
+def test_gate_metric_requires_verified_evidence(project: Path) -> None:
+    assert _reply(_gate(project))["metric"] == "identified"
+    assert _refusal(_gate(project, metric="verified"))["status"] == 409
+    assert _refusal(_gate(project, metric="other"))["status"] == 400

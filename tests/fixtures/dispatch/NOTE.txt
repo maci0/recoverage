@@ -1,0 +1,6 @@
+recoverage.schema.json is a verbatim copy of contracts/dispatch/recoverage.schema.json
+from the ai.relumea.app.backend-go working tree, generated with
+`go run ./cmd/surface-tracker` and copied before the backend change was committed.
+Backend HEAD: 893d9bfd2eaead19e228741f29b4a7a657fdf67c (plus uncommitted changes).
+SHA-256: 783760c6207458cc6c547145ce49126125222ff218f36459bce733ec91cfcca5.
+Replace this copy when the backend contract changes; do not edit it here.

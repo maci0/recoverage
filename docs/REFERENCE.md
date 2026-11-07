@@ -345,13 +345,51 @@ recoverage ops call recoverage.coverage_gate < gate.json
 recoverage ops call recoverage.coverage_export < export.json
 ```
 
-Two ops are answered. `recoverage.coverage_gate` takes `project_dir`,
-`sha256`, `min_coverage` and an optional `section`, and replies with the
+The worker answers `recoverage.coverage_plan`, `coverage_map`, `coverage_gate`,
+and `coverage_export`. The plan op requires retained inputs and returns the
+sorted staged readset with path, presence, digest and size, plus effective target
+config and the Rebrew-discovered source and header paths. The backend must
+verify custody for each planned input before using the readset.
+`recoverage.coverage_map` returns the target section and cell map.
+`recoverage.coverage_gate` takes `project_dir`,
+`sha256`, `min_coverage`, an optional `section` and `metric` (`identified`, the
+default, or `verified`), and replies with the
 document `check --json` prints plus a `reason` when nothing was checked.
 `recoverage.coverage_export` takes `project_dir`, `sha256` and `format` (`json`,
-`csv` or `md`), and replies with `format`, `content_type` and the rendered
+`csv`, `md` or `decomp.dev`), and replies with `format`, `content_type` and the rendered
 `body`. Both name a target by the SHA-256 of its binary, resolved through
 rebrew's project config rather than by `--target` name.
+
+For retained inputs, each request also supplies `rebrew_target`, `files` (objects
+with `path`, `digest`, `size`, and exactly one of `key` or `url`), and exactly
+one of `binary_key` or `binary_url`. The worker verifies and stages these
+objects privately and checks them again after the operation. Set `--workspace`
+and, for object keys, `--filestore` (or `RECOVERAGE_OPS_FILESTORE`). Snapshot
+requests require the separately pinned Rebrew source containing
+`retained_target_snapshot` and `coverage_input_contract`; the released 6.20.0
+dependency cannot process them.
+The backend must verify the published source, analysis capture and current
+verification records, then pass `coverage_input`, `coverage_input_digest` and
+`verification_records` for retained scoring. The worker checks the readset and
+evidence digests before and after scoring. Missing or partial envelopes are
+refused. Retained scoring is not yet fully qualified for relocation matches, all include
+assets or portable raw-link inputs. Identified coverage counts all tracked
+cells; verified coverage counts only authenticated exact-match bytes. Retained
+map and exports label `coverage_metric` as `identified` and expose
+`verified_bytes` and `verified_pct` separately from the unchanged identified
+fields. The verified gate requires retained evidence and
+a positive threshold fails when verified bytes are zero. Requests without snapshot fields retain the legacy
+live-project behavior.
+
+`recoverage ops serve --port N --workspace DIR [--filestore DIR]` answers the same
+ops over HTTP: `POST /<op>` with `Content-Type: application/json` and
+`Authorization: Bearer $RECOVERAGE_OPS_TOKEN` (at least 32 bytes; it is read only
+from the environment). It is rebrew's ops server serving recoverage's `dispatch`,
+so `--allowed-hosts`, `--concurrency` (default 2; the next call is refused 503
+with `Retry-After`) and `/health` behave as in `rebrew ops serve`. Replies and
+refusals are the ones `ops call` prints, with the refusal status as the HTTP
+status. A retained request does not read its `project_dir` (it need not exist);
+the worker writes its private snapshots under the workspace.
 
 A request is refused, with a JSON `{"error", "detail", "status"}` on stdout and
 exit 2, when it is not JSON, names an unknown field, misses a required one, or

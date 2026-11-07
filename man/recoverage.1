@@ -64,6 +64,9 @@ Check coverage against a threshold (CI gate).
 .TP
 .B ops
 Answer the relumea backend's recoverage ops over stdin/stdout.
+.B ops serve
+answers the same ops over HTTP (see
+.BR RECOVERAGE_OPS_TOKEN ).
 .B ops call
 .I op
 reads one JSON request on stdin and writes the JSON reply on stdout; a
@@ -367,6 +370,31 @@ Default for
 the directory every request
 .I project_dir
 must resolve inside. The backend sets it when it dispatches an op.
+.TP
+.B RECOVERAGE_OPS_FILESTORE
+Default for
+.B ops call
+and
+.B ops serve
+.BR \-\-filestore :
+the directory retained object keys resolve inside.
+.TP
+.B RECOVERAGE_OPS_TOKEN
+The bearer token
+.B ops serve
+requires on every request, at least 32 bytes. It has no flag, so it stays out of the process table.
+.TP
+.B RECOVERAGE_OPS_CONCURRENCY
+Default for
+.B ops serve
+.BR \-\-concurrency :
+the calls answered at once; the next is refused with 503 and Retry-After.
+.TP
+.B RECOVERAGE_OPS_ALLOWED_HOSTS
+Default for
+.B ops serve
+.BR \-\-allowed\-hosts :
+extra exact HTTP Host authorities, with ports, besides the bind address.
 .TP
 .B RECOVERAGE_MAX_CONNECTIONS
 Cap on concurrent client connections. There is no flag for it: it sizes the

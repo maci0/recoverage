@@ -14,9 +14,11 @@ refusal.
 replies with the body a redirected ``recoverage export`` writes, so the backend
 serves recoverage's formatting instead of a second copy of it.
 
-One transport: ``recoverage ops call <op>`` reads the request on stdin and
-writes the reply on stdout.  A refusal writes ``{"error", "detail", "status"}``
-on stdout and exits ``EXIT_ERROR``.
+Two transports: ``recoverage ops call <op>`` reads the request on stdin and
+writes the reply on stdout; a refusal writes ``{"error", "detail", "status"}``
+on stdout and exits ``EXIT_ERROR``.  ``recoverage ops serve`` answers
+``POST /<op>`` over HTTP with rebrew's ops server (bearer token, host check,
+concurrency bound, ``/health``), calling the same :func:`dispatch`.
 
 A request names an absolute ``project_dir`` and the ``sha256`` of a target's
 binary; the target is resolved through rebrew's project config, the same rule
@@ -31,8 +33,9 @@ import json
 import logging
 import re
 import sys
+import tempfile
 import typing
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 lazy from collections.abc import Callable, Mapping
@@ -106,6 +109,7 @@ class WorkerConfig:
     """
 
     workspace: Path | None = None
+    filestore: Path | None = None
 
 
 def _existing_dir(value: Path | None, flag: str) -> Path | None:
@@ -146,17 +150,58 @@ def project_root(config: WorkerConfig, project_dir: str) -> Path:
 
 
 @dataclass(frozen=True)
-class GateRequest:
+class RetainedFile:
+    """One retained source file: its path in the snapshot and the object that holds its bytes."""
+
+    path: str
+    digest: str
+    size: int
+    key: str = ""
+    url: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetainedRequest:
+    """The retained snapshot a request names: its files, rebrew target and binary object."""
+
+    files: list[RetainedFile] = field(default_factory=list)
+    rebrew_target: str = ""
+    binary_key: str = ""
+    binary_url: str = ""
+    coverage_input: dict[str, Any] = field(default_factory=dict)
+    coverage_input_digest: str = ""
+    verification_records: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GateRequest(RetainedRequest):
     """One target to gate: its project, its binary digest, and the threshold."""
 
     project_dir: str
     sha256: str
     min_coverage: float
     section: str = ""
+    metric: str = "identified"
 
 
 @dataclass(frozen=True)
-class ExportRequest:
+class PlanRequest(RetainedRequest):
+    """Plan the readset for retained coverage inputs."""
+
+    project_dir: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class MapRequest(RetainedRequest):
+    """One target to map."""
+
+    project_dir: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class ExportRequest(RetainedRequest):
     """One target to render: its project, its binary digest, and the format."""
 
     project_dir: str
@@ -169,6 +214,22 @@ def _decode(value: Any, hint: Any, where: str) -> Any:
     if hint is str:
         if type(value) is not str:
             raise _invalid(f"{where} must be a string")
+        return value
+    if hint is int:
+        if type(value) is not int:
+            raise _invalid(f"{where} must be an integer")
+        return value
+    if hint == list[RetainedFile]:
+        if type(value) is not list:
+            raise _invalid(f"{where} must be an array")
+        return [parse_request(RetainedFile, item, f"{where}[{i}]") for i, item in enumerate(value)]
+    if hint == dict[str, Any]:
+        if type(value) is not dict:
+            raise _invalid(f"{where} must be a JSON object")
+        return value
+    if hint == list[dict[str, Any]]:
+        if type(value) is not list or any(type(item) is not dict for item in value):
+            raise _invalid(f"{where} must be an array of objects")
         return value
     if hint is float:
         # A JSON integer is the same number: Go writes 50 for a whole
@@ -228,10 +289,9 @@ def _resolve_target(root: Path, sha256: str) -> str:
     )
 
 
-def _target_stats(root: Path, target: str) -> dict[str, Any]:
-    """One target's ``_section_stats``, or a refusal naming what is missing."""
+def _target_snapshot(root: Path, target: str) -> Any:
+    """Load one target, or refuse with the reason it is missing."""
     from recoverage.documents import load_all, unreadable
-    from recoverage.server import _section_stats
 
     # Inside an op the request's project is authoritative: RECOVERAGE_SNAPSHOTS
     # selects the dashboard's portable exports, not this call's project.
@@ -254,8 +314,65 @@ def _target_stats(root: Path, target: str) -> dict[str, Any]:
             code=COVERAGE_NOT_FOUND,
             status=404,
         )
+    return snapshot
+
+
+def _trusted_snapshot(root: Path, target: str, trusted: Any) -> Any:
+    from rebrew.config import load_config
+    from rebrew.coverage_project import trusted_project_coverage
+
+    return trusted_project_coverage(load_config(root, target=target), trusted)
+
+
+def _verified_section_bytes(section: Any, trusted: Any) -> int:
+    """Count exact cells only inside authenticated function extents."""
+    if section.va is None:
+        return 0
+    ranges: list[list[int]] = []
+    for record in sorted(trusted.records, key=lambda item: item.va):
+        if record.status != "EXACT":
+            continue
+        start, end = record.va, record.va + record.size
+        if ranges and start <= ranges[-1][1]:
+            ranges[-1][1] = max(ranges[-1][1], end)
+        else:
+            ranges.append([start, end])
+    count = 0
+    index = 0
+    for cell in sorted(section.cells, key=lambda item: item.start):
+        if cell.state != "exact":
+            continue
+        lo, hi = section.va + cell.start, section.va + cell.end
+        while index < len(ranges) and ranges[index][1] <= lo:
+            index += 1
+        cursor = index
+        while cursor < len(ranges) and ranges[cursor][0] < hi:
+            count += max(0, min(hi, ranges[cursor][1]) - max(lo, ranges[cursor][0]))
+            cursor += 1
+    return count
+
+
+def _snapshot_stats(snap: Any, trusted: Any = None) -> dict[str, Any]:
+    from recoverage.server import _section_stats, coverage_pct
+
+    stats = _section_stats(snap)
+    if trusted is not None:
+        stats["coverage_metric"] = "identified"
+        for name, sec in stats["sections"].items():
+            verified = _verified_section_bytes(snap.sections[name], trusted)
+            sec["verified_bytes"] = verified
+            sec["verified_pct"] = coverage_pct(verified, sec["total_bytes"])
+    return stats
+
+
+def _target_stats(root: Path, target: str, trusted: Any = None) -> dict[str, Any]:
     try:
-        return _section_stats(snapshot)
+        snap = (
+            _target_snapshot(root, target)
+            if trusted is None
+            else _trusted_snapshot(root, target, trusted)
+        )
+        return _snapshot_stats(snap, trusted)
     except CoverageTomlError as exc:
         raise OpsError(
             f"cannot read coverage statistics for target {target}: {exc}",
@@ -268,32 +385,129 @@ def _target_stats(root: Path, target: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def coverage_gate(config: WorkerConfig, request: GateRequest) -> Mapping[str, Any]:
+def coverage_plan(config: WorkerConfig, request: PlanRequest) -> Mapping[str, Any]:
+    """List the independently discovered staged coverage inputs, including absences."""
+    from rebrew.coverage_input_contract import (
+        CoverageInputError,
+        plan_coverage_config,
+        plan_coverage_readset,
+    )
+
+    if (
+        not request.files
+        or not request.rebrew_target
+        or not (request.binary_key or request.binary_url)
+    ):
+        raise _invalid("coverage plan requires a retained snapshot")
+    root = project_root(config, request.project_dir)
+    try:
+        config_view, sources = plan_coverage_config(root, request.rebrew_target)
+        return {
+            "readset": plan_coverage_readset(root, request.rebrew_target),
+            "source_paths": sources,
+            "config": config_view,
+        }
+    except CoverageInputError as exc:
+        raise _invalid(str(exc)) from None
+
+
+def coverage_gate(
+    config: WorkerConfig, request: GateRequest, trusted: Any = None
+) -> Mapping[str, Any]:
     """Compare one target's sections with ``min_coverage``."""
     if not 0.0 <= request.min_coverage <= 100.0:
         raise _invalid("min_coverage must be between 0 and 100")
+    metric = request.metric or "identified"
+    if metric not in ("identified", "verified"):
+        raise _invalid("metric must be identified or verified")
+    if metric == "verified" and trusted is None:
+        raise OpsError(
+            "verified coverage requires retained evidence",
+            code="coverage-input-invalid",
+            status=409,
+        )
     root = project_root(config, request.project_dir)
-    target = _resolve_target(root, request.sha256)
-    stats = _target_stats(root, target)
+    target = request.rebrew_target or _resolve_target(root, request.sha256)
+    stats = _target_stats(root, target, trusted)
     outcome = reporting.gate(
         [(target, stats)],
         min_coverage=request.min_coverage,
         section=request.section or None,
+        covered_key="verified_bytes" if metric == "verified" else "covered_bytes",
+        zero_is_untracked=metric != "verified",
     )
     reply = outcome.document()
+    reply["metric"] = metric
+    if trusted is not None:
+        for result in reply["results"]:
+            section = stats["sections"][result["section"]]
+            result["verified_bytes"] = section["verified_bytes"]
+            result["verified_pct"] = section["verified_pct"]
+            if metric == "verified":
+                result["coverage_pct"] = section["verified_pct"]
     if outcome.reason is not None:
         reply["reason"] = outcome.reason
     return reply
 
 
-def coverage_export(config: WorkerConfig, request: ExportRequest) -> Mapping[str, Any]:
+def coverage_map(
+    config: WorkerConfig, request: MapRequest, trusted: Any = None
+) -> Mapping[str, Any]:
+    """Return the dashboard's section cells and their canonical statistics."""
+    from recoverage.server import _bucket_row, _cell_json
+
+    root = project_root(config, request.project_dir)
+    target = request.rebrew_target or _resolve_target(root, request.sha256)
+    snap = (
+        _target_snapshot(root, target)
+        if trusted is None
+        else _trusted_snapshot(root, target, trusted)
+    )
+    return {
+        "target": target,
+        "sections": {
+            name: {
+                "target": target,
+                "name": name,
+                "va": sec.va,
+                "size": sec.size,
+                "fileOffset": sec.file_offset,
+                "unitBytes": sec.unit_bytes,
+                "columns": sec.columns,
+                "cells": [_cell_json(cell) for cell in sec.cells],
+            }
+            for name, sec in snap.sections.items()
+        },
+        "section_cell_stats": {
+            name: _bucket_row(sec) for name, sec in snap.sections.items() if sec.cells
+        },
+        "stats": _snapshot_stats(snap, trusted),
+    }
+
+
+def coverage_export(
+    config: WorkerConfig, request: ExportRequest, trusted: Any = None
+) -> Mapping[str, Any]:
     """Render one target as JSON, CSV or Markdown."""
-    if request.format not in reporting.EXPORT_FORMATS:
-        wanted = ", ".join(reporting.EXPORT_FORMATS)
+    if request.format not in (*reporting.EXPORT_FORMATS, "decomp.dev"):
+        wanted = ", ".join((*reporting.EXPORT_FORMATS, "decomp.dev"))
         raise _invalid(f"format must be one of {wanted}, got {request.format!r}")
     root = project_root(config, request.project_dir)
-    target = _resolve_target(root, request.sha256)
-    stats = _target_stats(root, target)
+    target = request.rebrew_target or _resolve_target(root, request.sha256)
+    if request.format == "decomp.dev":
+        from rebrew.config import load_config
+        from rebrew.report import generate_decomp_dev_report
+
+        with tempfile.TemporaryDirectory(prefix="recoverage-report-") as directory:
+            output = Path(directory) / "report.json"
+            cfg = load_config(root, target=target)
+            if trusted is None:
+                generate_decomp_dev_report(cfg, output)
+            else:
+                generate_decomp_dev_report(cfg, output, trusted=trusted)
+            body = output.read_text(encoding="utf-8")
+        return {"format": request.format, "content_type": "application/json", "body": body}
+    stats = _target_stats(root, target, trusted)
     return {
         "format": request.format,
         "content_type": reporting.CONTENT_TYPES[request.format],
@@ -306,12 +520,15 @@ class Op:
     """One wire op: its request type and the function that answers it."""
 
     request: type
-    run: Callable[[WorkerConfig, Any], Mapping[str, Any]]
+    #: ``run(config, request)``; a scoring op also takes the verified evidence third.
+    run: Callable[..., Mapping[str, Any]]
 
 
 #: Every op of the backend's recoverage contract, by wire name.
 OPS: dict[str, Op] = {
+    "recoverage.coverage_plan": Op(PlanRequest, coverage_plan),
     "recoverage.coverage_gate": Op(GateRequest, coverage_gate),
+    "recoverage.coverage_map": Op(MapRequest, coverage_map),
     "recoverage.coverage_export": Op(ExportRequest, coverage_export),
 }
 
@@ -330,6 +547,97 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         raise _invalid("request is not JSON") from None
     request: Any = parse_request(op.request, raw)
     try:
+        snapshot_fields = (
+            "files",
+            "rebrew_target",
+            "binary_key",
+            "binary_url",
+            "coverage_input",
+            "coverage_input_digest",
+            "verification_records",
+        )
+        if any(key in raw for key in snapshot_fields):
+            # The backend supplies a complete retained manifest; never use project_dir here.
+            try:
+                from rebrew.ops import (
+                    FlagSearchFile,
+                    confined_snapshot_config,
+                    retained_target_snapshot,
+                )
+                from rebrew.ops import (
+                    OpsError as RebrewOpsError,
+                )
+                from rebrew.ops import (
+                    WorkerConfig as RebrewWorkerConfig,
+                )
+            except ImportError:
+                raise OpsError("retained snapshots require the pinned rebrew worker") from None
+            try:
+                worker = RebrewWorkerConfig(filestore=config.filestore, workspace=config.workspace)
+                files = [
+                    FlagSearchFile(**{f.name: getattr(entry, f.name) for f in fields(entry)})
+                    for entry in request.files
+                ]
+                with retained_target_snapshot(
+                    worker,
+                    files,
+                    request.rebrew_target,
+                    request.sha256,
+                    request.binary_key,
+                    request.binary_url,
+                ) as root:
+                    from rebrew.config import load_config
+
+                    confined_snapshot_config(load_config(root, target=request.rebrew_target), root)
+                    staged = replace(request, project_dir=str(root))
+                    if name == "recoverage.coverage_plan":
+                        return op.run(config, staged)
+                    required = ("coverage_input", "coverage_input_digest", "verification_records")
+                    if any(key not in raw for key in required):
+                        raise OpsError(
+                            "retained coverage requires the complete input envelope",
+                            code="coverage-input-invalid",
+                            status=409,
+                        )
+                    from rebrew.coverage_input_contract import (
+                        CoverageInputError,
+                        validate_coverage_execution,
+                    )
+                    from rebrew.workspace.status import TrustedCoverage, TrustedVerification
+
+                    def validate() -> None:
+                        validate_coverage_execution(
+                            root,
+                            request.rebrew_target,
+                            request.sha256,
+                            request.coverage_input,
+                            request.coverage_input_digest,
+                            request.verification_records,
+                        )
+
+                    try:
+                        validate()
+                        trusted = TrustedCoverage(
+                            tuple(
+                                TrustedVerification(
+                                    source=row["source"],
+                                    va=row["va"],
+                                    size=row["size"],
+                                    status=row["status"],
+                                    match_count=row["match_count"],
+                                )
+                                for row in request.verification_records
+                            )
+                        )
+                        reply = op.run(config, staged, trusted)
+                        validate()
+                        return reply
+                    except CoverageInputError as exc:
+                        raise OpsError(
+                            str(exc), code="coverage-input-invalid", status=409
+                        ) from None
+            except RebrewOpsError as exc:
+                raise OpsError(str(exc), code=exc.code, status=exc.status) from None
         return op.run(config, request)
     except OpsError:
         raise
@@ -380,15 +688,126 @@ def call_command(
     workspace: Path | None = typer.Option(
         None, "--workspace", envvar="RECOVERAGE_OPS_WORKSPACE", help=_WORKSPACE_HELP
     ),
+    filestore: Path | None = typer.Option(
+        None, "--filestore", envvar="RECOVERAGE_OPS_FILESTORE", help="Retained object store"
+    ),
 ) -> None:
     """Answer one op: the JSON request on stdin, the reply on stdout.
 
     A refusal prints {"error","detail","status"} on stdout and exits 2.
     """
-    config = WorkerConfig(_existing_dir(workspace, "--workspace"))
+    config = WorkerConfig(
+        _existing_dir(workspace, "--workspace"), _existing_dir(filestore, "--filestore")
+    )
     body = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     status, reply = dispatch(config, op, body)
     sys.stdout.buffer.write(reply + b"\n")
     sys.stdout.flush()
     if status != 200:
         raise typer.Exit(EXIT_ERROR)
+
+
+#: Environment variable holding the bearer token ``serve`` requires.
+TOKEN_ENV = "RECOVERAGE_OPS_TOKEN"  # noqa: S105  # a variable name, not a credential
+
+#: Shortest accepted bearer token, the length rebrew's server requires.
+MIN_TOKEN_BYTES = 32
+
+#: Calls answered at once; the next is refused 503 with Retry-After.  A map call peaks near 115 MiB.
+DEFAULT_CONCURRENCY = 2
+
+
+@app.command("serve")
+def serve_command(
+    port: int = typer.Option(..., "--port", help="TCP port; 0 picks a free one"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Address to bind (loopback by default)"),
+    workspace: Path | None = typer.Option(
+        None, "--workspace", envvar="RECOVERAGE_OPS_WORKSPACE", help=_WORKSPACE_HELP + " (required)"
+    ),
+    filestore: Path | None = typer.Option(
+        None, "--filestore", envvar="RECOVERAGE_OPS_FILESTORE", help="Retained object store"
+    ),
+    concurrency: int = typer.Option(
+        DEFAULT_CONCURRENCY,
+        "--concurrency",
+        envvar="RECOVERAGE_OPS_CONCURRENCY",
+        min=1,
+        help="Calls answered at once; the next is refused 503 with Retry-After",
+    ),
+    allowed_hosts: str = typer.Option(
+        "",
+        "--allowed-hosts",
+        envvar="RECOVERAGE_OPS_ALLOWED_HOSTS",
+        help="Comma-separated exact additional HTTP Host authorities, including ports",
+    ),
+) -> None:
+    """Serve POST /<op> over HTTP until interrupted or terminated.
+
+    Every request needs Authorization: Bearer $RECOVERAGE_OPS_TOKEN.  --workspace
+    is required: every project path a request names must lie inside it, and the
+    retained snapshots a call builds are written under it.
+    """
+    import os
+    import signal
+    import threading
+
+    from rebrew import ops as rebrew_ops
+
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    if len(token.encode()) < MIN_TOKEN_BYTES:
+        typer.secho(
+            f"Error: {TOKEN_ENV} must hold at least {MIN_TOKEN_BYTES} bytes",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR)
+    if workspace is None:
+        typer.secho(
+            "Error: serve needs --workspace (or RECOVERAGE_OPS_WORKSPACE)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR)
+    worker = WorkerConfig(
+        _existing_dir(workspace, "--workspace"), _existing_dir(filestore, "--filestore")
+    )
+    hosts = frozenset(item.strip().lower() for item in allowed_hosts.split(",") if item.strip())
+    if any(not re.fullmatch(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?", item) for item in hosts):
+        typer.secho(
+            "Error: --allowed-hosts must contain exact DNS names and optional ports",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR)
+
+    def answer(config: rebrew_ops.WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
+        return dispatch(worker, name, body)
+
+    # rebrew's handler calls its module-level dispatch for every POST; this process serves only
+    # recoverage's ops, so the name is rebound to ours.
+    rebrew_ops.dispatch = answer
+    server = rebrew_ops.OpsServer(
+        (host, port),
+        rebrew_ops.WorkerConfig(worker.filestore, worker.workspace),
+        token,
+        concurrency,
+        hosts,
+    )
+    typer.echo(f"serving recoverage ops on http://{host}:{server.server_port}")
+
+    def stop(_signum: int, _frame: object) -> None:
+        with server.idle:
+            if server.draining:
+                return
+            server.draining = True
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        with server.idle:
+            server.draining = True
+            server.idle.wait_for(lambda: server.active == 0, timeout=30)
+        signal.signal(signal.SIGTERM, previous)

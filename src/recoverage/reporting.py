@@ -136,16 +136,27 @@ def markdown_lines(stats: Iterable[Mapping[str, Any]]) -> Iterator[str]:
         if index:
             yield ""
         yield f"## {md_safe(data['target'])}\n"
-        yield _MD_HEADER
-        yield _MD_SEPARATOR
+        with_verified = any("verified_bytes" in sec for sec in data["sections"].values())
+        yield (
+            (
+                _MD_HEADER.replace(" Coverage |", " Identified coverage |")
+                + " Verified bytes | Verified % |"
+            )
+            if with_verified
+            else _MD_HEADER
+        )
+        yield (_MD_SEPARATOR + "---------------:|-----------:|" if with_verified else _MD_SEPARATOR)
         for sec_name, sec in data["sections"].items():
             size, cells, exact, reloc, near_match, stub, coverage_pct = section_row(sec)
-            yield (
+            line = (
                 f"| {md_safe(sec_name)}"
                 f" | {size:,} B | {cells:,}"
                 f" | {exact:,} | {reloc:,} | {near_match:,}"
                 f" | {stub:,} | {pct_1dp(coverage_pct):.1f}% |"
             )
+            if with_verified:
+                line += f" {sec.get('verified_bytes', 0):,} | {sec.get('verified_pct', 0):.2f}% |"
+            yield line
 
 
 def markdown_text(stats: Iterable[Mapping[str, Any]]) -> str:
@@ -161,12 +172,23 @@ def csv_text(stats: Iterable[Mapping[str, Any]]) -> str:
     newline translation off: a line break inside a quoted cell is then written
     exactly once, and the row ending is the platform's native one.
     """
+    items = list(stats)
+    with_verified = any(
+        "verified_bytes" in sec for data in items for sec in data["sections"].values()
+    )
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer, lineterminator=os.linesep)
-    writer.writerow(CSV_HEADER)
-    for data in stats:
+    writer.writerow(
+        (*CSV_HEADER, "coverage_metric", "verified_bytes", "verified_pct")
+        if with_verified
+        else CSV_HEADER
+    )
+    for data in items:
         for sec_name, sec in data["sections"].items():
-            writer.writerow(csv_row(data["target"], sec_name, sec))
+            row = csv_row(data["target"], sec_name, sec)
+            if with_verified:
+                row.extend(("identified", sec.get("verified_bytes", 0), sec.get("verified_pct", 0)))
+            writer.writerow(row)
     return buffer.getvalue()
 
 
@@ -300,6 +322,8 @@ def gate(
     *,
     min_coverage: float,
     section: str | None = None,
+    covered_key: str = "covered_bytes",
+    zero_is_untracked: bool = True,
 ) -> GateOutcome:
     """Compare each target's sections with *min_coverage*.
 
@@ -323,8 +347,8 @@ def gate(
 
         for sec_name, sec in sections.items():
             checked += 1
-            covered = sec.get("covered_bytes") or 0
-            untracked = covered <= 0
+            covered = sec.get(covered_key) or 0
+            untracked = (covered <= 0) if zero_is_untracked else (sec.get("total_bytes") or 0) <= 0
             if not untracked:
                 compared += 1
             # Gate on the unrounded byte ratio; sec["coverage_pct"] is
