@@ -25,6 +25,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reply on stdout, and a target named by its binary's SHA-256. `--workspace`
   or `RECOVERAGE_OPS_WORKSPACE` confines the request `project_dir`.
 
+### Changed
+
+- Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.
+
 ## [8.9.0] - 2026-11-04
 
 ### Changed
