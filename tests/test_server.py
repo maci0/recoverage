@@ -6194,8 +6194,9 @@ class TestSpaSearchIsACombobox:
         arrows walked to into its own viewport, without moving focus out
         of the field or scrolling the page."""
         results = _web("components/SearchResults.tsx")
-        assert "scrollIntoView({ block: \"nearest\" })" in results
-        effect = results[results.index("useEffect(() => {") : results.index("useEffect(() => {") + 300]
+        assert 'scrollIntoView({ block: "nearest" })' in results
+        start = results.index("useEffect(() => {")
+        effect = results[start : start + 300]
         assert "activeIndex" in effect
 
     def test_the_active_row_is_worn_not_merely_announced(self) -> None:

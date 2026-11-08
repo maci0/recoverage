@@ -1040,11 +1040,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
-        % if s_active:
-          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{TEXT_COLOR}}"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
-        % else:
-          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
-        % end
+          <a href="{{s_url}}" {{!s_acc}} aria-current="{{'page' if s_active else 'false'}}"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L if s_active else INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID if s_active else INACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{TEXT_COLOR if s_active else MUTED_COLOR}}">{{('<b>'+s_name+'</b>') if s_active else s_name}}</font></td><td><img src="{{ACTIVE_R if s_active else INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         </td>
       % end
       </tr></table>
@@ -1125,11 +1121,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
               <!-- Anchor wraps the whole pill: see the section-tab note above.
                    These are the worst case: a single-letter label gave E/R/N/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
-              % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
-              % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
-              % end
+              <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, {{'on' if fb_active else 'off'}}" aria-current="{{'true' if fb_active else 'false'}}"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L if fb_active else INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID if fb_active else INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{('<b>'+fb_label+'</b>') if fb_active else fb_label}}</font></td><td><img src="{{ACTIVE_R if fb_active else INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               </td>
             % end
           </tr></table>

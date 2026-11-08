@@ -670,7 +670,7 @@ class TestReferencedFiles:
         with pytest.raises(BackupError, match="escapes the snapshot directory"):
             write_backup(db, tmp_path / "snap.tar")
 
-    def test_backslash_ref_from_a_windows_written_export_is_archived(self, tmp_path):
+    def test_backslash_ref_from_a_windows_written_export_is_archived(self, tmp_path: Path) -> None:
         # Portable exports are cross-platform documents: a Windows writer
         # spells separators as "\\", which POSIX Path would read as one
         # flat filename. Backup must fold it to "/" like the source-root
@@ -683,7 +683,7 @@ class TestReferencedFiles:
         info = write_backup(db, archive)
         assert "game.exe" in [name for name, _s, _d in info.members]
 
-    def test_backslash_traversal_ref_is_an_escape_refusal(self, tmp_path):
+    def test_backslash_traversal_ref_is_an_escape_refusal(self, tmp_path: Path) -> None:
         db = tmp_path / "db"
         db.mkdir()
         write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "..\\game.exe"})
