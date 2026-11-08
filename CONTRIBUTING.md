@@ -15,9 +15,12 @@ make setup          # uv sync --locked --extra dev
 
 Normal installs and CI resolve the public Rebrew wheel declared with its SHA-256
 in `pyproject.toml`; they never inspect or replace a sibling source checkout.
-On Windows, where Make is not preinstalled, run:
+On Windows, where Make is not preinstalled, run (the seed pins `PYTHONHASHSEED`
+to the same value the Makefile exports and CI sets, so set-order flakes cannot
+appear locally on a run CI would pass):
 
 ```powershell
+$env:PYTHONHASHSEED = "0"
 uv sync --locked --extra dev
 uv run --locked --extra dev python -m pytest tests/ --ignore=tests/test_playwright.py
 ```

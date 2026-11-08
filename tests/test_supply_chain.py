@@ -1249,6 +1249,17 @@ class TestToolchainPins:
                 assert "PYTHONHASHSEED" in text, (
                     f"the {name} job starts a Python interpreter without the pinned seed"
                 )
+        # The Windows bootstrap spells the suite without make, so it has no
+        # recipe to export the seed for it: a contributor there runs the bare
+        # pytest with a random hash seed and meets set-order flakes CI never
+        # sees, which reads as a local-only failure. The snippet must name it.
+        contributing = (_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        windows = contributing[contributing.find("On Windows, where Make is not preinstalled") :]
+        assert windows, "CONTRIBUTING no longer documents the Windows bootstrap"
+        snippet = windows.split("```", 2)[1] if "```" in windows else ""
+        assert "PYTHONHASHSEED" in snippet, (
+            "the Windows bootstrap snippet runs pytest without the pinned hash seed"
+        )
 
 
 class TestFrontendAnalysisIsEnforced:
