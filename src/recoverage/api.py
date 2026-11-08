@@ -162,6 +162,9 @@ def _clear_derived_caches_logged(where: str) -> None:
 # Server-side regen cooldown (seconds): the UI throttles Regenerate clicks, but
 # direct API calls must not be able to trigger repeated catalog analysis runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
+# Guards _regen_last_attempt: read/written while _REGEN_LOCK is held, and
+# reset directly by tests.
+_REGEN_LAST_ATTEMPT_LOCK = threading.Lock()
 # clock.monotonic() of the last accepted regen POST, or None before the first
 # one.  None, never 0.0: on Linux the monotonic clock counts from boot, so a
 # process started seconds after a reboot would read now < 5.0 and reject the
@@ -544,9 +547,16 @@ def _cache_data_insert(
         return
     with _DATA_CACHE_LOCK:
         _server._evict_oldest(_DATA_CACHE, _DATA_CACHE_MAX)
-        entry = _DATA_CACHE.setdefault(key, {})
-        entry["raw"] = raw
-        entry[encoding] = body
+        # Build the entry off to the side and publish it whole: a concurrent
+        # checkout must never see an entry whose "raw" is set but whose
+        # variant is still unwritten, or vice versa.  The existing entry
+        # (a duplicate build beside a live leader) keeps its variants;
+        # only the raw payload is refreshed.
+        prepared = {"raw": raw, encoding: body}
+        entry = _DATA_CACHE.setdefault(key, prepared)
+        if entry is not prepared:
+            entry["raw"] = raw
+            entry.setdefault(encoding, body)
 
 
 # Memoized /stats results, keyed by the document snapshot + target.
@@ -2074,17 +2084,26 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
         # can observe it half-built.
         with _DATA_CACHE_LOCK:
             body = entry.get(encoding)
-            raw = entry["raw"]
-        if body is None:
-            # First request for this encoding: mint the variant from the
-            # stored raw JSON (queries + json.dumps already paid for).  The
-            # compression stays OUTSIDE the lock: brotli at q5 over a
-            # multi-megabyte payload must not hold the lock every other /data
-            # request queues on.
-            body, _ = compress_payload(raw, accept_enc)
-            with _DATA_CACHE_LOCK:
-                entry[encoding] = body
-        return _json_ok_precompressed(body, encoding, **headers)
+            raw = entry.get("raw")
+        if raw is None:
+            # The entry was cleared by a concurrent rebuild between checkout
+            # and this read; fall through and build fresh rather than serve
+            # a half-published payload.
+            pass
+        else:
+            if body is None:
+                # First request for this encoding: mint the variant from the
+                # stored raw JSON (queries + json.dumps already paid for).  The
+                # compression stays OUTSIDE the lock: brotli at q5 over a
+                # multi-megabyte payload must not hold the lock every other /data
+                # request queues on.
+                body, _ = compress_payload(raw, accept_enc)
+                with _DATA_CACHE_LOCK:
+                    # setdefault: a concurrent request may have minted the
+                    # same variant while this one compressed; keep the first
+                    # and serve the same bytes.
+                    body = entry.setdefault(encoding, body)
+            return _json_ok_precompressed(body, encoding, **headers)
 
     try:
         with _target_snapshot(target) as coverage:
@@ -3124,7 +3143,9 @@ def handle_regen() -> bytes | HTTPResponse:
         if key and _regen_replayed(key):
             return _regen_replay_response(key)
         now = clock.monotonic()
-        since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
+        with _REGEN_LAST_ATTEMPT_LOCK:
+            last_attempt = _regen_last_attempt
+        since = math.inf if last_attempt is None else now - last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:
             remaining = _REGEN_COOLDOWN_SECONDS - since
             _metrics.REGEN.reject()
@@ -3148,7 +3169,8 @@ def handle_regen() -> bytes | HTTPResponse:
                 # one Retry-After for every 429 the server emits.
                 Retry_After=str(wait),
             )
-        _regen_last_attempt = now
+        with _REGEN_LAST_ATTEMPT_LOCK:
+            _regen_last_attempt = now
         # From here to the release the key names THIS run, so a retry arriving
         # mid-flight is answered as in progress rather than refused.  Recorded
         # only once the run is certain to start: a request turned away above

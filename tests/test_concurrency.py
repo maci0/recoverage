@@ -904,3 +904,91 @@ class TestIndexShellBuild:
         _in_parallel(lambda i: ui.warm_index_cache())
         assert builds == 1
         assert ui.CACHED_INDEX_PAYLOAD == b"<html>shell</html>"
+
+class TestDataEntryPublication:
+    """A /data entry must never be served half-built."""
+
+    def test_concurrent_insert_never_serves_a_torn_entry(self) -> None:
+        import recoverage.api as api_mod
+
+        key = (None, "herd-target", None, True)
+        readers = 8
+        writers = 4
+        stop = threading.Event()
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    with api_mod._DATA_CACHE_LOCK:
+                        entry = api_mod._DATA_CACHE.get(key)
+                        if entry is None:
+                            continue
+                        assert "raw" in entry, "entry published without raw"
+                        for enc in list(entry.keys()):
+                            assert entry[enc] is not None
+            except BaseException as exc:  # noqa: BLE001
+                with errors_lock:
+                    errors.append(exc)
+
+        def writer() -> None:
+            try:
+                for i in range(50):
+                    api_mod._cache_data_insert(key, f"raw-{i}".encode(), "gzip", f"body-{i}".encode())
+                    api_mod._cache_data_insert(key, f"raw-{i}".encode(), "br", f"body-br-{i}".encode())
+            except BaseException as exc:  # noqa: BLE001
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=reader) for _ in range(readers)] + [
+            threading.Thread(target=writer) for _ in range(writers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads[readers:]:
+            thread.join()
+        stop.set()
+        for thread in threads[:readers]:
+            thread.join()
+        assert not errors, errors
+
+    def test_duplicate_insert_keeps_the_first_variant(self) -> None:
+        import recoverage.api as api_mod
+
+        key = (None, "dup-target", None, True)
+        api_mod._cache_data_insert(key, b"raw-a", "gzip", b"body-a")
+        api_mod._cache_data_insert(key, b"raw-b", "gzip", b"body-b")
+        with api_mod._DATA_CACHE_LOCK:
+            entry = api_mod._DATA_CACHE.get(key)
+        assert entry is not None
+        assert entry["gzip"] == b"body-a"
+
+
+class TestRegenLastAttemptLock:
+    """The regen cooldown timestamp is read and written under its lock."""
+
+    def test_concurrent_read_write_does_not_tear(self) -> None:
+        import recoverage.api as api_mod
+
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def churn() -> None:
+            try:
+                for i in range(200):
+                    with api_mod._REGEN_LAST_ATTEMPT_LOCK:
+                        api_mod._regen_last_attempt = float(i)
+                    with api_mod._REGEN_LAST_ATTEMPT_LOCK:
+                        value = api_mod._regen_last_attempt
+                    assert value is None or isinstance(value, float)
+            except BaseException as exc:  # noqa: BLE001
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=churn) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not errors, errors

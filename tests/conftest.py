@@ -83,7 +83,8 @@ def _clean_regen_gate() -> None:
     """
     from recoverage import api
 
-    api._regen_last_attempt = None
+    with api._REGEN_LAST_ATTEMPT_LOCK:
+        api._regen_last_attempt = None
     api._REGEN_COMPLETED_KEYS.clear()
     api._REGEN_ACTIVE_KEYS.clear()
 
