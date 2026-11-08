@@ -89,6 +89,11 @@ from recoverage.server import (
 )
 
 
+def _header(headers: dict[str, str], name: str) -> str:
+    """Case-insensitive header lookup over a wsgi header dict."""
+    return next((v for k, v in headers.items() if k.lower() == name.lower()), "")
+
+
 def render_potato_url(url: str) -> str:
     return render_potato(urlparse(url))
 
@@ -1938,16 +1943,24 @@ def test_etag_caching():
         # Bottle emits the header as "Etag"; HTTP headers are case-insensitive.
         return next((v for k, v in headers.items() if k.lower() == "etag"), None)
 
-    status, headers, _ = wsgi_get(f"/potato?target={target}&section=.text")
+    status, headers, _ = wsgi_get(
+        f"/potato?target={target}&section=.text",
+        headers={"Accept-Encoding": "gzip, deflate, br, zstd"},
+    )
     assert status.startswith("200")
+    # The body is content-negotiated, so the 200 and its 304 both name
+    # Accept-Encoding: a shared cache keyed without it could hand a brotli
+    # body to a client that accepted none.
+    assert _header(headers, "Vary") == "Accept-Encoding"
     etag = _etag(headers)
     assert etag
 
-    status2, _, _ = wsgi_get(
+    status2, headers2, _ = wsgi_get(
         f"/potato?target={target}&section=.text",
         headers={"If-None-Match": etag},
     )
     assert status2.startswith("304")
+    assert _header(headers2, "Vary") == "Accept-Encoding"
 
 
 # ── _format_va edge cases ──────────────────────────────────────────

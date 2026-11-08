@@ -1560,8 +1560,17 @@ def handle_potato() -> bytes | Any:
         # free to apply heuristic freshness and a shared cache free to store
         # and replay a page that may have been rendered for a token-bearing
         # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
-        # revalidation before every reuse.
-        resp_body = _compressed(body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE)
+        # revalidation before every reuse.  Vary: Accept-Encoding is why:
+        # the body is content-negotiated (br/zstd/gzip), so a shared cache
+        # keyed without it could hand a brotli body to a client that accepted
+        # none — the same rule every other negotiated body here follows,
+        # /data and /stats included.
+        resp_body = _compressed(
+            body,
+            "text/html; charset=utf-8",
+            Cache_Control=CACHE_REVALIDATE,
+            Vary="Accept-Encoding",
+        )
 
         if etag:
             response.set_header("ETag", etag)
