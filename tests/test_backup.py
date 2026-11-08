@@ -731,3 +731,36 @@ class TestBackupCli:
         result = runner.invoke(app, ["restore", str(archive), "--force"])
         assert result.exit_code == 0, result.output
         assert "# newer" not in document.read_text()
+
+    def test_a_backup_destination_inside_the_coverage_directory_is_refused(self, db: Path) -> None:
+        with pytest.raises(BackupError, match="inside the coverage directory"):
+            write_backup(db, db / "backups" / "snap.tar")
+
+    def test_a_leftover_staging_directory_is_refused_before_any_write(
+        self, db: Path, archive: Path, tmp_path: Path
+    ) -> None:
+        leftover = db / ".restore-interrupted"
+        leftover.mkdir()
+        (leftover / "previous").mkdir()
+        (leftover / "previous" / "coverage-a.toml").write_bytes(b"original")
+        with pytest.raises(BackupError, match="interrupted restore"):
+            restore_backup(archive, db)
+        assert (leftover / "previous" / "coverage-a.toml").read_bytes() == b"original"
+
+    def test_verify_command_proves_an_archive_without_restoring_it(
+        self, db: Path, archive: Path, tmp_path: Path
+    ) -> None:
+        result = runner.invoke(app, ["verify", str(archive)])
+        assert result.exit_code == 0, result.output
+        assert "Verified backup" in result.output
+        tampered = tmp_path / "tampered.tar"
+        with tarfile.open(archive) as source, tarfile.open(tampered, "w") as sink:
+            for member in source.getmembers():
+                data = source.extractfile(member).read()  # type: ignore[union-attr]
+                if member.name.endswith(".toml"):
+                    data = data[: len(data) // 2]
+                info = tarfile.TarInfo(member.name)
+                info.size = len(data)
+                sink.addfile(info, io.BytesIO(data))
+        result = runner.invoke(app, ["verify", str(tampered)])
+        assert result.exit_code == 1

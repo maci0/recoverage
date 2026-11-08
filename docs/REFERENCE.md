@@ -301,6 +301,18 @@ either way.
 Offline readers detect restored bytes automatically; `regen` is a live-project
 operation. The full procedure is in [the recovery runbook](RECOVERY.md).
 
+### `recoverage verify`
+
+Check every member of a backup archive against its manifest without restoring
+it — the standalone proof a scheduled job or a drill runs against an archive
+older runs wrote or that was copied elsewhere. Exits 1 naming the member whose
+size or digest disagrees; writes nothing and needs no `RECOVERAGE_SNAPSHOTS`.
+
+```bash
+recoverage verify /srv/backups/nightly.tar
+recoverage verify /srv/backups/nightly.tar --json
+```
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).

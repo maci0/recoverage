@@ -299,6 +299,8 @@ def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
         with tempfile.NamedTemporaryFile(dir=root, suffix=_TMP_SUFFIX, delete=False) as fh:
             tmp_name = fh.name
             fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
         Path(tmp_name).replace(_slot(root, path))
         tmp_name = None
         _prune(root)

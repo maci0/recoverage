@@ -314,6 +314,30 @@ def _manifest(members: list[tuple[str, bytes]], created: str) -> dict[str, Any]:
     }
 
 
+def _require_outside_coverage_dir(db_dir: Path, destination: Path) -> None:
+    """Refuse a backup whose archive lands inside the directory it backs up.
+
+    The archive is a tar file, not a ``coverage-*.toml`` member, so a later
+    backup would not copy it as a document — but leaving an archive inside
+    the snapshot tree mixes backup storage with the data it protects (one
+    directory delete destroys both) and puts a file a reader's glob
+    directory holds that is not a document.  The default location already
+    sits beside the coverage directory; this guards the explicit
+    ``--to`` / ``RECOVERAGE_BACKUP_DIR`` spellings that can point inside it.
+    """
+    try:
+        inside = destination.resolve().is_relative_to(db_dir.resolve())
+    except OSError:
+        return
+    if inside:
+        raise BackupError(
+            f"backup destination {destination} is inside the coverage directory {db_dir}; "
+            "backups must live outside the directory they back up, "
+            "or a later restore reads its own archive as a document and one "
+            "deletion removes data and backup together"
+        )
+
+
 def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     """Copy every coverage document in *db_dir* into one verified archive.
 
@@ -326,7 +350,9 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     writing an empty archive.  An empty archive verifies, and restoring it
     empties the coverage directory, which is a restore that destroys the state
     it was taken from.  The schedule that produced it wants an alert, not a
-    green run.
+    green run.  A destination inside *db_dir* is refused for the same reason
+    the default is beside it: an archive inside the tree it archives shares
+    its failure domain.
     """
     members = _members(db_dir)
     if not members:
@@ -344,6 +370,7 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
         )
     elif destination.is_dir():
         destination = destination / f"{_ARCHIVE_PREFIX}{_stamp()}{_ARCHIVE_SUFFIX}"
+    _require_outside_coverage_dir(db_dir, destination)
     try:
         _atomic_write(destination, blob)
     except OSError as exc:
@@ -545,6 +572,18 @@ def verify_backup(path: Path) -> BackupInfo:
     return info
 
 
+def verify_archive_command(archive: Path) -> BackupInfo:
+    """Verify *archive* without restoring it; the CLI ``verify`` command's core.
+
+    A scheduled job and a restore drill both need to prove an archive is
+    readable without putting its documents anywhere. This is the same
+    :func:`verify_backup` a restore runs first, exposed as its own
+    operation rather than requiring a restore to a scratch directory to
+    get the proof.
+    """
+    return verify_backup(archive)
+
+
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
     """Put every verified member of *archive* into *db_dir*; return the paths.
 
@@ -559,7 +598,23 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     a coverage document and an unreadable file are still refusals, because a
     force flag a reader has to trust about data integrity is the flag that
     eventually turns a routine restore into the disaster.
+
+    A leftover staging directory from a killed restore (process or machine
+    crash between publication steps) is refused rather than overwritten: its
+    ``previous/`` files hold the originals the interrupted run had already
+    moved, and deleting them to start again would discard the only copy of
+    the pre-restore state.  The error names the directory; recovery is to
+    inspect ``previous/`` and retry after it is cleared by hand.
     """
+    if db_dir.is_dir():
+        for leftover in sorted(db_dir.glob(".restore-*")):
+            if leftover.is_dir():
+                raise BackupError(
+                    f"refusing to restore: {leftover} from an interrupted restore is "
+                    f"still present in {db_dir}; its previous/ files are the only copy "
+                    "of the pre-restore documents. Inspect it, restore those files "
+                    "by hand if needed, then remove it and retry"
+                )
     info, members = _verify_archive(archive)
     existing = {name: (db_dir / name) for name, _s, _d in info.members}
     for path in existing.values():

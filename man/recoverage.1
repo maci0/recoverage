@@ -132,7 +132,9 @@ which is created; default:
 else a
 .B backups
 directory beside the snapshot directory). Exits 1 when there is nothing to back
-up: an empty archive verifies, and restoring one empties the dashboard.
+up: an empty archive verifies, and restoring one empties the dashboard. A
+destination inside the coverage directory is refused: an archive there shares
+its failure domain with the data it protects.
 .B \-\-json
 writes the verified members and their digests as JSON, for a scheduled job
 that reads the result rather than the table.
@@ -152,7 +154,23 @@ a coverage document and an unreadable file are refused either way. Requires
 .BR RECOVERAGE_SNAPSHOTS .
 Offline readers detect the restored files on their own;
 .B regen
-refuses portable mode.
+refuses portable mode. A leftover staging directory from an interrupted
+restore is also refused: its
+.B previous/
+files hold the only copy of the pre-restore documents, so the error names it
+for manual inspection rather than overwriting it.
+.TP
+.B verify
+Check every member of a backup archive against its manifest, without
+restoring it. The standalone proof for an archive written by an older run,
+copied to another volume, or taken from a download, which
+.B backup
+has not re-read since. Exits 1 naming the member whose size or digest
+disagrees, and 0 only when a restore could load it. Writes nothing and
+needs no
+.BR RECOVERAGE_SNAPSHOTS .
+.B \-\-json
+writes the verified members and their digests as JSON.
 .TP
 .B schema
 Print the clispec 0.3 JSON document. Reads no project, no token, and no network.
@@ -476,6 +494,7 @@ recoverage regen                     # refresh the live view
 recoverage backup                    # verified archive of the documents
 recoverage backup \-\-to /srv/backups/nightly.tar
 recoverage restore /srv/backups/nightly.tar
+recoverage verify /srv/backups/nightly.tar
 recoverage open                      # open a running dashboard
 recoverage config \-\-json            # what serve would start with
 recoverage schema                    # clispec 0.3 document, no project

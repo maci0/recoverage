@@ -42,7 +42,9 @@ files require `--force`; review the named files before choosing to replace them.
 Stop readers during restore. A handled write failure rolls earlier replacements
 back; if rollback also fails, the error names the directory retaining the original
 files. A process or machine crash can leave a `.restore-*` directory behind;
-preserve its `previous/` files and retry the restore before serving the exports.
+restore refuses while one is present — its `previous/` files are the only copy of
+the pre-restore documents, so inspect them, restore those files by hand if needed,
+remove the directory, then retry before serving the exports.
 Offline readers detect restored files automatically. `regen` refuses offline
 mode because only Rebrew can derive a fresh export from the original inputs.
 
@@ -63,6 +65,14 @@ CRON_TZ=UTC
 
 The archive is verified before success is reported. On hosts whose cron lacks
 `CRON_TZ`, configure the daemon’s time zone explicitly. Archive timestamps use UTC.
+Keep the backup volume separate from the snapshot directory: a destination inside
+the coverage directory is refused, because an archive there shares its failure
+domain with the data it protects (one directory deletion removes both). Alert on
+the job itself — a missing log line or a non-zero exit is a missed backup, and an
+empty coverage directory exits 1 rather than writing an empty archive. Between
+drills, run `recoverage verify /srv/backups/nightly.tar` to re-prove an archive
+older runs wrote or that was copied to another volume; it writes nothing and
+needs no `RECOVERAGE_SNAPSHOTS` selection.
 
 ## Restore drills
 

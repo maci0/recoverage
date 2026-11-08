@@ -2350,6 +2350,60 @@ def restore(
     )
 
 
+@app.command("verify")
+def verify(
+    archive: str = typer.Argument(
+        ..., metavar="ARCHIVE", help="Backup archive written by 'recoverage backup' (.tar)"
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the verified archive description as a JSON object"
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Check every member of *archive* against its manifest, without restoring.
+
+    The standalone proof for a scheduled job and for a drill: ``recoverage
+    backup`` already verifies its own output, but an archive written by an
+    older run, copied to another volume, or restored from a download has
+    never been re-read since. This command is that re-read: it exits 1 and
+    names the member when any size or digest disagrees, and exits 0 only
+    when the archive is one a restore could load. It writes nothing and
+    needs no ``RECOVERAGE_SNAPSHOTS`` selection, because it does not touch
+    the coverage directory.
+    """
+    from recoverage.backup import BackupError, verify_archive_command
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    as_json = _json_on(as_json)
+    _check_env_or_exit()
+    try:
+        info = verify_archive_command(Path(archive).expanduser())
+    except BackupError as exc:
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
+    if as_json:
+        typer.echo(
+            _dumps(
+                {
+                    "path": str(info.path),
+                    "created": info.created,
+                    "bytes": info.total_bytes,
+                    "members": [
+                        {"name": name, "size": size, "sha256": digest}
+                        for name, size, digest in info.members
+                    ],
+                }
+            )
+        )
+        return
+    _secho(
+        f"Verified backup: {info.path}, {_counted(len(info.members), 'document', 'documents')}, "
+        f"{info.total_bytes:,} bytes, taken {info.created}.",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
 @app.command("open")
 def open_cmd(
     port: str | None = typer.Option(
