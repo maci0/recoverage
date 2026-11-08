@@ -1897,7 +1897,10 @@ if not TYPE_CHECKING:
         break lands in a release rather than in the pull request that caused
         it. A first-party sibling module is not a dependency.
         """
-        first_party = {p.stem for p in _python_sources()} | {"recoverage"}
+        # `tests/` is a namespace package (no __init__.py), so a
+        # `from tests.xxx import` shows up here as the top-level name
+        # `tests` rather than as the module stem the set above holds.
+        first_party = {p.stem for p in _python_sources()} | {"recoverage", "tests"}
         declared = set(_declared_distributions().values())
         undeclared = {
             name
