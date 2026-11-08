@@ -772,9 +772,9 @@ def _wrap_text(text: str, width: int) -> str:
 
     The rejoined line is one code point over ``width``, which is the cheaper
     trade than a character split across two rows.  This is not grapheme
-    segmentation: a ZWJ emoji sequence can still be broken, because counting
-    extended clusters needs a table this package does not depend on, and a
-    reflowed emoji is a cosmetic miss where a reattached accent is wrong text.
+    segmentation: counting extended clusters needs a table this package does
+    not depend on, so the joiner-mediated and flag cases are covered by the
+    two specific continuation rules below rather than by cluster counting.
     """
     lines: list[str] = []
     for line in text.splitlines():
@@ -790,23 +790,49 @@ def _rejoin_combining(wrapped: list[str]) -> list[str]:
     """*wrapped* with every piece that opens on a combining mark closed back up.
 
     ``unicodedata.combining`` is the combining class, which is zero for the
-    marks a real grapheme carries besides accents: a ZWJ (U+200D, Cf), a
-    variation selector's neighbours, an emoji modifier (U+1F3FB, Sk) and a
-    regional-indicator flag's second half all have class zero, so a piece
-    opening on one was left on its own line — a ZWJ that started a line joins
+    marks a real grapheme carries besides accents: a ZWJ (U+200D, Cf) and
+    an emoji modifier (U+1F3FB, Sk) all have class zero, so a piece opening
+    on one was left on its own line — a ZWJ that started a line joins
     nothing, an emoji modifier that started one re-colours the wrong glyph.
     A piece is rejoined when its first character is a combining mark, a
     format character, or a modifier symbol; the last covers skin tones, the
-    middle covers ZWJ/ZWNJ, and a regional indicator is left alone because a
-    flag is two So code points with no mark between them.
+    middle covers ZWJ/ZWNJ. Two further joins cover the cases where the
+    piece itself opens on a base character: it follows a trailing ZWJ
+    (the joiner-mediated half of an emoji sequence, where the cut landed
+    after the joiner rather than before it), and it opens on a regional
+    indicator while the previous line ends on an odd run of them (the
+    second half of a flag, two So code points with no mark between them).
     """
     out: list[str] = []
     for piece in wrapped:
-        if out and piece and _is_continuation(piece[0]):
+        if out and piece and (_is_continuation(piece[0]) or _continues_previous(out[-1], piece[0])):
             out[-1] += piece
         else:
             out.append(piece)
     return out
+
+
+def _continues_previous(previous: str, char: str) -> bool:
+    """Whether *char* continues the grapheme *previous* ended with.
+
+    A base character after a trailing ZWJ is joined to it by the joiner
+    itself, and a regional indicator after an odd run of regional
+    indicators is the second half of a flag: both are checked against the
+    tail of the previous line rather than against the character alone,
+    because neither is a continuation in isolation. Mirrors the flag and
+    joiner arms of ``server.truncate_text``.
+    """
+    if previous.endswith("\u200d"):
+        return True
+    if not "\U0001f1e6" <= char <= "\U0001f1ff":
+        return False
+    trailing = 0
+    for prior in reversed(previous):
+        if "\U0001f1e6" <= prior <= "\U0001f1ff":
+            trailing += 1
+        else:
+            break
+    return trailing % 2 == 1
 
 
 def _is_continuation(char: str) -> bool:
@@ -1554,7 +1580,12 @@ def handle_potato() -> bytes | Any:
         # "coverage updated" stamp.
         qs = request.query_string
         if isinstance(qs, bytes):
-            qs = qs.decode("utf-8", errors="replace")
+            # ``surrogateescape``, the inverse of ``fs_url_quote``: a target
+            # id the filesystem held as a byte outside UTF-8 reaches the
+            # ETag in the same spelling ``render_potato`` parses it under
+            # (``parse_qs`` with the same handler), not as U+FFFD for the
+            # one and the surrogate for the other.
+            qs = qs.decode("utf-8", errors="surrogateescape")
         # Redact token from ETag input so query-string ETag doesn't leak it.
         if "token=" in qs:
             qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))

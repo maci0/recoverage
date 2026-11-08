@@ -584,6 +584,26 @@ def test_wrap_text_never_opens_a_line_on_a_zwj_or_emoji_modifier():
     assert not any(line.startswith(skin_tone) for line in wrapped.split("\n"))
 
 
+def test_wrap_text_never_splits_a_flag_or_a_zwj_sequence():
+    """A wrap never lands inside a regional-indicator flag or after a ZWJ.
+
+    A flag is two regional indicators with no mark between them, so neither
+    half is a continuation on its own: the rejoin has to count the run the
+    previous line ends on, and only an odd run takes the next indicator.
+    Spelled with escapes throughout: the literals are invisible in a diff.
+    """
+    flag = "\U0001f1fa\U0001f1f8"  # regional indicators U and S
+    wrapped = _wrap_text("x" + flag * 30, 40)
+    assert len(wrapped.split("\n")) == 1  # the cut landed mid-flag, so the tail rejoined
+    # A cut on a flag boundary (even run) still wraps.
+    assert _wrap_text(flag * 30, 40) == "\n".join([flag * 20, flag * 10])
+    zwj = "\u200d"
+    family = "\U0001f468" + zwj + "\U0001f469" + zwj + "\U0001f467" + zwj + "\U0001f466"
+    wrapped = _wrap_text("a" * 36 + family + "b" * 20, 40)
+    assert len(wrapped.split("\n")) == 1  # the cut landed after a joiner
+    assert not any(line.endswith(zwj) for line in wrapped.split("\n"))
+
+
 def test_format_hex_dump():
     dump = _format_hex_dump(b"\x48\x65\x6c\x6c\x6f\x00\xff\x01", base_offset=0x1000)
     assert "00001000" in dump
