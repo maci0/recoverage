@@ -4200,6 +4200,25 @@ def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
     response.set_header("X-Frame-Options", "DENY")
     response.set_header("Content-Security-Policy", csp_for_path(request.path))
+    # The dashboard uses no powerful browser features: no camera, mic,
+    # geolocation, payment, USB/serial, fullscreen or workers.  An empty
+    # allowlist denies every feature not named, so a future script that
+    # reaches for one fails closed instead of silently succeeding.
+    # clipboard-write is not listed: the copy buttons need it and the
+    # browser already gates it behind a user gesture.
+    response.set_header(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), "
+        "fullscreen=(), web-share=(), xr-spatial-tracking=()",
+    )
+    # Cross-origin isolation headers: COOP severs the browsing context from
+    # any opener, COEP blocks cross-origin subresources without CORP, and
+    # CORP keeps the dashboard's own assets from being embedded elsewhere.
+    # They do not break the SPA: no popups, no cross-origin embeds, no
+    # SharedArrayBuffer dependency.
+    response.set_header("Cross-Origin-Opener-Policy", "same-origin")
+    response.set_header("Cross-Origin-Embedder-Policy", "require-corp")
+    response.set_header("Cross-Origin-Resource-Policy", "same-origin")
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")
