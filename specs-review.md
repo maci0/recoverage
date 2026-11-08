@@ -40,9 +40,11 @@ Review the following:
    - Every "Mitigation in code" cell names a mechanism that exists: the named
      constant, the guard, the header, the cache eviction. Open the cited code.
    - Every mitigation present in the code for a ranked risk appears in its row.
-     A security control added since the last pass (`rg -l 'Sec-Fetch-Site'
-     src/recoverage/` and the route decorators in `src/recoverage/api.py`) with
-     no row is a missing row, not a missing control.
+     A security control added since the last pass (`rg -l 'Sec-Fetch-Site'`
+     over the Python sources, and the route decorators in `src/recoverage/api.py`)
+     with no row is a missing row, not a missing control. `Sec-Fetch-Site` sits
+     in `src/recoverage/api.py` today; the search proves a control exists, not
+     where, so re-prove the file on each pass rather than trusting this line.
    - The ranking is a judgement, so only flag a rank that is falsified: a risk
      table that still ranks unauthenticated remote reads below a risk the code
      has since bounded. Do not reshuffle ranks on taste.
