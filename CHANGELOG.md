@@ -9,6 +9,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `recoverage verify` checks a backup archive against its manifest without
   restoring it, and exits 1 naming the member whose size or digest disagrees.
+- `recoverage check-backup` refuses when a backup directory holds no fresh
+  stamped archive (exits 1 when the directory is missing or its newest
+  archive is older than `--max-age-hours`, default 25), and `backup` now
+  archives the original binaries and source roots the documents name, flat
+  beside the documents, so a restore serves `/asm` and the source pane
+  without a second copy.
 - `recoverage ops serve` answers the same ops as `ops call` over HTTP, as
   `POST /<op>` on rebrew's ops server (bearer token `RECOVERAGE_OPS_TOKEN` of at
   least 32 bytes, Host allow-list, `--concurrency` bound answered 503 with
