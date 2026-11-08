@@ -3,7 +3,10 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
-source/refresh boundaries reviewed: 2026-10-16. The document is maintained for
+source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-08
+(`verify`, `schema`, backup/restore hardening and the `ops call` stdio path
+re-checked against `src/recoverage/cli.py`, `src/recoverage/ops.py`,
+`src/recoverage/backup.py`). The document is maintained for
 `__version__ = "8.9.0"` (`src/recoverage/__init__.py`); releases since the
 review were not re-reviewed as a whole. For 8.7.1, only the basename-only
 health control below was re-checked, against its `/api/health` `config.source` fix.
@@ -162,9 +165,24 @@ request body.
 
 Non-network entry points:
 
-- CLI: `serve`, `stats`, `export`, `check`, `regen`, `open`, `config`
-  (`src/recoverage/cli.py`), plus the global `--no-color` / `--version`
-  callback (`src/recoverage/cli.py`). The operator's shell is the trust source.
+- CLI: `serve`, `stats`, `export`, `check`, `regen`, `backup`, `restore`,
+  `verify`, `open`, `config`, `schema`, and the `ops` subgroup (`ops call`,
+  `ops serve`) (`src/recoverage/cli.py`, `src/recoverage/ops.py`), plus the
+  global `--no-color` / `--version` callback (`src/recoverage/cli.py`).
+  The operator's shell is the trust source.
+  `verify ARCHIVE [--json]` (`src/recoverage/cli.py`) re-reads a backup archive
+  through `backup.verify_archive_command` (`src/recoverage/backup.py`) without
+  touching the coverage directory; its positional `ARCHIVE` is an
+  operator-supplied path (expanded with `~`), the same trust class as
+  `restore`'s positional, and it writes nothing. `schema [COMMAND...]`
+  (`src/recoverage/cli.py`) prints the clispec 0.3 JSON document built by
+  `clispec.build_schema` (`src/recoverage/clispec.py`); it reads no project,
+  token or network, and an unmatched command path exits 2. `ops call`
+  (`src/recoverage/ops.py`) is the stdio worker: one JSON request on stdin,
+  one reply on stdout, dispatched by `ops.dispatch` against the same
+  `WorkerConfig` workspace confinement `ops serve` uses, so the stdio path has
+  the same project/workspace gates without a socket or token. `ops serve` is
+  the token-gated HTTP worker (boundary 10).
   `recoverage config` prints every resolved setting including whether a token
   is set (`src/recoverage/cli.py`), so it reaches the same secret-presence question as
   `serve`. `open` grew a `--bind` of its own in `7d107a7`, validated by
@@ -867,6 +885,8 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Tar hardening on restore: a member name must be a plain basename AND match the coverage glob; per-member and archive-wide byte bounds are checked from the HEADERS before any payload is read; a member delivering more bytes than its header declares is refused; a name appearing twice is refused | `src/recoverage/backup.py` (`_read_archive`, `_is_coverage`, `_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`) | Path traversal out of the coverage directory, an allocation bomb from a header claiming gigabytes, a member verified by prefix only, and a member substituted by taking whichever duplicate the map kept |
 | Restore refuses differing portable documents unless `--force` is selected; corruption and member bounds remain enforced | `backup.restore_backup` | Silent replacement of selected offline facts. Canonical verdicts/history are outside this operation |
 | Document gate: the format `version` must be the one this build reads, every array and table must have its documented shape, and the document's `target` must match its filename; a failure is answered 503 | `src/recoverage/server.py`, `rebrew/coverage_toml.py` | A truncated, foreign or hand-edited document reading as an empty target, and query-time 500s from a document the reader cannot use |
+| Restore staging is transactional and refuses a leftover staging directory: all members are staged under a private staging directory inside the coverage directory before any original is moved, originals are kept in `previous/` until publication completes, and a `BaseException` rolls written files back and restores the saved ones, keeping the staging directory (with a logged warning) when rollback itself fails. A pre-existing staging directory from a killed restore is refused rather than overwritten, since its `previous/` files are the only copy of the pre-restore state | `src/recoverage/backup.py` (`restore_backup`) | A restore that lands half its members and leaves a directory no reader can distinguish from a rebuild, and a second restore that would discard the only copy of the pre-restore documents. The staging directory is inside the coverage directory, so it shares that directory's failure domain |
+| Backup destination is refused when it resolves inside the coverage directory it archives | `src/recoverage/backup.py` (`_require_outside_coverage_dir`, `write_backup`) | An archive written into the tree it backs up, where one directory delete destroys data and backup together. An `OSError` resolving either path lets the write proceed (fail-open on resolution, still bounded by `_atomic_write` and the fail-if-exists publish) |
 | Basename-only coverage-directory name in health and SSE payloads | `src/recoverage/api.py` | Home-directory layout disclosure |
 | JSON error contract, `Cache-Control: no-store` on errors, no tracebacks in bodies, control-char-escaped logs | `src/recoverage/server.py` | Information disclosure, stale cached errors, log forgery |
 | ETag revalidation and `no-store` on the 401 page | `src/recoverage/server.py` | Serving stale data, replaying a pre-auth body from a shared cache |
