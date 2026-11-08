@@ -670,18 +670,23 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
 
                     try:
                         validate()
-                        trusted = TrustedCoverage(
-                            tuple(
-                                TrustedVerification(
-                                    source=row["source"],
-                                    va=row["va"],
-                                    size=row["size"],
-                                    status=row["status"],
-                                    match_count=row["match_count"],
+                        try:
+                            trusted = TrustedCoverage(
+                                tuple(
+                                    TrustedVerification(
+                                        source=row["source"],
+                                        va=row["va"],
+                                        size=row["size"],
+                                        status=row["status"],
+                                        match_count=row["match_count"],
+                                    )
+                                    for row in request.verification_records
                                 )
-                                for row in request.verification_records
                             )
-                        )
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise _invalid(
+                                f"verification_records entry is malformed: {exc}"
+                            ) from None
                         reply = op.run(config, staged, trusted)
                         validate()
                         return reply
