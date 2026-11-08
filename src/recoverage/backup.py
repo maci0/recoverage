@@ -406,7 +406,7 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
     for name, data in documents:
         try:
             doc = tomllib.loads(data.decode("utf-8"))
-        except (UnicodeError, ValueError) as exc:
+        except (UnicodeError, ValueError, RecursionError) as exc:
             raise BackupError(f"cannot parse coverage document {name}: {exc}") from exc
         metadata = doc.get("metadata", {})
         if not isinstance(metadata, dict):

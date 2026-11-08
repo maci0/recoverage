@@ -6369,3 +6369,218 @@ class TestCampaignSeeds:
         message = str(excinfo.value)
         assert f"campaign={label}" in message, message
         assert f"seed={campaign_seed(label)}" in message, message
+
+# ── the report export and the gate ─────────────────────────────────
+# `reporting.render_export` / `csv_text` / `markdown_text` / `json_text` and
+# `reporting.gate` / `section_verdict` / `_coverage_meets` / `coverage_pct` /
+# `pct_1dp` take the per-target statistics a coverage document's own values
+# become (`_section_stats`) and render or judge them.  The CLI campaign above
+# reaches them through a full document, so the section and target names it
+# draws are the only hostile values they ever see, the byte counts are the
+# fixture's, and the gate runs at --min-coverage 0, where every verdict is
+# PASS by construction.  Drawn directly, the same surfaces take hostile
+# numbers: non-finite and out-of-range percentages, negative and
+# astronomically large byte counts, covered above total, and text values in
+# numeric cells.  Each format has its own invariant there (a ragged row, a
+# formula cell that escaped the guard, a quoted figure that rounds up to
+# 100.0, a verdict that quotes 100.00 beside FAIL), and the gate has the
+# exact-boundary one (23/40 against 57.5).
+
+_REPORT_NUMBERS: tuple[str, ...] = (
+    "0", "1", "50", "50.5", "57.5", "99.99", "99.999", "100", "100.01", "101",
+    "-1", "1e309", "NaN", "Infinity", "-Infinity", "true", '"50"',
+)
+
+_REPORT_SEEDS: list[bytes] = [
+    (
+        b'{"target": "T", "sections": {".text": {"size_bytes": 100, "total_cells": 10, '
+        b'"exact": 5, "reloc": 0, "near_match": 0, "stub": 0, "coverage_pct": 50.0, '
+        b'"covered_bytes": 50, "total_bytes": 100}}}'
+    ),
+    (
+        b'{"target": "=cmd", "sections": {"=HYPERLINK(1)": {"size_bytes": 100, '
+        b'"total_cells": 10, "exact": 5, "reloc": 0, "near_match": 0, "stub": 0, '
+        b'"coverage_pct": 99.99, "covered_bytes": 9999, "total_bytes": 10000}}}'
+    ),
+    (
+        b'{"target": "T", "sections": {".text": {"size_bytes": 0, "total_cells": 0, '
+        b'"exact": 0, "reloc": 0, "near_match": 0, "stub": 0, "coverage_pct": 0.0, '
+        b'"covered_bytes": 0, "total_bytes": 0}}}'
+    ),
+    (
+        b'{"target": "T", "sections": {".text": {"size_bytes": 40, "total_cells": 4, '
+        b'"exact": 2, "reloc": 0, "near_match": 0, "stub": 0, "coverage_pct": 57.5, '
+        b'"covered_bytes": 23, "total_bytes": 40}}}'
+    ),
+    b"{}",
+    b"[]",
+    b"",
+    b"null",
+    b'{"target": "T", "sections": {}}',
+]
+
+_REPORT_TOKENS: tuple[bytes, ...] = (
+    b'"coverage_pct": 99.99', b'"coverage_pct": 100', b'"coverage_pct": 1e309',
+    b'"coverage_pct": NaN', b'"covered_bytes": -1',
+    b'"covered_bytes": 999999999999999999999999', b'"total_bytes": 0',
+    b'"total_bytes": -5', b'"exact": "5"', b'"exact": true', b'"size_bytes": 1e309',
+    b'"target": "=1+1"', b'"target": "@1+1"', b'"target": "a|b"', b'"target": "a\nb"',
+    b'".text":', b'"=1+1":', b'"a|b":', b'"min_coverage": 57.5',
+    b'"min_coverage": 100', b'"min_coverage": NaN',
+)
+
+
+def _report_stats(raw: bytes) -> dict[str, Any] | None:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    target = data.get("target", "T")
+    if not isinstance(target, str):
+        target = "T"
+    sections = data.get("sections", {})
+    if not isinstance(sections, dict):
+        sections = {}
+    return {"target": target, "sections": sections}
+
+
+class TestReportExportAndGate:
+    """`reporting` — the export renders and the gate verdicts, over hostile counts."""
+
+    def test_export_renders_and_gate_verdicts_hold_for_any_counts(self) -> None:
+        def check(raw: bytes) -> None:
+            stats = _report_stats(raw)
+            if stats is None:
+                return
+            min_coverage = 57.5
+            try:
+                named = json.loads(raw.decode("utf-8"))
+                if isinstance(named, dict) and isinstance(
+                    named.get("min_coverage"), (int, float)
+                ):
+                    candidate = float(named["min_coverage"])
+                    if candidate not in (float("inf"), float("-inf")) and candidate * 0 == 0:
+                        min_coverage = candidate
+            except (UnicodeError, ValueError, RecursionError):
+                pass
+            outcome = reporting.gate(
+                [("T", stats)], min_coverage=min_coverage, section="__absent__"
+            )
+            assert outcome.checked == 0, f"{raw[:80]!r}: an absent section was checked"
+            assert outcome.skipped_targets == ("T",), (
+                f"{raw[:80]!r}: an absent section was not skipped: {outcome!r}"
+            )
+            outcome = reporting.gate([("T", stats)], min_coverage=min_coverage)
+            for verdict in outcome.verdicts:
+                assert verdict.status in ("PASS", "FAIL", "SKIP"), (
+                    f"{raw[:80]!r}: unknown verdict {verdict.status!r}"
+                )
+                document = verdict.document()
+                assert document["target"] == "T", f"{raw[:80]!r}: {document!r}"
+                if "coverage_pct" in document:
+                    shown = document["coverage_pct"]
+                    assert isinstance(shown, (int, float)), (
+                        f"{raw[:80]!r}: quoted a non-number {shown!r}"
+                    )
+                    if verdict.status == "FAIL":
+                        assert shown < min_coverage or min_coverage > 100.0, (
+                            f"{raw[:80]!r}: FAIL quoted {shown!r} against {min_coverage!r}"
+                        )
+            for fmt in reporting.EXPORT_FORMATS:
+                try:
+                    text = reporting.render_export(fmt, [stats])
+                except (TypeError, ValueError, OverflowError, KeyError):
+                    continue
+                assert isinstance(text, str), f"{raw[:80]!r}: {fmt} rendered a non-text"
+                assert "Traceback" not in text, f"{raw[:80]!r}: {fmt} leaked a traceback"
+                if fmt == "json":
+                    _strict_json(text)
+                elif fmt == "csv":
+                    rows = list(csv.reader(io.StringIO(text, newline="")))
+                    header, body = rows[0], rows[1:]
+                    for row in body:
+                        assert len(row) == len(header), (
+                            f"{raw[:80]!r}: ragged CSV row {row!r} against {header!r}"
+                        )
+                        for cell_value in row[:2]:
+                            if cell_value[:1] in ("=", "+", "-", "@"):
+                                assert cell_value.startswith("'"), (
+                                    f"{raw[:80]!r}: a formula cell reached the file unprefixed"
+                                )
+                else:
+                    lines = [line for line in text.splitlines() if line.startswith("| ")]
+                    if lines:
+                        header = lines[0]
+                        for row in lines[2:]:
+                            assert _md_cells(row) == _md_cells(header), (
+                                f"{raw[:80]!r}: ragged Markdown row {row!r}"
+                            )
+            for value in (99.999, 99.99, 100.0, 57.499):
+                assert reporting.pct_1dp(value) <= 100.0, value
+                assert reporting.pct_1dp(value) < 100.0 or value >= 100.0, value
+            assert reporting.coverage_pct(999_997, 1_000_000) < 100.0
+            assert reporting._coverage_meets(23, 40, 57.5) is True
+            assert reporting._coverage_meets(23, 40, 57.6) is False
+            assert reporting._coverage_meets(0, 0, 0.0) is False
+            assert reporting._coverage_meets(1, 0, 0.0) is False
+
+        _fuzz(
+            _REPORT_SEEDS,
+            check,
+            iterations=120,
+            struct_tokens=_REPORT_TOKENS,
+            num_tokens=tuple(token.encode() for token in _REPORT_NUMBERS),
+            label="TestReportExportAndGate.test_export_renders_and_gate_verdicts_hold_for_any_counts",
+        )
+
+
+class TestReferencedPathsParse:
+    """`backup._referenced_paths` — a document that does not parse is a refusal."""
+
+    def test_a_document_that_does_not_parse_is_a_backup_error(self) -> None:
+        from recoverage import backup
+
+        deep_head = b"[" + b".".join([b"a"] * 2000) + b"]\nx=1\n"
+        deep_inline = b"a = " + b"{b = " * 500 + b"1" + b"}" * 500 + b"\n"
+        seeds = [
+            b'[metadata]\n[metadata.paths]\nbinary = "game.exe"\n',
+            b"",
+            b"not toml at all [[",
+            b"\xff\xfe invalid utf-8",
+            b"[metadata]\npaths = 1\n",
+            b"[metadata.paths]\nbinary = 1\n",
+            b"[metadata]\npaths = []\n",
+            deep_head,
+            deep_inline,
+        ]
+
+        def check(raw: bytes) -> None:
+            try:
+                refs = backup._referenced_paths([("coverage-A.toml", raw)])
+            except backup.BackupError:
+                return
+            except Exception as exc:  # the contract is BackupError only
+                raise AssertionError(
+                    f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}"
+                ) from exc
+            for ref in refs:
+                assert isinstance(ref, str), f"{raw[:60]!r}: non-text ref {ref!r}"
+                assert ref, f"{raw[:60]!r}: an empty ref was carried"
+
+        _fuzz(
+            seeds,
+            check,
+            iterations=120,
+            struct_tokens=(
+                b"[metadata]",
+                b"[metadata.paths]",
+                b'binary = "game.exe"',
+                b"binary = 1",
+                b"paths = []",
+                b"\x00",
+            ),
+            num_tokens=(b"0", b"1", b"-1", b"[]", b"{}"),
+            label="TestReferencedPathsParse.test_a_document_that_does_not_parse_is_a_backup_error",
+        )
