@@ -1431,7 +1431,7 @@ class TestPythonAnalysisIsEnforced:
         not a ceiling.
         """
         mypy = self._mypy()
-        for check in ("warn_unreachable", "strict_equality"):
+        for check in ("warn_unreachable", "strict_equality", "warn_return_any", "warn_no_return"):
             assert mypy.get(check) is True, f"`{check}` is off in [tool.mypy]"
 
     def test_no_module_is_exempted_from_the_gate(self) -> None:

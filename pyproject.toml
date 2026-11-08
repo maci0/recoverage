@@ -213,6 +213,16 @@ warn_unused_ignores = true
 # them on.
 warn_unreachable = true
 strict_equality = true
+# The two checks the tree passes that --strict leaves off, so they are
+# explicit rather than inherited. warn_return_any reports a declared
+# non-Any return that hands back a value whose type is Any (the four
+# untyped boundaries bottle/brotli/json.load/socket.getsockname feed, each
+# narrowed by an explicit cast at the call today); warn_no_return reports a
+# function that can reach the end without returning. Both ran clean before
+# they were written here, alongside warn_unreachable and strict_equality.
+# tests/test_supply_chain.py holds them on.
+warn_return_any = true
+warn_no_return = true
 
 [tool.ruff.lint]
 # RUF001-RUF003 flag every confusable in prose; the multiplication sign is
