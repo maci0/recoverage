@@ -231,9 +231,8 @@ def warm_index_cache() -> None:
         # shell repeatedly, and the early-return check above the build could
         # not see the winner's payload until its compression finished.
         with INDEX_LOCK:
-            if (
-                CACHED_INDEX_PAYLOAD is not None
-                and len(CACHED_INDEX_COMPRESSED) == (1 << len(SUPPORTED_ENCODINGS))
+            if CACHED_INDEX_PAYLOAD is not None and len(CACHED_INDEX_COMPRESSED) == (
+                1 << len(SUPPORTED_ENCODINGS)
             ):
                 return
             payload = _build_index_payload()

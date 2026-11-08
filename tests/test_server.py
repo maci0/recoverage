@@ -1766,7 +1766,7 @@ class TestTokenAuthEndpoint:
 
         from conftest import wsgi_get
 
-        status, headers, body = wsgi_get("/api/health")
+        status, _headers, body = wsgi_get("/api/health")
         assert status.startswith("401")
         payload = json.loads(body)
         assert payload["error"] == "unauthorized"
@@ -1789,7 +1789,7 @@ class TestTokenAuthEndpoint:
 
         from conftest import wsgi_get
 
-        status, headers, body = wsgi_get(
+        status, _headers, body = wsgi_get(
             "/api/health", headers={"Authorization": "Bearer unit-test-token"}
         )
         assert status.startswith("200")
@@ -1841,7 +1841,7 @@ class TestTokenAuthEndpoint:
 
         from conftest import wsgi_get
 
-        status, headers, body = wsgi_get("/api/health?token=unit-test-token")
+        status, _headers, body = wsgi_get("/api/health?token=unit-test-token")
         assert status.startswith("200")
         assert json.loads(body)["status"] == "healthy"
 
@@ -1851,7 +1851,7 @@ class TestTokenAuthEndpoint:
 
         from conftest import wsgi_get
 
-        status, headers, body = wsgi_get(
+        status, _headers, body = wsgi_get(
             "/api/health", headers={"Cookie": "recoverage_token=unit-test-token"}
         )
         assert status.startswith("200")

@@ -135,9 +135,7 @@ def _bounded(text: str) -> str:
 
 def error_body(code: str, detail: str, status: int) -> bytes:
     """The refusal reply the transport writes, mirroring the HTTP error envelope."""
-    return json.dumps(
-        {"error": code, "code": code, "detail": detail, "status": status}
-    ).encode()
+    return json.dumps({"error": code, "code": code, "detail": detail, "status": status}).encode()
 
 
 # ---------------------------------------------------------------------------
@@ -892,8 +890,6 @@ def serve_command(
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_ERROR) from None
 
-    port = resolved_port
-
     raw_token = os.environ.get(TOKEN_ENV)
     try:
         token = validate_token(raw_token, TOKEN_ENV) or ""
@@ -939,7 +935,7 @@ def serve_command(
     # recoverage's ops, so the name is rebound to ours.
     rebrew_ops.dispatch = answer
     server = rebrew_ops.OpsServer(
-        (host, port),
+        (host, resolved_port),
         rebrew_ops.WorkerConfig(worker.filestore, worker.workspace),
         token,
         resolved_concurrency,
