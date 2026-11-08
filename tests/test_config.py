@@ -438,11 +438,17 @@ class TestUnknownVars:
     def test_known_vars_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_PORT", "9000")
         monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret")
+        # Must not raise: the two KNOWN_VARS the reader set owns pass the gate.
         config.check_unknown_vars()
+        # And the values the gate let through are the ones the readers see.
+        assert config.port() == 9000
+        assert config.token() == "s3cret"
 
     def test_unrelated_prefixed_name_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NOT_RECOVERY_X", "1")
+        # Must not raise: only RECOVERAGE_ names are this gate's business.
         config.check_unknown_vars()
+        assert config.port() == config.DEFAULT_PORT
 
     def test_known_vars_and_prefix_agree(self) -> None:
         """check_unknown_vars can only pass if the reader set is complete."""
@@ -479,7 +485,12 @@ class TestUnknownVars:
         other tool knobs for the same reason.
         """
         monkeypatch.setenv("RECOVERAGE_BACKUP_DIR", "/srv/backups")
+        # Must not raise: the tool knob is in KNOWN_VARS so the cron line
+        # does not exit 2 naming it a misspelling.
         config.check_unknown_vars()
+        # And it is not a server setting: serve's readers must not see it.
+        assert config.snapshot_override() is None
+        assert config.port() == config.DEFAULT_PORT
 
     def test_no_server_reader_consumes_a_tool_knob(self) -> None:
         """Membership in KNOWN_VARS is not a claim that `serve` reads it.

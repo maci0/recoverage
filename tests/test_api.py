@@ -1568,7 +1568,15 @@ class TestRegenRateLimit:
         assert status2.startswith("429")
         data = json.loads(decode_body(body2, headers2))
         assert data["error"].startswith("Rate limited")
-        assert data["retry_after"] >= 0
+        # retry_after is the cooldown ceiling in whole seconds (int), not a
+        # rounded float and not 0: a too-short wait tells the client to retry
+        # into a second refusal, a float wait reads as a different type on
+        # every other 429 in the package. The Header must carry the same int.
+        import recoverage.api as api_mod
+
+        assert isinstance(data["retry_after"], int)
+        assert data["retry_after"] == api_mod._REGEN_COOLDOWN_SECONDS
+        assert data["retry_after"] >= 1
 
     def test_cooldown_expires(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """After the window elapses the endpoint accepts again."""
