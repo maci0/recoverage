@@ -39,7 +39,7 @@ restores the public hash-pinned wheel. No path override is committed.
 
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
 1.4.4) and a JDK on `PATH`, since `vnu-jar` validates the HTML and CSS
-under `java`. CI tests Temurin 27. `make web-lint` names whichever is missing.
+under `java`. CI tests Temurin 27.0.1. `make web-lint` names whichever is missing.
 
 `make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on
 `PATH`; both ship on the pinned CI runner image, and each target names the one
