@@ -403,6 +403,24 @@ _REBUILD_HINT = "(inspect project inputs or RECOVERAGE_SNAPSHOTS)"
 _PATH_SEPARATORS = tuple(sep for sep in (os.sep, os.altsep, "/") if sep)
 
 
+def _expanduser_path(raw: str, *, as_json: bool) -> Path:
+    """``Path(raw).expanduser()`` that turns an undeterminable home into an exit.
+
+    ``Path.expanduser`` raises RuntimeError when no home can be determined
+    (no HOME/USERPROFILE and no passwd entry) and only for a tilde spelling,
+    so the failure is a misconfigured path argument, not an empty one.
+    """
+    try:
+        return Path(raw).expanduser()
+    except RuntimeError:
+        _fail(
+            f"Error: {raw!r} expands a home directory this host cannot determine",
+            f"{raw!r} expands a home directory this host cannot determine",
+            2,
+            as_json,
+        )
+
+
 def _pin_utf8(stream: IO[str], errors: str) -> None:
     """Reconfigure *stream* to encode UTF-8, whatever the locale's codec is.
 
@@ -2302,7 +2320,7 @@ def backup(
             2,
             as_json,
         )
-    destination = Path(to).expanduser() if to else None
+    destination = _expanduser_path(to, as_json=as_json) if to else None
     if to and destination is not None and to.endswith(_PATH_SEPARATORS):
         # "--to backups/" names a directory, but Path drops the separator, and
         # a path that did not exist yet became an archive FILE named "backups"
@@ -2390,7 +2408,9 @@ def restore(
             as_json,
         )
     try:
-        written = restore_backup(Path(archive).expanduser(), coverage_source(), force=force)
+        written = restore_backup(
+            _expanduser_path(archive, as_json=as_json), coverage_source(), force=force
+        )
     except BackupError as exc:
         _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
@@ -2440,7 +2460,7 @@ def verify(
     as_json = _json_on(as_json)
     _check_env_or_exit()
     try:
-        info = verify_archive_command(Path(archive).expanduser())
+        info = verify_archive_command(_expanduser_path(archive, as_json=as_json))
     except BackupError as exc:
         _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
@@ -2488,7 +2508,7 @@ def check_backup(
     _use_utf8_stderr()
     as_json = _json_on(as_json)
     _check_env_or_exit()
-    path = Path(directory).expanduser()
+    path = _expanduser_path(directory, as_json=as_json)
     try:
         limit = _checked_max_age_hours(max_age_hours, as_json)
         check_backup_freshness(path, max_age_hours=limit)

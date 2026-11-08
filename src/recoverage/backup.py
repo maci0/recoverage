@@ -62,6 +62,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PureWindowsPath
 lazy import contextlib
 lazy import hashlib
@@ -71,7 +72,6 @@ lazy import os
 lazy import shutil
 lazy import tarfile
 lazy import tempfile
-lazy from datetime import UTC, datetime
 lazy from typing import Any, Final
 
 lazy from recoverage import clock
@@ -182,7 +182,36 @@ def backup_dir_from_env(coverage_dir: Path) -> Path:
         return default_backup_dir(coverage_dir)
     if not raw.strip():
         raise BackupError("RECOVERAGE_BACKUP_DIR: set but empty (unset it, or give it a path)")
-    return Path(raw).expanduser()
+    try:
+        return Path(raw).expanduser()
+    except RuntimeError:
+        raise BackupError(
+            f"RECOVERAGE_BACKUP_DIR: {raw!r} expands a home directory this host cannot determine"
+        ) from None
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+#: Epoch second bounds for the same conversion.  ``datetime.fromtimestamp``
+#: goes through the C runtime and raises OSError on Windows outside roughly
+#: 1970-3000, so an instant is built from the epoch by integer arithmetic
+#: instead.  An out-of-range wall clock (bad RTC, frozen replay) clamps to
+#: the extreme rather than taking the backup down.
+_MIN_WALL_SECONDS = -62_135_596_800  # 0001-01-01T00:00:00Z
+_MAX_WALL_SECONDS = 253_402_300_799  # 9999-12-31T23:59:59Z
+
+
+def _epoch_plus(seconds: float) -> datetime:
+    """The UTC instant *seconds* after the epoch, without a C-runtime leap.
+
+    ``datetime.fromtimestamp`` raises OSError on Windows for instants outside
+    roughly 1970-3000.  Integer seconds plus a microsecond remainder keeps
+    the conversion exact and off that path; out-of-range values clamp.
+    """
+    whole, frac = divmod(seconds, 1.0)
+    whole = min(max(int(whole), _MIN_WALL_SECONDS), _MAX_WALL_SECONDS)
+    micros = int(frac * 1_000_000)
+    return _EPOCH + timedelta(seconds=whole, microseconds=micros)
 
 
 def _stamp() -> str:
@@ -205,12 +234,12 @@ def _stamp() -> str:
     every runbook step assumes, and fixed width is what makes it the same
     order.
     """
-    return datetime.fromtimestamp(clock.wall_time(), tz=UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    return _epoch_plus(clock.wall_time()).strftime("%Y%m%dT%H%M%S.%fZ")
 
 
 def _created_stamp() -> str:
     """The manifest's ``created`` field: the same instant, ISO-8601."""
-    return datetime.fromtimestamp(clock.wall_time(), tz=UTC).isoformat()
+    return _epoch_plus(clock.wall_time()).isoformat()
 
 
 def _digest(data: bytes) -> str:

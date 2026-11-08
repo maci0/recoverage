@@ -603,7 +603,16 @@ def snapshot_override() -> Path | None:
         return None
     if not raw:
         raise ConfigError("RECOVERAGE_SNAPSHOTS: set but empty (unset it, or give it a path)")
-    return Path(raw).expanduser()
+    try:
+        return Path(raw).expanduser()
+    except RuntimeError:
+        # ``Path.expanduser`` raises RuntimeError when no home can be
+        # determined (no HOME/USERPROFILE and no passwd entry).  A tilde
+        # spelling there is a path the operator meant to expand, so it is
+        # a misconfiguration, not a literal directory name.
+        raise ConfigError(
+            f"RECOVERAGE_SNAPSHOTS: {raw!r} expands a home directory this host cannot determine"
+        ) from None
 
 
 def check_snapshot_override() -> None:

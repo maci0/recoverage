@@ -75,6 +75,20 @@ def archive(db: Path, tmp_path: Path) -> Path:
 class TestWriteBackup:
     """A backup that reports success has been read back."""
 
+    def test_an_out_of_range_wall_clock_still_stamps(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pre-1970 or far-future clock must not raise on any platform.
+
+        ``datetime.fromtimestamp`` raises OSError on Windows outside roughly
+        1970-3000.  The stamp is built from the epoch instead, so a frozen
+        replay clock at 0.0 stamps the epoch rather than crashing backup.
+        """
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: 0.0)
+        info = write_backup(db, tmp_path)
+        assert info.path.name.startswith("coverage-19700101T000000")
+        assert info.created.startswith("1970-01-01T00:00:00")
+
     def test_round_trips_every_document(self, db: Path, tmp_path: Path) -> None:
         info = write_backup(db, tmp_path / "snap.tar")
         assert [name for name, _s, _d in info.members] == [

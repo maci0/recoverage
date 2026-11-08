@@ -28,6 +28,10 @@ def _plain(text: str) -> str:
     return " ".join(_ANSI_RE.sub("", text).replace("│", " ").split())
 
 
+def _no_home(self: Path) -> Path:
+    raise RuntimeError("Could not determine home directory.")
+
+
 class TestDefaults:
     def test_defaults_match_the_flag_help(self) -> None:
         assert config.port() == 8001
@@ -88,6 +92,20 @@ class TestScalarParsing:
     def test_snapshot_override_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", "~/proj/db/coverage.db")
         assert config.snapshot_override() == Path("~/proj/db/coverage.db").expanduser()
+
+    def test_snapshot_override_with_no_home_is_a_config_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tilde spelling on a host with no determinable home is named, not raised raw.
+
+        ``Path.expanduser`` raises RuntimeError when neither HOME nor the
+        passwd entry names a home.  Unwrapped, that escapes startup as a
+        traceback instead of the ConfigError every other bad value gets.
+        """
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", "~other/proj/db")
+        monkeypatch.setattr(Path, "expanduser", _no_home)
+        with pytest.raises(config.ConfigError, match="cannot determine"):
+            config.snapshot_override()
 
     @pytest.mark.parametrize(
         "raw", ["s3cret ", " s3cret", "s3cret\n", "  ", "two words", "tok\x01en", "tok\x7fen"]
