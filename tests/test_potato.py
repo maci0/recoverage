@@ -1351,6 +1351,41 @@ def test_function_list_sort():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_function_list_sort_direction():
+    """?sort=field:desc reverses the column the list sorts by.
+
+    A bare field is ascending and `sort=name` alone cannot reach the
+    descending half, so clicking the sorted header used to re-sort to the
+    same order. `:desc` is the reverse, and an unknown direction falls back
+    to ascending rather than refusing.
+    """
+    target = require_target()
+
+    def _order(html: str) -> list[str]:
+        return sorted(("_func_a", "_func_b", "_func_c"), key=lambda n: html.index(n))
+
+    by_name_desc = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&sort=name:desc"
+    )
+    assert _order(by_name_desc) == ["_func_c", "_func_b", "_func_a"]
+    # The current column's header flips to the opposite direction and names it.
+    assert "sort=name:asc" in by_name_desc
+    assert "Name &darr;" in by_name_desc
+
+    by_name_asc = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&sort=name:asc"
+    )
+    assert _order(by_name_asc) == ["_func_a", "_func_b", "_func_c"]
+    assert "sort=name:desc" in by_name_asc
+    assert "Name &uarr;" in by_name_asc
+
+    by_name_bogus = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&sort=name:sideways"
+    )
+    assert _order(by_name_bogus) == ["_func_a", "_func_b", "_func_c"]
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_status_filter():
     # The synthetic DB seeds _func_a EXACT, _func_b RELOC, _func_c STUB.  An
     # ignored ?status= would still list all three, so the filtered-out names

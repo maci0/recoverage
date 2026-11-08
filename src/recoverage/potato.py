@@ -19,7 +19,7 @@ lazy import struct
 lazy import textwrap
 lazy import unicodedata
 lazy from collections.abc import Callable, Iterable, Mapping, Sequence
-lazy from heapq import nsmallest
+lazy from heapq import nlargest, nsmallest
 lazy from html import escape as _html_escape
 lazy from pathlib import Path
 lazy from urllib.parse import ParseResult, parse_qs, urlparse
@@ -2930,7 +2930,13 @@ def _render_function_list(
     matched and still read "0 matches" on this one was the branch that never
     filled it in.
     """
-    order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
+    # `?sort=field:dir` mirrors the API list: a bare field is ascending,
+    # `:desc` is its reverse. An unknown field or direction falls back to the
+    # default (`va` ascending) rather than refusing, which is Potato's own
+    # rule for a column it does not carry.
+    raw_field, _, raw_dir = sort_key.partition(":")
+    order_by = raw_field if raw_field in FUNCTION_LIST_COLUMNS else "va"
+    descending = order_by == raw_field and raw_dir.lower() == "desc"
 
     # `active_filters` rides along through every link below for the reason
     # `status_filter` does: the filter pills are drawn on this view too (they
@@ -2984,9 +2990,10 @@ def _render_function_list(
     truncated = total > _SEARCH_ROW_LIMIT
     order_key = _order_key(order_by)
     if truncated:
-        rows = nsmallest(_SEARCH_ROW_LIMIT, rows, key=order_key)
+        select = nlargest if descending else nsmallest
+        rows = select(_SEARCH_ROW_LIMIT, rows, key=order_key)
     else:
-        rows.sort(key=order_key)
+        rows.sort(key=order_key, reverse=descending)
     count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
     # `?status=` narrows this list and nothing else on the page says so: the
     # header count and the search box both read as if the list were the whole
@@ -3020,6 +3027,24 @@ def _render_function_list(
     if status_filter:
         base += f"&status={fs_url_quote(status_filter)}"
 
+    # The sort headers are the list's own control: each names its column and
+    # the direction that column sorts in, so clicking the column the list is
+    # already sorted by flips it rather than re-sorting to the same order.
+    # The current column carries its arrow; the others its next direction.
+    def sort_link(field: str, label: str) -> str:
+        current = field == order_by
+        direction = "desc" if current and not descending else "asc"
+        arrow = (" &darr;" if descending else " &uarr;") if current else ""
+        href = (
+            f"{base}&sort={field}:{direction}"
+            if current or direction == "desc"
+            else f"{base}&sort={field}"
+        )
+        return (
+            f'<th scope="col"><a href="{href}">'
+            f'<font color="{MUTED_COLOR}">{label}{arrow}</font></a></th>'
+        )
+
     parts = [
         f'<table role="presentation" width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
         (
@@ -3037,11 +3062,11 @@ def _render_function_list(
             f'<tr bgcolor="{PANEL_COLOR}">'
             # scope="col" is what tells a screen reader that these header cells
             # head the column below them rather than the row they sit in.
-            f'<th scope="col"><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
-            f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th></tr>'
+            + sort_link("name", "Name")
+            + sort_link("va", "VA")
+            + sort_link("size", "Size")
+            + sort_link("status", "Status")
+            + f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th></tr>'
         ),
     ]
 

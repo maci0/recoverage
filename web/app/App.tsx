@@ -304,8 +304,8 @@ export function App() {
     if (section !== "") {
       parts.push(section);
     }
-    if (query !== "") {
-      parts.push(`"${query}"`);
+    if (trimSearch(query) !== "") {
+      parts.push(`"${trimSearch(query)}"`);
     }
     document.title = parts.join(" · ");
   }, [target, section, query]);
@@ -438,10 +438,11 @@ export function App() {
       url.searchParams.set("target", target);
     }
     url.searchParams.set("section", section);
-    if (query === "") {
+    const trimmedQuery = trimSearch(query);
+    if (trimmedQuery === "") {
       url.searchParams.delete("q");
     } else {
-      url.searchParams.set("q", query);
+      url.searchParams.set("q", trimmedQuery);
     }
     url.searchParams.delete("filter");
     for (const key of filters) {
@@ -1110,7 +1111,7 @@ export function App() {
                   className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover data-filled:pe-32"
                   // With a term typed, `data-filled` widens the end padding so
                   // the text stays clear of the count and Clear drawn there.
-                  data-filled={query === "" ? undefined : ""}
+                  data-filled={trimSearch(query) === "" ? undefined : ""}
                   placeholder="Function name or address"
                   value={query}
                   // The editable-combobox pattern (ARIA 1.2): the field owns the
@@ -1174,7 +1175,7 @@ export function App() {
                     {matchCount}
                   </span>
                 )}
-                {query !== "" && (
+                {trimSearch(query) !== "" && (
                   <Button
                     className="absolute inset-y-0 end-0 min-h-8 min-w-8"
                     variant="ghost"
