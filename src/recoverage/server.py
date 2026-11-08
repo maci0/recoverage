@@ -810,7 +810,7 @@ def parse_ascii_int(text: str, base: int = 10) -> int:
     never reaches the client as one shape.
     """
     digits = _ASCII_HEX_DIGITS[:base] if base == 16 else _ASCII_DIGITS
-    if not text or any(c.lower() not in digits for c in text):
+    if not text or any(c not in digits and c.lower() not in digits for c in text):
         raise ValueError(f"not an ASCII base-{base} integer: {text!r}")
     return int(text, base)
 

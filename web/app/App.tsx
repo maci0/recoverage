@@ -760,8 +760,8 @@ export function App() {
       // The Enter that has nothing to jump to says so, rather than leaving the
       // keypress with no effect beside a line that has not counted the matches
       // yet.
-      if (query.trim() !== "") {
-        flash(`The function index is still loading; press Enter again for "${query.trim()}".`);
+      if (trimSearch(query) !== "") {
+        flash(`The function index is still loading; press Enter again for "${trimSearch(query)}".`);
       }
       return;
     }
