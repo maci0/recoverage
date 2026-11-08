@@ -4,6 +4,31 @@ Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
 source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-09
+Seventh pass at HEAD `4d9c307` (2026-11-09): the changes between `cf1218a` and
+HEAD were re-checked against the model below. `ops._ALLOWED_HOST`
+(`src/recoverage/ops.py`, `0208607`) now refuses `:0` and `:99999` — the port
+is a real port, not any five digits, so the allowlist cannot name a spelling
+no client can legitimately send. The package root now exports `RecoError` and
+`app` lazily (`src/recoverage/__init__.py`, `459fe53`; `recoverage.app` is
+`recoverage.webapp.app` by reach-through, `src/recoverage/webapp.py`), which
+widens the mount in risk 1: `recoverage.app` is now the shortest spelling of
+the same unauthenticated-by-default posture and carries no acknowledgement.
+The unused `click` dependency is removed from the manifest (`d926909` /
+`331d375`); `pyproject.toml` still declares `typer`, which vendors its own
+fail-fast integer parsing through `server.parse_ascii_int` (`src/recoverage/cli.py`,
+`src/recoverage/ops.py:831`), so no float/Unicode-digit value reaches a port
+or coverage threshold. `backup._referenced_files` collects every
+`metadata.paths` reference that resolves inside the snapshot directory
+(`src/recoverage/backup.py`), not only `originalDll` — tracked by
+`tests/test_fuzz.py` (`2e6df64`, `_referenced_paths` returning `(refs, ok)`).
+The `/asm`, `/bytes` and `/files` 404 bodies now use static `error` labels
+with the caller-supplied target/section in `detail` (`src/recoverage/api.py`
+`_target_not_found` / `_dll_not_found` / `_section_not_found`; `src/recoverage/ui.py`
+`_target_file_snapshot`), and the `/data` and `/asm` `section`/`search`/`fmt`
+query parameters trim ASCII whitespace only (`server.strip_ascii_whitespace`,
+`src/recoverage/server.py:814`; call sites `src/recoverage/api.py:1992,2260,2693,2697`),
+so a NBSP-named section is no longer read as empty. No entry point, trust
+boundary or mitigation below changed in a way that moves the risk ranking.
 Sixth pass at HEAD `cf1218a` (2026-11-09): the changes between `91a3264` and
 HEAD were re-checked against the model below. `backup._source_root_refusal`
 (`src/recoverage/backup.py`, `217badd`) refuses a document naming
@@ -168,7 +193,7 @@ this update does not claim to refresh every older file/line reference below.
 
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
-| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.webapp.app` and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/webapp.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
+| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.app` (`recoverage.webapp.app`, `src/recoverage/__init__.py`) and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/__init__.py`, `src/recoverage/webapp.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
 | 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3192` and `:3235`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 9, so `_SNAPSHOT_INDEX_MAX` is 18 (`src/recoverage/server.py:3259` and `:3272`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all nine kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:661`) since the last pass. |
 | 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3942`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
@@ -606,8 +631,9 @@ describe, not a wrong one.
    verifies the complete archive and manifest, enforces plain coverage basenames,
    duplicate/size bounds and differing-file refusal before publishing; document
    writes use temporary files and replacement with rollback on failure.
-   At backup time `backup._referenced_files` collects only `metadata.paths.
-   originalDll` (one flat file per name); a document naming `sourceRoot` is a
+   At backup time `backup._referenced_files` collects every `metadata.paths`
+   reference that resolves inside the snapshot directory (one flat file per
+   name, `originalDll` included); a document naming `sourceRoot` is a
    backup refusal by key (`backup._source_root_refusal`,
    `src/recoverage/backup.py`), never an omission, so a restored archive can
    never silently drop the source pane it did not carry.
