@@ -3158,7 +3158,7 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
     _metrics.REGEN.start()
     try:
         root = _project_dir()
-        _log.info("Regen started from %s", remote, extra=_regen_log_fields("started"))
+        _log.info("Regen started from %s", remote, extra=_metrics.regen_log_fields("started"))
         run_regen(root)
     except RegenError as e:
         # rebrew's error_exit reported the failure and its status is carried
@@ -3194,13 +3194,13 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
         # truth.  Close the counters with the same elapsed the other arms
         # record, then let the exception through: it is the server's exit, not
         # this handler's to swallow.
-        elapsed = _elapsed_s(started_at)
-        _metrics.REGEN.finish(False, _elapsed_ms(started_at))
+        elapsed = clock.monotonic() - started_at
+        _metrics.REGEN.finish(False, elapsed * 1000.0)
         _log.error(
             "Regen interrupted after %.1fs: %s",
             elapsed,
             type(e).__name__,
-            extra=_regen_log_fields("interrupted", elapsed),
+            extra=_metrics.regen_log_fields("interrupted", elapsed),
         )
         raise
     finally:
@@ -3212,8 +3212,8 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
         # to _SSE_POLL_INTERVAL_SECONDS of a dashboard that reports the old
         # numbers as current.  Both outcomes go through the same tail.
         _clear_derived_caches_logged("after regen")
-    elapsed = _elapsed_s(started_at)
-    _metrics.REGEN.finish(True, _elapsed_ms(started_at))
+    elapsed = clock.monotonic() - started_at
+    _metrics.REGEN.finish(True, elapsed * 1000.0)
     # The ledger write sits between the log line and the answer, and the log
     # line is what an operator reads to find out whether the pipeline finished:
     # a `ok` line with no key behind it is a rebuild whose retry will run
@@ -3223,36 +3223,11 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
     if key:
         _record_completed_key(key)
     _log.info(
-        "Regen completed successfully in %.1fs", elapsed, extra=_regen_log_fields("ok", elapsed)
+        "Regen completed successfully in %.1fs",
+        elapsed,
+        extra=_metrics.regen_log_fields("ok", elapsed),
     )
     return _json_ok({"ok": True})
-
-
-def _elapsed_s(started_at: float) -> float:
-    """Seconds since *started_at* on the injectable clock."""
-    return clock.monotonic() - started_at
-
-
-def _elapsed_ms(started_at: float) -> float:
-    """Milliseconds since *started_at*, the unit ``REGEN.finish`` records.
-
-    The inverse of :func:`_elapsed_s`, which every log line in the regen
-    lifecycle reads.  Written as a named conversion so the metric's unit and
-    the log's cannot drift apart at a call site.
-    """
-    return _elapsed_s(started_at) * 1000.0
-
-
-def _regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
-    """The ``extra=`` for a regen lifecycle line.
-
-    :func:`recoverage.metrics.regen_log_fields`, under the name this module's
-    call sites use.  The shape lives in ``metrics`` beside the :data:`~recoverage.metrics.REGEN`
-    counters it has to stay readable against, because the pipeline has a second
-    caller in this process (``serve --regen``) and one writer per caller is how
-    an operator ends up filtering on a field only one of them writes.
-    """
-    return _metrics.regen_log_fields(outcome, elapsed_s)
 
 
 def _regen_forbidden(reason: str, error: str, detail: str) -> HTTPResponse:
@@ -3298,15 +3273,15 @@ def _regen_failed(started_at: float, reason: str, *args: object) -> None:
     or OSError message quotes paths from the project tree), so without them
     the operator has a class name and no way to find the line that raised it.
     """
-    elapsed = _elapsed_s(started_at)
+    elapsed = clock.monotonic() - started_at
     _log.error(
         "Regen failed after %.1fs: " + reason,
         elapsed,
         *args,
         exc_info=True,
-        extra=_regen_log_fields("failed", elapsed),
+        extra=_metrics.regen_log_fields("failed", elapsed),
     )
-    _metrics.REGEN.finish(False, _elapsed_ms(started_at))
+    _metrics.REGEN.finish(False, elapsed * 1000.0)
 
 
 def _regen_rejected(started_at: float, reason: str, *args: object) -> None:
@@ -3318,15 +3293,15 @@ def _regen_rejected(started_at: float, reason: str, *args: object) -> None:
     over the same tree) wrote a red ``Regen failed after 0.0s`` line every
     time, which is noise on the one line that does mean the pipeline broke.
     """
-    elapsed = _elapsed_s(started_at)
+    elapsed = clock.monotonic() - started_at
     _log.info(
         "Regen refused after %.1fs: " + reason,
         elapsed,
         *args,
-        extra=_regen_log_fields("rejected", elapsed),
+        extra=_metrics.regen_log_fields("rejected", elapsed),
     )
     # None, not False: the gauge closes and the elapsed time is recorded, but
     # nothing was written and nothing broke, so `failures` stays the count of
     # runs that ran and failed.
-    _metrics.REGEN.finish(None, _elapsed_ms(started_at))
+    _metrics.REGEN.finish(None, elapsed * 1000.0)
     _metrics.REGEN.reject()

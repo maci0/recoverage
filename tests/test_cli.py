@@ -2742,10 +2742,8 @@ class TestServeRegenIsCounted:
         """The point of sharing `metrics.regen_log_fields`: one filter over
         `event=regen` has to find a run whichever entry point made it, or an
         operator pivoting from the regen counters finds only half of them."""
-        from recoverage import api
-
-        assert api._regen_log_fields("ok", 1.5) == metrics.regen_log_fields("ok", 1.5)
-        assert api._regen_log_fields("failed") == metrics.regen_log_fields("failed")
+        assert metrics.regen_log_fields("ok", 1.5)["log_fields"]["outcome"] == "ok"
+        assert metrics.regen_log_fields("failed")["log_fields"]["outcome"] == "failed"
 
 
 class TestRegenFailures:
