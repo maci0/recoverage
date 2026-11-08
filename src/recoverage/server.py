@@ -668,7 +668,7 @@ def _row_note_blocker(
 
     try:
         entry = get_entry(store, va, module)
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return "", ""
     stored = entry.get("file")
     if not isinstance(stored, str) or not _stored_names_source(stored, source, store, project_dir):
@@ -723,7 +723,7 @@ def decode_query_value(raw: str) -> str:
     """
     try:
         return raw.encode("latin-1").decode("utf-8")
-    except UnicodeEncodeError, UnicodeDecodeError:
+    except (UnicodeEncodeError, UnicodeDecodeError):
         return raw
 
 
@@ -1758,7 +1758,7 @@ def binary_stamp(target: str) -> tuple[int, int, int, int] | None:
         return None
     try:
         st = path.stat()
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return None
     return st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns
 
@@ -2113,7 +2113,7 @@ def _find_dll_path(target: str) -> Path | None:
             root = _project_dir().resolve()
             try:
                 portable_binary = (root / relative).resolve()
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 return None
             return portable_binary if portable_binary.is_relative_to(root) else None
     targets = _get_targets_config()
@@ -2141,7 +2141,7 @@ def _find_dll_path(target: str) -> Path | None:
     # common case for a stale config.
     try:
         resolved = candidate.resolve()
-    except OSError, ValueError:
+    except (OSError, ValueError):
         # A name the platform cannot resolve at all (a NUL byte) is a
         # refusal, not a path.
         resolved = None

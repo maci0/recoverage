@@ -549,7 +549,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         )
     try:
         raw = json.loads(body)
-    except json.JSONDecodeError, UnicodeDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         raise _invalid("request is not JSON") from None
     request: Any = parse_request(op.request, raw)
     try:
@@ -662,7 +662,7 @@ def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
         reply = json.dumps(_answer(config, name, body), allow_nan=False).encode()
     except OpsError as exc:
         return exc.status, error_body(exc.code, str(exc), exc.status)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         _log.exception("%s produced a reply that is not JSON", name)
         return 500, error_body(ENGINE_ERROR, f"{name} produced a reply that is not JSON", 500)
     if len(reply) > MAX_REPLY_BYTES:
