@@ -93,6 +93,11 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
         "non_idempotent",
     ),
     _command(
+        "verify",
+        "Check every member of a backup archive against its manifest, without restoring.",
+        "read_only",
+    ),
+    _command(
         "open",
         "Open the running dashboard in a browser.",
         "non_idempotent",

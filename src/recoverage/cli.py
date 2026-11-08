@@ -55,7 +55,7 @@ _HELP_EXAMPLES: tuple[tuple[str, str], ...] = (
     ("recoverage", f"start the dashboard on port {config.DEFAULT_PORT}"),
     ("recoverage serve --port 3000", "the same, on another port"),
     ("recoverage stats", "coverage per section, as a table"),
-    ("recoverage export -f csv > cov.csv", "the same rows as CSV"),
+    ("recoverage export --format csv > cov.csv", "the same rows as CSV"),
     ("recoverage check --min-coverage 50", "CI gate: exit 1 below 50%"),
     ("recoverage regen", "refresh the live view"),
     ("recoverage open", "open the running dashboard"),
@@ -802,7 +802,7 @@ def _get_stats(
         )
 
 
-def _run_regen(root: Path) -> None:
+def _run_regen(root: Path, *, json_output: bool = False) -> None:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
     from rebrew.config import ConfigError as RebrewConfigError
 
@@ -813,8 +813,11 @@ def _run_regen(root: Path) -> None:
 
     # Progress, not data: stderr, like every failure this function reports, so
     # `recoverage regen` in a pipeline and `serve --regen`'s banner keep stdout
-    # for the data they do carry.
-    _secho("Refreshing live coverage...", err=True)
+    # for the data they do carry.  Suppressed in JSON mode: a plain-line
+    # progress note on stderr would sit beside the one JSON object the
+    # structured contract promises as the last stderr line.
+    if not json_output:
+        _secho("Refreshing live coverage...", err=True)
     try:
         return run_regen(root)
     except RebrewConfigError as e:
@@ -824,17 +827,13 @@ def _run_regen(root: Path) -> None:
         # (exit 2) and the same bare message coverage_source_or_exit gives the read
         # commands for this exact file, instead of the class name and the
         # regen-failed 1 the generic arm below reported.
-        _fail(f"Error: {e}", str(e), 2, False)
+        _fail(f"Error: {e}", str(e), 2, json_output)
     except RegenError as exc:
-        _fail(f"Error: {exc}", str(exc), exc.exit_code, False)
+        _fail(f"Error: {exc}", str(exc), exc.exit_code, json_output)
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.
-        _secho(
-            f"Error: rebrew regen failed: {type(e).__name__}: {e}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
+        message = f"rebrew regen failed: {type(e).__name__}: {e}"
+        _fail(f"Error: {message}", message, 1, json_output)
 
 
 def _serve_regen(root: Path) -> None:
@@ -1919,7 +1918,6 @@ def export(
     output_format: ExportFormat = typer.Option(
         ExportFormat.json,
         "--format",
-        "-f",
         help="Output format (choose json, csv, or md)",
     ),
     json_flag: bool = typer.Option(
@@ -2161,7 +2159,12 @@ def check(
 
 
 @app.command()
-def regen(no_color: bool = _no_color_option()) -> None:
+def regen(
+    no_color: bool = _no_color_option(),
+    json_output: bool = typer.Option(
+        False, "--json", help="Errors on stderr are a single JSON object"
+    ),
+) -> None:
     """Refresh the live project view without generating files.
 
     Progress and errors go to stderr. Portable snapshots are read-only;
@@ -2172,8 +2175,10 @@ def regen(no_color: bool = _no_color_option()) -> None:
     _use_utf8_stdout()
     _use_utf8_stderr()
     _check_env_or_exit()
-    _run_regen(_project_dir())
-    _secho("Done: live coverage refreshed.", fg=typer.colors.GREEN, err=True)
+    json_output = _json_on(json_output)
+    _run_regen(_project_dir(), json_output=json_output)
+    if not json_output:
+        _secho("Done: live coverage refreshed.", fg=typer.colors.GREEN, err=True)
 
 
 @app.command()
@@ -2645,6 +2650,11 @@ def main() -> None:
         # full descriptor table), and an OSError from it would escape this
         # handler and replace the exit status with a traceback: the one path
         # whose whole job is to report a clean truncation.
+        # Message first: a silent exit 1 leaves a pipeline consumer with no
+        # reason for the truncated data.  Stderr, not stdout -- stdout is the
+        # pipe that just closed.
+        with contextlib.suppress(OSError, ValueError):
+            sys.stderr.write("recoverage: output pipe closed (broken pipe)\n")
         with contextlib.suppress(OSError, ValueError):
             fd = os.open(os.devnull, os.O_WRONLY)
             try:
