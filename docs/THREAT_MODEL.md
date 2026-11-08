@@ -5,16 +5,26 @@ started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
 source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-09
 Ninth pass at HEAD `8101d4c` (2026-11-09): the changes between `c25016c` and
-HEAD were re-checked against the model below. `cli._is_browser_origin` rejects
-`@`, `\`, `%`, C0/C1 controls and unparseable URLs including ValueError from
-`urlsplit` (`src/recoverage/cli.py`, `_is_browser_origin`), so an allowed
+HEAD were re-checked against the model below. The `/data` cache insert now
+publishes its entry whole (`api._cache_data_insert`, `src/recoverage/api.py`) and
+a cleared entry is rebuilt rather than served half-published
+(`api.handle_api_data`); the regen cooldown timestamp is read/written under
+`_REGEN_LAST_ATTEMPT_LOCK` (`src/recoverage/api.py`). `cli._is_browser_origin`
+rejects `@`, `\`, `%`, C0/C1 controls and unparseable URLs including ValueError
+from `urlsplit` (`src/recoverage/cli.py`, `_is_browser_origin`), so an allowed
 `RECOVERAGE_CORS_ORIGIN` entry cannot carry userinfo or a percent/backslash
-spelling `_normalize_origin` would have dropped. `metrics` gains `error_rate`
-on `RequestStats.snapshot()` (`src/recoverage/metrics.py`, `RATE_DIGITS`), a
-`log_fields` helper for non-request transition lines (`api._log_health_status`,
-`api._log_targets_fallback`), and `DISASSEMBLY_CACHE` counted by
-`disasm.get_disassembly` (`src/recoverage/disasm.py`). `api._clear_derived_caches_logged`
-now logs with `_log.exception` (`src/recoverage/api.py`).
+spelling `_normalize_origin` would have dropped, and a percent-encoded or
+userinfo-carrying origin cannot name an allowlist entry the browser could never
+send. `metrics` gains `error_rate` on `RequestStats.snapshot()`
+(`src/recoverage/metrics.py`, `RATE_DIGITS`), so `/api/health`'s request block
+gained `error_rate`, a `log_fields` helper for non-request transition lines
+(`api._log_health_status`, `api._log_targets_fallback`,
+`server._log_config_error`, `documents._rebuild`), and `DISASSEMBLY_CACHE`
+counted by `disasm.get_disassembly` (`src/recoverage/disasm.py`), i.e. the
+per-slice disassembly memo is counted as a cache. `api._clear_derived_caches_logged`
+now logs with `_log.exception` (`src/recoverage/api.py`) instead of a warning.
+No entry point, trust boundary or mitigation below changed in a way that moves
+the risk ranking.
 Eighth pass at HEAD `c25016c` (2026-11-09): the changes between `4d9c307` and
 HEAD were re-checked against the model below. The integer-parse and
 percentage helpers moved off `server` to their owning modules — `parse_ascii_int`/
@@ -229,7 +239,7 @@ this update does not claim to refresh every older file/line reference below.
 
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
-| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.app` (`recoverage.webapp.app`, `src/recoverage/__init__.py`) and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/__init__.py`, `src/recoverage/webapp.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
+| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.app` (`recoverage.webapp.app`, `src/recoverage/__init__.py`) and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/__init__.py`, `src/recoverage/webapp.py` | Acknowledgement at the CLI gate only: a red message and `typer.Exit(1)` refusing a non-loopback bind without `--allow-remote` (`cli._remote_bind_gate`, `src/recoverage/cli.py`); `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
 | 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3192` and `:3235`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 9, so `_SNAPSHOT_INDEX_MAX` is 18 (`src/recoverage/server.py:3259` and `:3272`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all nine kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:661`) since the last pass. |
 | 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3942`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
@@ -804,8 +814,11 @@ resolved deployment: bind address, `allow_remote`, the CORS allowlist, log
 level, connection and timeout caps, and whether a token is set
 (`src/recoverage/api.py`, `src/recoverage/config.py`; the `config` block drops
 `db`, which the `db` block beside it already answers by basename). It also
-carries the live counters: request and error rates, cache hits, the regen
-lifecycle, stream and connection saturation, and the `auth` block's failed
+carries the live counters: request and error rates (`error_rate`,
+`metrics.RequestStats.snapshot`, `src/recoverage/metrics.py`), cache hits
+(including the per-slice disassembly memo, `metrics.DISASSEMBLY_CACHE`,
+`src/recoverage/disasm.py`), the regen
+lifecycle (`metrics.REGEN`), stream and connection saturation, and the `auth` block's failed
 attempts and `locked_peers` gauge (`src/recoverage/api.py`,
 `src/recoverage/metrics.py`). Every field is a setting the operator chose or a
 count the process made, and none is the token's value, so this is a
@@ -1107,6 +1120,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | JSON error contract, `Cache-Control: no-store` on errors, no tracebacks in bodies, control-char-escaped logs | `src/recoverage/server.py` | Information disclosure, stale cached errors, log forgery |
 | ETag revalidation and `no-store` on the 401 page | `src/recoverage/server.py` | Serving stale data, replaying a pre-auth body from a shared cache |
 | `X-Request-ID` on every request and response, capped and log-escaped when client-supplied; request-path and transition failure logs carry structured correlation fields (`server.request_log_fields`, `src/recoverage/server.py`; `metrics.log_fields` for `api._log_health_status` and `api._log_targets_fallback`, `src/recoverage/metrics.py`, `src/recoverage/api.py`; `api._regen_log_fields` for the regen lifecycle) so a counter in `/api/health` pivots to the requests behind it without a regex over prose; `requests.error_rate` is the 5xx share, `None` until the first request (`metrics.RATE_DIGITS`) | `src/recoverage/server.py`, `src/recoverage/metrics.py`, `src/recoverage/api.py` | Untraceable incidents; forged log lines; a rising error share invisible without hand-dividing counters |
+| Transition and rejection log lines carry named fields (`metrics.log_fields`, `src/recoverage/metrics.py`) for health status, the config-only target fallback, project-config reads and unreadable coverage documents, plus a `DISASSEMBLY_CACHE` counter for the per-slice disassembly memo | `src/recoverage/api.py` (`_log_health_status`, `_log_targets_fallback`), `src/recoverage/server.py` (`_log_config_error`), `src/recoverage/documents.py` (`_rebuild`), `src/recoverage/disasm.py` (`get_disassembly`) | Untraceable incidents; a silent memo miss |
 | Status reclassification inside the 500 handler | `src/recoverage/server.py` | An error rate that silently reads zero. Note the scope: the two call sites are the 503 (coverage documents unavailable) and the 500 itself, both inside `@app.error(500)`; there is no 4xx reclassification path |
 
 ## Unmitigated, ranked
