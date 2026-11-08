@@ -135,7 +135,7 @@ recoverage/
     │                        #   JSON request on stdin, JSON reply on stdout, target named by
     │                        #   binary SHA-256
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, ops, regen,
-    │                        #   backup, restore, open, config, schema)
+    │                        #   backup, restore, verify, check-backup, open, config, schema)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   per-thread Cs per image width (read off the PE/ELF
@@ -256,6 +256,8 @@ uv run recoverage config            # print the RECOVERAGE_* settings serve reso
 uv run recoverage regen             # refresh the live view without generating files
 RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage backup
 RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage restore ARCHIVE
+uv run recoverage verify ARCHIVE  # check backup vs manifest, no restore
+uv run recoverage check-backup    # refuse if no fresh stamped backup (25h default)
 # Archive/restore portable exports; never canonical metadata.
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
