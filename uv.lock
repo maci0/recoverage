@@ -638,7 +638,6 @@ source = { editable = "." }
 dependencies = [
     { name = "bottle" },
     { name = "brotli" },
-    { name = "click" },
     { name = "rcssmin" },
     { name = "rebrew" },
     { name = "rich" },
@@ -669,7 +668,6 @@ requires-dist = [
     { name = "bottle", specifier = ">=0.13,<1" },
     { name = "brotli", specifier = ">=1.1,<2" },
     { name = "capstone", marker = "extra == 'capstone'", specifier = ">=5.0,<6" },
-    { name = "click", specifier = ">=8.0,<9" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14,<3" },
     { name = "packaging", marker = "extra == 'dev'", specifier = ">=26.3,<27" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.62,<2" },

@@ -626,7 +626,6 @@ simpler and strictly wider.
 Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13,<1` (web server)
 - `brotli>=1.1,<2` (Brotli compression)
-- `click>=8.0,<9` (transitive CLI parsing under Typer)
 - `rcssmin>=1.1,<2` (CSS minification)
 - Rebrew 6.23.1 (public GitHub wheel URL and SHA-256 in the manifest): shared
   live accounting, format-3 function metadata, source provenance and portable exports

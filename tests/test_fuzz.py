@@ -86,8 +86,6 @@ from typing import Any, ClassVar
 from urllib.parse import unquote, urlsplit
 
 import pytest
-from click import Command
-from click.testing import CliRunner as ClickRunner
 from conftest import (
     HAS_DB,
     WSGI_PEER,
@@ -106,7 +104,6 @@ from coverage_fixture import (
     write_coverage,
 )
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
-from typer.main import get_command
 from typer.testing import CliRunner
 
 from recoverage import cli, config, devserver, potato, reporting
@@ -4461,8 +4458,7 @@ class TestCliRendersHostileDocumentValues:
     def test_every_format_renders_a_hostile_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        runner = ClickRunner()
-        command = get_command(cli.app)
+        runner = CliRunner()
         seed = campaign_seed("TestCliRendersHostileDocumentValues")
         rng = random.Random(seed)
         directory = tmp_path / "db"
@@ -4479,7 +4475,7 @@ class TestCliRendersHostileDocumentValues:
             self._install(directory, target, section)
             for argv in CLI_COMMANDS:
                 try:
-                    self._assert_command(runner, command, argv, target, section)
+                    self._assert_command(runner, argv, target, section)
                 except AssertionError as failure:
                     raise AssertionError(
                         f"seed={seed} round={round_index}: {argv}\n"
@@ -4489,13 +4485,12 @@ class TestCliRendersHostileDocumentValues:
 
     def _assert_command(
         self,
-        runner: ClickRunner,
-        command: Command,
+        runner: CliRunner,
         argv: tuple[str, ...],
         target: str,
         section: str,
     ) -> None:
-        result = runner.invoke(command, list(argv))
+        result = runner.invoke(cli.app, list(argv))
         assert result.exit_code == 0, (
             f"{argv}: exit {result.exit_code}: "
             f"{type(result.exception).__name__}: {result.exception}"

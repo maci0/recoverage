@@ -42,7 +42,6 @@ classifiers = [
 dependencies = [
     "bottle>=0.13,<1",
     "brotli>=1.1,<2",
-    "click>=8.0,<9",
     "rcssmin>=1.1,<2",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
