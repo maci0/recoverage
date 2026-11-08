@@ -187,6 +187,21 @@ def _write_error(kind: str, message: str, hint: str) -> None:
     sys.stderr.flush()
 
 
+def _archive_json(info: Any) -> str:
+    """The JSON rendering of a verified backup archive."""
+    return _dumps(
+        {
+            "path": str(info.path),
+            "created": info.created,
+            "bytes": info.total_bytes,
+            "members": [
+                {"name": name, "size": size, "sha256": digest}
+                for name, size, digest in info.members
+            ],
+        }
+    )
+
+
 def _dumps(payload: Any) -> str:
     """One JSON document. A list becomes the items envelope. Compact off a TTY."""
     if isinstance(payload, list):
@@ -2252,19 +2267,7 @@ def backup(
     except BackupError as exc:
         _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
-        typer.echo(
-            _dumps(
-                {
-                    "path": str(info.path),
-                    "created": info.created,
-                    "bytes": info.total_bytes,
-                    "members": [
-                        {"name": name, "size": size, "sha256": digest}
-                        for name, size, digest in info.members
-                    ],
-                }
-            )
-        )
+        typer.echo(_archive_json(info))
         return
     # The member name is a filename out of the coverage directory and can
     # carry markup characters, so it goes through escape() like every other
@@ -2387,19 +2390,7 @@ def verify(
     except BackupError as exc:
         _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
-        typer.echo(
-            _dumps(
-                {
-                    "path": str(info.path),
-                    "created": info.created,
-                    "bytes": info.total_bytes,
-                    "members": [
-                        {"name": name, "size": size, "sha256": digest}
-                        for name, size, digest in info.members
-                    ],
-                }
-            )
-        )
+        typer.echo(_archive_json(info))
         return
     _secho(
         f"Verified backup: {info.path}, {_counted(len(info.members), 'document', 'documents')}, "
