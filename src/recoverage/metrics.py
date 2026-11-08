@@ -101,9 +101,13 @@ def percentile(samples: list[float], fraction: float) -> float:
 
     *fraction* is the share of the window the quantile sits at, clamped to
     ``0.0..1.0`` so a caller that passes one outside it indexes the end rather
-    than raising or reading from the far end the other way.
+    than raising or reading from the far end the other way.  A non-finite
+    share answers 0.0: ``min``/``max`` hand NaN straight back, and
+    ``math.floor`` on it raises ``ValueError`` out of a health snapshot.
     """
     if not samples:
+        return 0.0
+    if not math.isfinite(fraction):
         return 0.0
     share = min(max(fraction, 0.0), 1.0)
     position = share * (len(samples) - 1) + QUANTILE_ROUNDING_HALF

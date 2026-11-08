@@ -780,6 +780,13 @@ class TestStats:
         assert metrics.percentile(samples, -1.0) == 1.0
         assert metrics.percentile(samples, 2.0) == 4.0
 
+    def test_percentile_of_a_non_finite_share_is_zero(self) -> None:
+        """NaN slips past min/max and raises in math.floor; inf clamps to an end."""
+        samples = [1.0, 2.0, 3.0, 4.0]
+        assert metrics.percentile(samples, float("nan")) == 0.0
+        assert metrics.percentile(samples, float("inf")) == 0.0
+        assert metrics.percentile(samples, -float("inf")) == 0.0
+
     def test_a_median_over_an_even_window_is_the_upper_middle_sample(self) -> None:
         """The snapshot's own p50 over an even window agrees with percentile()."""
         for duration in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
