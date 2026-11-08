@@ -214,7 +214,7 @@ def _epoch_plus(seconds: float) -> datetime:
     return _EPOCH + timedelta(seconds=whole, microseconds=micros)
 
 
-def _stamp() -> str:
+def _stamp(now: float | None = None) -> str:
     """A UTC instant, ISO-8601, for the manifest and the default archive name.
 
     ``clock.wall_time`` rather than ``time.time``: every instant this package
@@ -234,12 +234,17 @@ def _stamp() -> str:
     every runbook step assumes, and fixed width is what makes it the same
     order.
     """
-    return _epoch_plus(clock.wall_time()).strftime("%Y%m%dT%H%M%S.%fZ")
+    return _instant(now).strftime("%Y%m%dT%H%M%S.%fZ")
 
 
-def _created_stamp() -> str:
+def _created_stamp(now: float | None = None) -> str:
     """The manifest's ``created`` field: the same instant, ISO-8601."""
-    return _epoch_plus(clock.wall_time()).isoformat()
+    return _instant(now).isoformat()
+
+
+def _instant(now: float | None = None) -> datetime:
+    """The one instant a backup run names, read once from the clock seam."""
+    return _epoch_plus(clock.wall_time() if now is None else now)
 
 
 def _digest(data: bytes) -> str:
@@ -336,7 +341,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
     _fsync_dir(path.parent)
 
 
-def _default_archive_path(directory: Path) -> Path:
+def _default_archive_path(directory: Path, now: float | None = None) -> Path:
     """A stamped archive name in *directory* that does not yet exist.
 
     The stamp alone is not a unique key: a frozen/patched clock, a cron
@@ -347,7 +352,7 @@ def _default_archive_path(directory: Path) -> Path:
     fails if a winner lands between probe and link, so the probe only
     picks which name to attempt, never whether to publish.
     """
-    base = f"{_ARCHIVE_PREFIX}{_stamp()}{_ARCHIVE_SUFFIX}"
+    base = f"{_ARCHIVE_PREFIX}{_stamp(now)}{_ARCHIVE_SUFFIX}"
     candidate = directory / base
     if not candidate.exists():
         return candidate
@@ -602,12 +607,16 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
             "directory with RECOVERAGE_SNAPSHOTS."
         )
     # Resolve the destination before writing anything, so a blank backup
-    # directory fails before the archive is built.
+    # directory fails before the archive is built.  One instant names both
+    # the file and the manifest field inside it, so the two cannot straddle
+    # a clock step (an NTP correction between the calls would otherwise
+    # name the archive by one instant and date it by another).
+    now = clock.wall_time()
     if destination is None:
-        destination = _default_archive_path(backup_dir_from_env(db_dir))
+        destination = _default_archive_path(backup_dir_from_env(db_dir), now)
     elif destination.is_dir():
-        destination = _default_archive_path(destination)
-    created = _created_stamp()
+        destination = _default_archive_path(destination, now)
+    created = _created_stamp(now)
     manifest = _manifest(members, created)
     blob = _tar_bytes(members, manifest)
     _require_outside_coverage_dir(db_dir, destination)
@@ -839,6 +848,28 @@ def verify_archive_command(archive: Path) -> BackupInfo:
     return verify_backup(archive)
 
 
+def _archive_stamp_instant(name: str) -> datetime | None:
+    """The instant the stamped archive *name* names, or None when it names none.
+
+    The name is ``coverage-<stamp>.tar`` as :func:`_stamp` wrote it, with an
+    optional ``-<n>`` collision suffix (see :func:`_default_archive_path`).
+    Only names that parse as that shape count as stamped archives, so an
+    operator's other ``coverage-*.tar`` file is never mistaken for the
+    backup index this module writes.
+    """
+    if not (name.startswith(_ARCHIVE_PREFIX) and name.endswith(_ARCHIVE_SUFFIX)):
+        return None
+    inner = name[len(_ARCHIVE_PREFIX) : -len(_ARCHIVE_SUFFIX)]
+    if "-" in inner:
+        inner, _, _suffix = inner.rpartition("-")
+        if not _suffix.isdigit():
+            return None
+    try:
+        return datetime.strptime(inner, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
 def _newest_stamped_archive(directory: Path) -> Path | None:
     """The newest stamped archive file in *directory*, or None.
 
@@ -846,6 +877,16 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
     pointing at an archive is not itself a backup (the prune path and the
     document reader both refuse symlinks), and counting it let a link named
     like a fresh archive pass a freshness monitor for bytes nobody wrote.
+
+    Newest is the instant the NAME stamps, not the file's mtime.  The name
+    is a UTC instant :func:`_stamp` wrote; a clock step (an NTP correction,
+    a manual change, a host restored from a snapshot) moves the filesystem
+    mtime of the next write with it, so keying on mtime let an older-named,
+    later-written archive outrank the newest one the name indexes — the
+    freshness monitor then read the wrong archive, twice over (its age, and
+    the archive ``check_backup_freshness`` verifies).  A name that does not
+    parse as a stamp is skipped, so a hand-made ``coverage-*.tar`` never
+    becomes "newest" by carrying a fresh mtime.
     """
     try:
         candidates = [
@@ -855,17 +896,14 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
         ]
     except OSError:
         return None
-    if not candidates:
+    stamped = [
+        (instant, path)
+        for path in candidates
+        if (instant := _archive_stamp_instant(path.name)) is not None
+    ]
+    if not stamped:
         return None
-
-    def _mtime_ns(path: Path) -> int:
-        try:
-            return path.stat().st_mtime_ns
-        except OSError:
-            return 0
-
-    newest = max(candidates, key=_mtime_ns)
-    return newest if _mtime_ns(newest) else None
+    return max(stamped, key=lambda pair: (pair[0], pair[1].name))[1]
 
 
 def newest_archive_age_hours(directory: Path) -> float | None:
@@ -881,19 +919,12 @@ def newest_archive_age_hours(directory: Path) -> float | None:
     newest = _newest_stamped_archive(directory)
     if newest is None:
         return None
-    try:
-        mtime = newest.stat().st_mtime_ns
-    except OSError as exc:
-        _log.debug(
-            "Backup freshness: cannot stat %r: %s: %s",
-            str(newest),
-            type(exc).__name__,
-            str(exc),
-        )
+    instant = _archive_stamp_instant(newest.name)
+    if instant is None:
         return None
     seconds, remainder = divmod(clock.wall_time(), 1.0)
     now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
-    return max(0.0, (now_ns - mtime) / 3_600_000_000_000)
+    return max(0.0, (now_ns - int(instant.timestamp() * 1_000_000_000)) / 3_600_000_000_000)
 
 
 def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVERDUE_HOURS) -> None:

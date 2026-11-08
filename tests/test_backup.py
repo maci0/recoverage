@@ -738,15 +738,22 @@ class TestBackupFreshness:
         with pytest.raises(BackupError, match="no stamped backup"):
             check_backup_freshness(tmp_path / "empty")
 
-    def test_fresh_archive_passes_and_reports_its_age(self, tmp_path: Path) -> None:
+    def test_fresh_archive_passes_and_reports_its_age(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         db = tmp_path / "db"
         db.mkdir()
         build_synthetic_coverage(db)
         out = tmp_path / "backups"
         out.mkdir()
-        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        archive = out / "coverage-20260101T000000.000000Z.tar"
+        write_backup(db, archive)
+        # The name stamps 2026-01-01, so a clock an hour after it is fresh.
+        inner = backup._archive_stamp_instant(archive.name)
+        assert inner is not None
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: inner.timestamp() + 3600)
         age = newest_archive_age_hours(out)
-        assert age is not None and age >= 0
+        assert age is not None and age == pytest.approx(1.0)
         check_backup_freshness(out)
 
     def test_overdue_archive_is_a_refusal(
@@ -756,20 +763,62 @@ class TestBackupFreshness:
         out.mkdir()
         archive = out / "coverage-20260101T000000.000000Z.tar"
         archive.write_bytes(b"placeholder")
+        # The name stamps an instant, so the patched clock past it makes the
+        # archive overdue regardless of its mtime.
         monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_000_000_000.0)
-        # Push mtime far into the past relative to the patched clock.
-        past = 1_000_000_000.0 - 100 * 3600
-        os.utime(archive, (past, past))
         with pytest.raises(BackupError, match="overdue"):
             check_backup_freshness(out)
 
-    def test_a_corrupt_newest_archive_is_not_fresh(self, db: Path, tmp_path: Path) -> None:
-        """Age alone is not freshness: a corrupt newest archive passes an mtime
-        check and then fails the restore it was meant to protect against."""
+    def test_newest_is_the_stamped_instant_not_the_mtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A clock step moves a later write's mtime with it: keying on mtime
+        let the older-named archive read as newest (freshness monitor then
+        verified the wrong archive while the newest content sat untrusted)."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        newer = out / "coverage-20260101T000000.000000Z.tar"
+        newer.write_bytes(b"placeholder")
+        older = out / "coverage-20200101T000000.000000Z.tar"
+        older.write_bytes(b"placeholder")
+        # The older archive written later (after the clock stepped back):
+        # its mtime reads newer.  The name index must still win.
+        os.utime(older, (1_900_000_000, 1_900_000_000))
+        os.utime(newer, (1_000_000_000, 1_000_000_000))
+        assert backup._newest_stamped_archive(out) == newer
+        inner = backup._archive_stamp_instant(newer.name)
+        assert inner is not None
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: inner.timestamp() + 3600)
+        age = newest_archive_age_hours(out)
+        assert age is not None and age == pytest.approx(1.0)
+
+    def test_a_hand_made_coverage_archive_is_not_a_stamped_backup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the module's own name shape counts: an operator's other
+        ``coverage-*.tar`` carrying a fresh mtime is not the newest backup."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        stamped = out / "coverage-20200101T000000.000000Z.tar"
+        stamped.write_bytes(b"placeholder")
+        hand_made = out / "coverage-manual.tar"
+        hand_made.write_bytes(b"placeholder")
+        os.utime(hand_made, (1_900_000_000, 1_900_000_000))
+        assert backup._newest_stamped_archive(out) == stamped
+
+    def test_a_corrupt_newest_archive_is_not_fresh(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Age alone is not freshness: a corrupt newest archive passes an
+        mtime check and then fails the restore it was meant to protect against."""
         out = tmp_path / "backups"
         out.mkdir()
         write_backup(db, out / "coverage-20200101T000000.000000Z.tar")
-        (out / "coverage-20260101T000000.000000Z.tar").write_bytes(b"not a tar")
+        newest = out / "coverage-20260101T000000.000000Z.tar"
+        newest.write_bytes(b"not a tar")
+        inner = backup._archive_stamp_instant(newest.name)
+        assert inner is not None
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: inner.timestamp() + 3600)
         with pytest.raises(BackupError, match="does not verify"):
             check_backup_freshness(out)
 
@@ -978,11 +1027,17 @@ class TestCheckBackupBoundParsing:
         assert result.exit_code == 2, (bound, result.output)
         assert "--max-age-hours" in result.output + str(result.stderr or "")
 
-    def test_a_decimal_max_age_hours_is_accepted(self, tmp_path: Path) -> None:
+    def test_a_decimal_max_age_hours_is_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         db = build_synthetic_coverage(tmp_path / "db").parent
         out = tmp_path / "backups"
         out.mkdir()
-        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        archive = out / "coverage-20260101T000000.000000Z.tar"
+        write_backup(db, archive)
+        inner = backup._archive_stamp_instant(archive.name)
+        assert inner is not None
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: inner.timestamp() + 3600)
         result = runner.invoke(app, ["check-backup", str(out), "--max-age-hours", "25.5"])
         assert result.exit_code == 0, result.output
 
