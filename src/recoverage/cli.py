@@ -2278,6 +2278,9 @@ def restore(
         "--force",
         help="Restore over documents that differ from the archive's",
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the restored documents as a JSON object"
+    ),
     no_color: bool = _no_color_option(),
 ) -> None:
     """Put a verified backup's documents back into the coverage directory.
@@ -2302,19 +2305,30 @@ def restore(
 
     _use_utf8_stdout()
     _use_utf8_stderr()
+    as_json = _json_on(as_json)
     _check_env_or_exit()
     if config.snapshot_override() is None:
-        _secho(
+        _fail(
             "Error: select portable exports with RECOVERAGE_SNAPSHOTS.",
-            fg=typer.colors.RED,
-            err=True,
+            "select portable exports with RECOVERAGE_SNAPSHOTS",
+            2,
+            as_json,
         )
-        raise typer.Exit(2)
     try:
         written = restore_backup(Path(archive).expanduser(), coverage_source(), force=force)
     except BackupError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
+    if as_json:
+        typer.echo(
+            _dumps(
+                {
+                    "restored": len(written),
+                    "target": str(written[0].parent if written else coverage_source()),
+                    "documents": [p.name for p in written],
+                }
+            )
+        )
+        return
     _secho(
         f"Restored {_counted(len(written), 'document', 'documents')} to "
         f"{written[0].parent if written else coverage_source()}.",
