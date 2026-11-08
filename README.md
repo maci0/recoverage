@@ -28,7 +28,7 @@ block that covers it.
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Filter by verdict | One pill per state with its block count; click one to dim every other block |
-| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~43 KB brotli today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
+| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~44 KB brotli today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Refresh the project view from the browser without restarting the server |
 
