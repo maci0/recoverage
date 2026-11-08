@@ -390,6 +390,14 @@ Default for
 .BR \-\-concurrency :
 the calls answered at once; the next is refused with 503 and Retry-After.
 .TP
+.B RECOVERAGE_OTLP_ENDPOINT
+Default for
+.B ops serve
+.BR \-\-otlp\-endpoint :
+the OTLP/HTTP collector base URL (http or https, no credentials) that receives one server span per request, named
+.I POST /<op>
+and continuing the caller's traceparent. Empty leaves export off.
+.TP
 .B RECOVERAGE_OPS_ALLOWED_HOSTS
 Default for
 .B ops serve

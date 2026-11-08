@@ -75,6 +75,7 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_OPS_FILESTORE",
         "RECOVERAGE_OPS_TOKEN",
         "RECOVERAGE_OPS_WORKSPACE",
+        "RECOVERAGE_OTLP_ENDPOINT",
         "RECOVERAGE_PORT",
         "RECOVERAGE_TOKEN",
     }

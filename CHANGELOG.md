@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage ops serve --otlp-endpoint` (or `RECOVERAGE_OTLP_ENDPOINT`, an
+  `http(s)` URL without credentials) exports one OTLP/HTTP server span per
+  request, `service.name=relumea-recoverage`, named `POST /<op>` (`POST /unknown`
+  for a refusal before dispatch or an unknown op) and continuing the caller's
+  `traceparent`. An invalid endpoint stops the server before it binds. Export is
+  off when the variable is unset.
+
 - `recoverage ops serve` answers the same ops as `ops call` over HTTP, as
   `POST /<op>` on rebrew's ops server (bearer token `RECOVERAGE_OPS_TOKEN` of at
   least 32 bytes, Host allow-list, `--concurrency` bound answered 503 with
@@ -27,7 +34,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.
+- Pin the verified Rebrew release to 6.24.0 (6.23.1 was the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; 6.24.0 adds the span exporter `ops serve` uses).
 
 ## [8.9.0] - 2026-11-04
 
