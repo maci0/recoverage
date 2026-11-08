@@ -4476,6 +4476,14 @@ class TestSectionAccentsMatchSpa:
 
         assert set(potato.STATE_INK) == set(potato.COLORS)
 
+    def test_no_label_is_set_below_the_smallest_font_step(self) -> None:
+        """`size="1"` is ~10px, below the 12px floor the SPA's
+        `text-micro` step holds (WCAG 1.4.3 / 1.4.4); every label and
+        value in the template is at least `size="2"`."""
+        from recoverage import potato
+
+        assert 'size="1"' not in potato._PAGE_SRC
+
 
 class TestPageIdentityMatchesTheSpa:
     """The two renderers are one product and carry one mark.

@@ -6351,6 +6351,21 @@ class TestSpaNamedControls:
         assert 'class="asm-link"' in hl
         assert "<button" in hl
 
+    def test_the_map_is_not_an_application_region(self) -> None:
+        """`role="application"` suspends browse-mode keys, so the canvas
+        wrapper is a labelled region whose value is the live status below
+        it (WCAG 2.1.2 / 4.1.2)."""
+        map_source = _web("components/CoverageMap.tsx")
+        assert 'role="application"' not in map_source
+        assert 'role="region"' in map_source
+
+    def test_pane_headings_sit_one_level_below_the_panel_head(self) -> None:
+        """The panel head is the only `h2`; its panes are `h3`, so the
+        heading outline has no h2->h4 skip (WCAG 1.3.1 / 2.4.6)."""
+        panel = _web("components/CoveragePanel.tsx")
+        assert "<h3" in panel
+        assert "<h4" not in panel
+
     def test_the_disassembly_link_still_carries_its_own_text(self) -> None:
         """The name is added; the address it names is still on screen, so the
         control does not read as a label with nothing behind it."""

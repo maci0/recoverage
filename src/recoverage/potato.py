@@ -547,13 +547,13 @@ def _detail_rows(
             val = val_fn(k, v, val)
         rows.append(
             f'<tr><th bgcolor="{PANEL_COLOR}" width="28%">'
-            f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></th>'
+            f'<font size="2" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></th>'
             # dir="auto" reads the value's own first strong character, so a
             # symbol, module name or Ghidra label written right to left fills
             # the cell the way its author wrote it, and the ASCII values (a VA,
             # a size) keep the left-to-right cell they had.
             f'<td bgcolor="{PANEL_COLOR}" dir="auto">'
-            f'<font face="Courier New, monospace" size="1">{val}</font></td></tr>'
+            f'<font face="Courier New, monospace" size="2">{val}</font></td></tr>'
         )
     return "".join(rows)
 
@@ -890,9 +890,9 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
     def _row(label: str, value: object) -> None:
         parts.append(
             f'<tr><th bgcolor="{PANEL_COLOR}" width="35%">'
-            f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(label)}</b></font></th>'
+            f'<font size="2" color="{MUTED_COLOR}"><b>{_esc(label)}</b></font></th>'
             f'<td bgcolor="{PANEL_COLOR}">'
-            f'<font face="Courier New, monospace" size="1">{_esc(value)}</font></td></tr>'
+            f'<font face="Courier New, monospace" size="2">{_esc(value)}</font></td></tr>'
         )
 
     b = raw_bytes
@@ -1023,7 +1023,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <table role="presentation" id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" bgcolor="{{PANEL_COLOR}}">
   <tr>
     <td colspan="2">
-      <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
+      <a href="#grid-container"><font size="2" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
     </td>
   </tr>
   <tr>
@@ -1031,7 +1031,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table role="presentation" id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{MARK_ON_DARK_SVG}}" width="24" height="24" border="0" alt=""></td>
-          <td valign="middle" nowrap><h1><a href="/"><font face="{{SANS_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>recoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{SANS_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>recoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
@@ -1130,11 +1130,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </td>
         </tr>
         % if search_query:
-        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">{{search_match_label}} for &quot;{{search_query}}&quot;{{"." if search_match_count == 0 else ""}}</font>
+        <tr><td colspan="4" valign="middle" nowrap><font size="2" color="{{ACCENT_COLOR}}">{{search_match_label}} for &quot;{{search_query}}&quot;{{"." if search_match_count == 0 else ""}}</font>
         % if search_match_count == 0:
-        <font size="1" color="{{MUTED_COLOR}}">Check the spelling, or search by address.</font>
+        <font size="2" color="{{MUTED_COLOR}}">Check the spelling, or search by address.</font>
         % end
-        <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
+        <a href="{{clear_search_url}}"><font size="2" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
         % end
         </table>
     </td>
@@ -1156,9 +1156,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     % else:
   <tr>
     <td valign="top" width="100%">
-      <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
+      <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="2"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> N:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{"%.1f".format(sec_stats.get('pct_1dp', sec_stats.get('pct', 0)))}}% covered</font>
+          <br>&nbsp;<font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> N:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{"%.1f".format(sec_stats.get('pct_1dp', sec_stats.get('pct', 0)))}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -1172,7 +1172,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % for i in range(0, len(LEGEND_ITEMS), 2):
             <tr>
             % for leg_key, leg_label in LEGEND_ITEMS[i:i+2]:
-              <td valign="middle"><img src="{{DOT_PNGS[leg_key]}}" width="12" height="12" border="0" alt=""></td><td valign="middle" nowrap><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{leg_label}}&nbsp;&nbsp;</font></td>
+              <td valign="middle"><img src="{{DOT_PNGS[leg_key]}}" width="12" height="12" border="0" alt=""></td><td valign="middle" nowrap><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">{{leg_label}}&nbsp;&nbsp;</font></td>
             % end
             </tr>
           % end
@@ -1182,9 +1182,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                It deliberately does NOT repeat the panel header directly above
                ("Coverage Map - {{section}} ({{block_count}} blocks)"): rendered
                back to back, the two read as the same heading printed twice. -->
-          <caption align="top"><font size="1" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
+          <caption align="top"><font size="2" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
           <tr><td>
-          <font size="1"><center>{{!grid_html}}</center></font>
+          <font size="2"><center>{{!grid_html}}</center></font>
           </td></tr></table>
         </td></tr>
       </table>
@@ -1201,13 +1201,13 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     % end
 </table>
 <table role="presentation" id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
-<td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
+<td><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">recoverage v{{version}}
 % if db_mtime:
  &middot; coverage updated <time datetime="{{db_mtime_iso}}">{{db_mtime}}</time>
 % end
 </font></td>
-<td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
-<td valign="bottom"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
+<td align="center"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
+<td valign="bottom"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
 </td></tr></table>
 </main>
@@ -1248,18 +1248,18 @@ _PANEL_SRC = r"""
 % else:
 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font>
 % if prev_url:
-<a href="{{prev_url}}"><font size="1">&laquo; Prev</font></a>
+<a href="{{prev_url}}"><font size="2">&laquo; Prev</font></a>
 % end
 % if next_url:
-<a href="{{next_url}}"><font size="1">Next &raquo;</font></a>
+<a href="{{next_url}}"><font size="2">Next &raquo;</font></a>
 % end
 </td></tr></table>
-<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_label}}</b></font></td></tr>
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="2" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="2">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="2" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="2" color="{{state_color}}"><b>{{state_label}}</b></font></td></tr>
 % if cell_label:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="2" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="2">{{cell_label}}</font></td></tr>
 % end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="2" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="2"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
 % end
 </table>
   % if not funcs:
@@ -1284,7 +1284,7 @@ _PANEL_SRC = r"""
 <table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">
       % for tag, text in annotations:
         % tag_color = STATE_INK["near_match"] if tag == "BLOCKER" else ACCENT_COLOR
-<tr><td bgcolor="{{PANEL_COLOR}}" width="25%"><font size="1" color="{{tag_color}}"><b>{{tag}}</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{text}}</font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}" width="25%"><font size="2" color="{{tag_color}}"><b>{{tag}}</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="2">{{text}}</font></td></tr>
       % end
 </table>
     % end
@@ -3006,15 +3006,15 @@ def _render_function_list(
     status_note = ""
     if status_filter:
         status_note = (
-            f'<font size="1" color="{MUTED_COLOR}">Status: </font>'
-            f'<font size="1" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
+            f'<font size="2" color="{MUTED_COLOR}">Status: </font>'
+            f'<font size="2" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
             f'<a href="{_build_url(target, section, active_filters, search=search_query, view="functions")}">'
-            f'<font size="1" color="{ACCENT_COLOR}">[Clear]</font></a> '
+            f'<font size="2" color="{ACCENT_COLOR}">[Clear]</font></a> '
         )
     cap_note = ""
     if truncated:
         cap_note = (
-            f'<br><font size="1" color="{MUTED_COLOR}">This list is capped at '
+            f'<br><font size="2" color="{MUTED_COLOR}">This list is capped at '
             f"{_SEARCH_ROW_LIMIT} rows. Narrow the search above to reach the rest.</font>"
         )
 
@@ -3032,9 +3032,9 @@ def _render_function_list(
         (
             f'<tr><td bgcolor="{RAISED_COLOR}" cellpadding="8">'
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
-            f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
+            f'<font size="2" color="{MUTED_COLOR}">({count_label})</font> '
             + status_note
-            + f'<a href="{_build_url(target, section, active_filters, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+            + f'<a href="{_build_url(target, section, active_filters, search=search_query, status=status_filter)}"><font size="2" color="{ACCENT_COLOR}">[Grid View]</font></a>'
             + cap_note
             + "</td></tr>"
         ),

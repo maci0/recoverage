@@ -618,12 +618,16 @@ export function CoverageMap({
         className="grid max-w-full overflow-x-auto rounded-action border border-border bg-surface"
         id={`grid-${section.name.replaceAll(".", "")}`}
         data-cols={declaredColumns}
-        // A canvas carries no accessible children, so this is an application
-        // region with a roving cursor rather than the listbox it used to claim:
-        // a listbox with no options announces an empty widget and nothing about
-        // the cell the arrow keys are on. The status paragraph below is the
-        // value, the hint paragraph is how to move it.
-        role="application"
+        // The canvas carries no accessible children, so this is a labelled
+        // region with a roving cursor rather than the listbox it used to
+        // claim: a listbox with no options announces an empty widget and
+        // nothing about the cell the arrow keys are on. The application
+        // role is not used either: it suspends the screen reader's
+        // browse-mode keys (WCAG 2.1.2 / 4.1.2), so the hints and the
+        // status paragraph below are what carry the contract, and they are
+        // reachable without it. The status paragraph below is the value,
+        // the hint paragraph is how to move it.
+        role="region"
         aria-label={`${isolate(section.name)} coverage map`}
         aria-describedby={hintId}
         tabIndex={0}
