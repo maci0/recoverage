@@ -7,6 +7,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage.RecoError` and `recoverage.app` are importable from the
+  package root, alongside `recoverage.webapp.RecoError`, so a library
+  consumer's catch and WSGI mount need not name a submodule.
 - `recoverage verify-backups` verifies every stamped archive in a backup
   directory, not only the newest one `check-backup` reads back, and exits 1
   naming the first archive that fails. It writes nothing and needs no

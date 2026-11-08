@@ -84,7 +84,15 @@ _CAPABILITY_ALLOWED_UP = frozenset({"server"})
 
 #: Names ``recoverage/__init__.py`` defines; every other ``from recoverage
 #: import X`` is a submodule import, not a name.
-_PACKAGE_EXPORTS = frozenset({"__version__"})
+_PACKAGE_EXPORTS = frozenset({"__version__", "RecoError", "app"})
+
+#: The public library surface lives in ``recoverage/__init__.py`` and reaches
+#: the composition root and the error base only lazily, through
+#: ``__getattr__`` at first access.  A lazy import inside the getter still
+#: names the target module to the AST walk below, but it is not a static
+#: edge: the package stays importable (and the level table stays meaningful)
+#: without Bottle or Rebrew.  The exception names the two lazy targets.
+_LAZY_PACKAGE_EXPORTS = frozenset({"config", "webapp"})
 
 
 def _in_package_imports(path: Path) -> set[str]:
@@ -113,6 +121,10 @@ def _in_package_imports(path: Path) -> set[str]:
                 head = alias.name.split(".")
                 if len(head) >= 2 and head[0] == _PACKAGE:
                     found.add(head[1])
+    if path.stem == "__init__":
+        # The package's own lazy re-exports (RecoError, app) are not static
+        # edges; see _LAZY_PACKAGE_EXPORTS.
+        found -= _LAZY_PACKAGE_EXPORTS
     return found - {path.stem}
 
 

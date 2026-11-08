@@ -41,9 +41,10 @@ lazy import bottle
 import recoverage.api as _api  # mounts /api/* routes on server.app
 import recoverage.potato as _potato  # mounts /potato on server.app
 import recoverage.ui  # noqa: F401
+from recoverage.config import RecoError
 from recoverage.server import _json_err, _log_safe, app, request
 
-__all__ = ["app"]
+__all__ = ["RecoError", "app"]
 
 # api owns the one cache-invalidation entry point every rebuild path calls,
 # and potato owns the grid memo it drops; the two are wired together here so

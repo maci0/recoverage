@@ -51,8 +51,43 @@ Route modules register on import; there are no cycles.
 ``tests/test_import_graph.py`` enforces the level order above, the acyclicity,
 and that every module here is named in this map, so a new module has to
 declare where it sits.
+
+Public library surface
+----------------------
+``recoverage.RecoError`` and ``recoverage.app`` are the two names a library
+consumer reaches for first: the error base to catch, and the fully wired
+WSGI application to mount.  They are imported lazily so ``recoverage`` itself
+stays importable without its heavy dependencies (Bottle, Rebrew).
 """
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from recoverage.config import RecoError
+    from recoverage.webapp import app
+
+
+def __getattr__(name: str) -> object:
+    """Lazy attribute access for the public library surface.
+
+    ``RecoError`` comes from :mod:`recoverage.config` and ``app`` from
+    :mod:`recoverage.webapp` (the composition root that mounts every route);
+    both are imported only on first access so importing ``recoverage`` does
+    not pay for Bottle or Rebrew.
+    """
+    if name == "RecoError":
+        from recoverage.config import RecoError
+
+        return RecoError
+    if name == "app":
+        from recoverage.webapp import app
+
+        return app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __version__ = "8.9.0"
 
-__all__ = ["__version__"]
+__all__ = ["RecoError", "__version__", "app"]
