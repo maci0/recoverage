@@ -5987,6 +5987,167 @@ class TestOpsDispatch:
             assert payload.get("error") == "unknown-op", f"op={name!r}: {payload!r}"
 
 
+FILES_SEEDS: list[bytes] = [
+    b"main.c",
+    b"a/b/c.c",
+    b"../secret.c",
+    b"..%2f..%2fsecret.c",
+    b"%2e%2e%2fsecret.c",
+    b"/etc/passwd",
+    b"C:/secret.c",
+    b"C:secret.c",
+    b"\\secret.c",
+    b"bad\x00.c",
+    b"main.c%00.png",
+    b"%ff%fe.c",
+    b"sp ace.c",
+    b"a" * 400,
+    b"....//....//secret.c",
+    b"..%252fsecret.c",
+    b"",
+    b".",
+]
+
+FILES_TOKENS: tuple[bytes, ...] = (
+    b"main.c",
+    b"..",
+    b"../",
+    b"..%2f",
+    b"%2e%2e%2f",
+    b"%00",
+    b"/",
+    b"\\",
+    b"C:",
+    b"%ff",
+    b".c",
+)
+
+
+class TestTargetFileRoutesFuzz:
+    """``/files/<target>/source/<path>`` and ``/files/<target>/binary``.
+
+    The /src//original campaign fuzzed the fixed trees; these routes take
+    the target AND the filepath from the URL, plus a document-supplied
+    ``sourceRoot`` (and ``originalDll`` for /binary), so containment must
+    hold across the union. A status code cannot show WHICH file a 200
+    served; the oracle below re-derives containment from the served bytes.
+    """
+
+    _SOURCE = b"int game_source = 7;\n"
+    _BINARY = b"game binary bytes"
+    _SECRET = b"TOP-SECRET-OUTSIDE-TREE"
+
+    def _project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Path, Path]:
+        from recoverage import server, ui
+
+        root = tmp_path / "project"
+        (root / "reversed" / "game").mkdir(parents=True)
+        (root / "binaries").mkdir(parents=True)
+        (root / "reversed" / "game" / "main.c").write_bytes(self._SOURCE)
+        (root / "reversed" / "game" / "sp ace.c").write_bytes(b"int sp = 1;\n")
+        (root / "binaries" / "game.exe").write_bytes(self._BINARY)
+        (root / "rebrew-project.toml").write_text(
+            '[targets.game]\nbinary = "binaries/game.exe"\n',
+            encoding="utf-8",
+        )
+        snapshots = root / "exports"
+        write_coverage(snapshots, "game", {}, paths={"sourceRoot": "/reversed/game"})
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.c").write_bytes(self._SECRET)
+        (root / "reversed" / "game" / "link.c").symlink_to(outside / "secret.c")
+        (outside / "game.exe").write_bytes(b"outside binary")
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(snapshots))
+        monkeypatch.setattr(server, "_project_dir", lambda: root)
+        monkeypatch.setattr(ui, "_project_dir", lambda: root)
+        return root, outside
+
+    def test_source_and_binary_never_serve_outside_the_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root, outside = self._project(tmp_path, monkeypatch)
+        from recoverage import server
+
+        server.clear_target_cache()
+
+        def check_source(data: bytes) -> None:
+            quoted = data.decode("latin-1").replace(" ", "%20")
+            quoted = quoted.replace("\x00", "%00")
+            path = f"/files/game/source/{quoted}"
+            status, headers, body = wsgi_request("GET", path)
+            code = int(status.split()[0])
+            # /files is not /api/*: the success body is raw file bytes, so an
+            # error is identified by status, not by parsing JSON.
+            assert code in (200, 403, 404, 503), f"{path}: {status}"
+            assert self._SECRET not in body, f"{path}: served a file outside the tree"
+            assert b"Traceback" not in body, f"{path}: {status} leaked a traceback"
+            if code == 200:
+                assert body in (self._SOURCE, b"int sp = 1;\n"), (
+                    f"{path}: 200 served unexpected bytes {body[:60]!r}"
+                )
+                try:
+                    decoded = unquote(quoted, errors="replace")
+                except Exception:
+                    decoded = quoted
+                if "\x00" not in decoded:
+                    try:
+                        resolved = (root / "reversed" / "game" / decoded).resolve()
+                    except OSError, ValueError:
+                        resolved = None
+                    if resolved is not None:
+                        assert resolved.is_relative_to(
+                            (root / "reversed" / "game").resolve()
+                        ), f"{path}: answered 200 for {decoded!r} resolving outside"
+
+        _fuzz(
+            FILES_SEEDS,
+            check_source,
+            iterations=150,
+            struct_tokens=FILES_TOKENS,
+            num_tokens=FILES_TOKENS,
+            label="TestTargetFileRoutesFuzz.test_source_and_binary_never_serve_outside_the_tree",
+        )
+
+        def check_target(data: bytes) -> None:
+            target = data.decode("latin-1").replace(" ", "%20").replace("\x00", "%00")
+            for suffix in ("/source/main.c", "/binary"):
+                path = f"/files/{target}{suffix}"
+                status, headers, body = wsgi_request("GET", path)
+                code = int(status.split()[0])
+                assert code in (200, 403, 404, 503), f"{path}: {status}"
+                assert self._SECRET not in body, f"{path}: served outside bytes"
+                assert b"outside binary" not in body, f"{path}: served outside binary"
+                assert b"Traceback" not in body, f"{path}: {status} leaked a traceback"
+
+        _fuzz(
+            [b"game", b"GAME", b"unknown", b"../outside", b"%2e%2e", b"a" * 200, b"game\x00"],
+            check_target,
+            iterations=80,
+            struct_tokens=FILES_TOKENS,
+            num_tokens=FILES_TOKENS,
+            label="TestTargetFileRoutesFuzz.test_target_segment_never_crashes",
+        )
+
+    def test_a_legitimate_file_is_still_served(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pair assertion: the containment fuzz must not be satisfied by a
+        route that refuses everything. Legitimate requests still answer 200
+        with the file's own bytes."""
+        self._project(tmp_path, monkeypatch)
+        from recoverage import server
+
+        server.clear_target_cache()
+        status, _, body = wsgi_request("GET", "/files/game/source/main.c")
+        assert status.startswith("200"), status
+        assert body == self._SOURCE, body[:60]
+        status, _, body = wsgi_request("GET", "/files/game/binary")
+        assert status.startswith("200"), status
+        assert body == self._BINARY, body[:60]
+
+
 class TestCampaignSeeds:
     """One run seed determines the whole run; each campaign owns its stream.
 
