@@ -182,6 +182,48 @@ def _json_on(flag: bool) -> bool:
     return flag
 
 
+def _argv_requests_json() -> bool:
+    """Whether raw argv names JSON output before the callback runs.
+
+    Root-level parse errors (unknown option, bad value) are raised before
+    ``_app_callback`` sets ``_output_choice``, so ``_json_on`` is still
+    "auto". This reads the intent from ``sys.argv`` with ``-o text`` winning,
+    mirroring ``_json_on``.
+    """
+    argv = sys.argv[1:]
+    choice: str | None = None
+    json_flag = False
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("--", "-h", "--help"):
+            break
+        if tok == "-o" or tok == "--output":
+            if i + 1 < len(argv):
+                choice = argv[i + 1]
+                i += 2
+                continue
+        elif tok.startswith("--output="):
+            choice = tok.split("=", 1)[1]
+        elif tok.startswith("-o") and len(tok) > 2 and not tok.startswith("--"):
+            choice = tok[2:]
+        elif tok == "--json":
+            json_flag = True
+        elif tok.startswith("-") and not tok.startswith("--") and tok != "-":
+            j = tok.find("o")
+            if j >= 0:
+                val = tok[j + 1 :]
+                if val:
+                    choice = val
+                elif i + 1 < len(argv):
+                    choice = argv[i + 1]
+                    i += 1
+        i += 1
+    if choice == "text":
+        return False
+    return bool(choice == "json" or json_flag)
+
+
 def _write_error(kind: str, message: str, hint: str) -> None:
     """Write one clispec error object as the next stderr line."""
     payload = {"error": {"kind": kind, "message": message, "hint": hint}}
@@ -215,22 +257,42 @@ def _dumps(payload: Any) -> str:
 
 def _install_click_error_hook() -> None:
     """JSON mode turns Click errors into the stderr envelope. Text mode stays human."""
-    from click.exceptions import ClickException
-    from click.exceptions import UsageError as ClickUsageError
+    from typer import rich_utils
+    from typer._click.exceptions import ClickException
+    from typer._click.exceptions import UsageError as ClickUsageError
 
-    original = ClickException.show
-    if getattr(original, "_recoverage_hook", False):
-        return
+    for cls in (ClickException, ClickUsageError):
+        original = cls.show
+        if getattr(original, "_recoverage_hook", False):
+            continue
 
-    def show(self: ClickException, file: Any = None) -> None:
-        if _json_on(False):
-            kind = "usage" if isinstance(self, ClickUsageError) else "failure"
-            _write_error(kind, self.format_message(), "")
-            return
-        original(self, file=file)
+        def show(self: ClickException, file: Any = None, _orig: Any = original) -> None:
+            if _json_on(False):
+                kind = "usage" if isinstance(self, ClickUsageError) else "failure"
+                _write_error(kind, self.format_message(), "")
+                return
+            _orig(self, file=file)
 
-    show._recoverage_hook = True  # type: ignore[attr-defined]
-    ClickException.show = show  # type: ignore[method-assign]
+        show._recoverage_hook = True  # type: ignore[attr-defined]
+        cls.show = show  # type: ignore[method-assign]
+
+    # Typer routes ClickException through rich_utils.rich_format_error when
+    # rich is present, bypassing .show(). Hook that path too so JSON mode
+    # emits the stderr envelope for parse errors.
+    original_rich = rich_utils.rich_format_error
+    if not getattr(original_rich, "_recoverage_hook", False):
+
+        def rich_format_error(self: ClickException) -> None:
+            # Root-level parse errors arrive before the callback sets
+            # _output_choice; the raw argv is the only source of intent.
+            if _json_on(False) or _argv_requests_json():
+                kind = "usage" if isinstance(self, ClickUsageError) else "failure"
+                _write_error(kind, self.format_message(), "")
+                return
+            original_rich(self)
+
+        rich_format_error._recoverage_hook = True  # type: ignore[attr-defined]
+        rich_utils.rich_format_error = rich_format_error
 
 
 _install_click_error_hook()
