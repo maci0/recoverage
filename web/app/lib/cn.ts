@@ -15,7 +15,7 @@ const twMerge = extendTailwindMerge({
   extend: {
     theme: {
       text: ["chip", "micro", "data", "body", "intro", "lede", "figure", "title", "headline", "display"],
-      radius: ["hair", "cell", "chip", "control", "action", "card", "panel"],
+      radius: ["hair", "cell", "chip", "control", "action"],
       shadow: ["lift"],
       leading: ["display", "title", "snug", "body", "prose", "code"],
       tracking: ["display", "title", "figure", "tight", "logo", "label", "chip"],

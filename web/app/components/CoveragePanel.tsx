@@ -519,7 +519,7 @@ export function CoveragePanel({
       // the long disassembly lines with it; the map still keeps the larger
       // share of the row.
       className={cn(
-        "panel w-full shrink-0 self-start overflow-hidden rounded-panel border border-border bg-surface lg:w-form xl:w-prose-wide",
+        "panel w-full shrink-0 self-start overflow-hidden rounded-action border border-border bg-surface lg:w-form xl:w-prose-wide",
         hiddenWhenStacked && "max-lg:hidden",
       )}
       id="panel"

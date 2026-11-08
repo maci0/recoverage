@@ -612,10 +612,10 @@ export function CoverageMap({
         ref={wrapRef}
         // The `.grid` hook and `data-cols` are what the map and the browser
         // specs query; `id` is what a jump to an address scrolls.
-        // The map and the detail panel beside it are both cards, so they share
-        // the card corner and the hairline; two boxes in one row with different
-        // corners read as two layouts.
-        className="grid max-w-full overflow-x-auto rounded-panel border border-border bg-surface"
+        // The map and the detail panel beside it share the action corner
+        // and the hairline; two boxes in one row with different corners
+        // read as two layouts.
+        className="grid max-w-full overflow-x-auto rounded-action border border-border bg-surface"
         id={`grid-${section.name.replaceAll(".", "")}`}
         data-cols={declaredColumns}
         // A canvas carries no accessible children, so this is an application

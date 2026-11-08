@@ -171,20 +171,22 @@
   --spacing: 0.25rem;
 
   /* Corners, ascending. A literal radius in a class is a rung this ladder does
-     not have. */
+     not have. The ladder stops at `action` (10px): a coverage instrument
+     reads as a bench, not a card stack, so no rung above a control exists
+     to soft-bound a panel. */
   --radius-hair: 1px;
   --radius-cell: 3px;
   --radius-chip: 5px;
   --radius-control: 9px;
   --radius-action: 10px;
-  --radius-card: 14px;
-  --radius-panel: 16px;
 
-  /* The one shadow: the floating nav and popovers. Content panels take a
-     border instead, never both. */
+  /* The one shadow: floating popovers only (search results, the code modal,
+     the regen notice). Panels and the map take a border instead, never
+     both, and the shadow is flat and hard-edged: no soft lift, no blur
+     spread, so a floating surface reads as paper on the bench. */
   --shadow-lift:
-    0 1px 2px light-dark(rgb(10 10 11 / 4%), rgb(0 0 0 / 40%)),
-    0 12px 32px -18px light-dark(rgb(10 10 11 / 12%), rgb(0 0 0 / 60%));
+    0 1px 0 light-dark(rgb(10 10 11 / 10%), rgb(0 0 0 / 55%)),
+    0 0 0 1px light-dark(rgb(10 10 11 / 8%), rgb(237 237 239 / 14%));
 
   /* Motion. Short functional transitions, and one authored moment (the
      coverage scan). `prefers-reduced-motion: reduce` stops both. */
