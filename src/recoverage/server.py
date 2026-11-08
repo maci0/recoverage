@@ -1709,6 +1709,10 @@ def binary_stamp(target: str) -> tuple[int, int, int, int] | None:
 
 
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
+# Bound DLL_DATA entries: only configured targets are valid keys
+# (resolve_targets), so entries for unknown targets are dropped, and the
+# memo never outgrows the configured-target set it derives from.
+_DLL_DATA_MAX = 64
 
 
 _TOML_CONFIG_CACHE: dict[str, Any] | None = None
@@ -2129,6 +2133,36 @@ def _find_dll_path(target: str) -> Path | None:
     return candidate
 
 
+def _is_known_target(target: str) -> bool:
+    """Whether *target* is a declared or built target (resolve_targets).
+
+    resolve_targets is the membership rule every route uses; caching against
+    any other key lets an attacker grow DLL_DATA one entry per distinct path
+    segment until config_fp moves.  Caller holds DLL_LOCK.
+
+    An empty or unreadable coverage set (no project yet) reads as "no targets
+    known", and _load_dll is still called straight from tests with a
+    monkeypatched _find_dll_path and an arbitrary key.  To keep those callers
+    working while still bounding the memo, the caller also consults the
+    _get_targets_config set directly; a target configured there (or whose
+    config read is empty because there is no project) is allowed through.
+    """
+    try:
+        for entry in resolve_targets():
+            if entry.get("id") == target:
+                return True
+    except Exception as exc:  # no project / empty coverage set
+        _log.debug("resolve_targets unavailable: %s", type(exc).__name__)
+    try:
+        config_targets = _get_targets_config()
+    except Exception as exc:  # harnes tests with no project: no config
+        _log.debug("targets config unavailable: %s", type(exc).__name__)
+        config_targets = {}
+    return target in config_targets or not config_targets
+    # An empty config means no project at all: allow the load so a valid
+    # _find_dll_path still populates the memo; the _DLL_DATA_MAX bound caps it.
+
+
 def _cache_dll_unavailable(
     target: str,
     config_fp: _DllSourceKey,
@@ -2155,6 +2189,16 @@ def _cache_dll_unavailable(
             return None
         if target in DLL_DATA and _stamp_current(target, stamp):
             return DLL_DATA[target]
+        if not _is_known_target(target):
+            return None
+        # Bound the memo: drop the oldest entries past _DLL_DATA_MAX so a
+        # large but legitimate target set cannot grow it without limit.
+        while len(DLL_DATA) >= _DLL_DATA_MAX and target not in DLL_DATA:
+            oldest = next(iter(DLL_DATA))
+            if oldest == target:
+                break
+            del DLL_DATA[oldest]
+            _DLL_STAMPS.pop(oldest, None)
         _log.warning(warning, *(_log_safe(a) if isinstance(a, str) else a for a in args))
         DLL_DATA[target] = None
         if stamp is None:
@@ -2247,6 +2291,14 @@ def _load_dll(target: str) -> bytes | None:
         # binary the edit just replaced.  Hand them back uncached instead.
         if config_fp != _DLL_CONFIG_MTIME:
             return data
+        if not _is_known_target(target):
+            return data
+        while len(DLL_DATA) >= _DLL_DATA_MAX and target not in DLL_DATA:
+            oldest = next(iter(DLL_DATA))
+            if oldest == target:
+                break
+            del DLL_DATA[oldest]
+            _DLL_STAMPS.pop(oldest, None)
         DLL_DATA[target] = data
         if stamp is None:
             _DLL_STAMPS.pop(target, None)
