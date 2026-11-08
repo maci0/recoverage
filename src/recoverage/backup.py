@@ -338,7 +338,10 @@ def _atomic_write(path: Path, data: bytes) -> None:
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
-    tmp.unlink()
+    try:
+        tmp.unlink()
+    except OSError as exc:
+        _log.warning("backup: cannot remove temp file %r after publish: %r", str(tmp), str(exc))
     _fsync_dir(path.parent)
 
 

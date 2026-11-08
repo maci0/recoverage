@@ -1065,16 +1065,29 @@ _OPEN_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 def _is_listening(url: str) -> bool:
-    """Whether something accepts a connection on the address *url* names."""
+    """Whether something accepts a connection on the address *url* names.
+
+    ``localhost`` resolves through DNS and may return only ``::1`` on an
+    IPv6-only host, so a literal probe address is tried directly: on an
+    IPv6-only host ``localhost`` never reaches the IPv4 listener and the
+    probe would report nothing listening while a server holds the port.
+    """
     parts = urlsplit(url)
-    try:
-        with socket.create_connection(
-            (parts.hostname or "127.0.0.1", parts.port or _DEFAULT_HTTP_PORT),
-            timeout=_OPEN_PROBE_TIMEOUT_SECONDS,
-        ):
-            return True
-    except OSError:
-        return False
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or _DEFAULT_HTTP_PORT
+    candidates = [host]
+    if host == "localhost":
+        candidates.extend(["127.0.0.1", "::1"])
+    for candidate in candidates:
+        try:
+            with socket.create_connection(
+                (candidate, port),
+                timeout=_OPEN_PROBE_TIMEOUT_SECONDS,
+            ):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 #: How long after the listener is asked to start the opener is scheduled.  It
@@ -1133,14 +1146,12 @@ def _open_when_listening(url: str) -> None:
     port = parts.port or _DEFAULT_HTTP_PORT
     deadline = clock.monotonic() + _OPEN_LISTEN_WAIT_SECONDS
     while True:
-        try:
-            with socket.create_connection((host, port), timeout=_OPEN_LISTEN_POLL_SECONDS):
-                break
-        except OSError:
-            if clock.monotonic() >= deadline:
-                _log.debug("no listener on %s:%d; not opening a browser", host, port)
-                return
-            clock.sleep(_OPEN_LISTEN_POLL_SECONDS)
+        if _is_listening(f"http://{host}:{port}"):
+            break
+        if clock.monotonic() >= deadline:
+            _log.debug("no listener on %s:%d; not opening a browser", host, port)
+            return
+        clock.sleep(_OPEN_LISTEN_POLL_SECONDS)
     open_browser(url)
 
 

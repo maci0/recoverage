@@ -142,10 +142,17 @@ export type TargetsPayload = {
  * lifetime. This is the SPA's contract with `/api/targets/*\/data`. */
 const NO_CACHE: RequestInit = { cache: "no-cache" };
 
+/** A hung request must not spin forever: 30 s bounds a stalled server while
+ * leaving room for a large /data payload on a slow link. */
+const FETCH_TIMEOUT_MS = 30_000;
+
 function init(signal?: AbortSignal): RequestInit {
   // `exactOptionalPropertyTypes` is on, so an absent signal is an absent key
   // rather than an explicit `undefined`.
-  return signal === undefined ? NO_CACHE : { ...NO_CACHE, signal };
+  if (signal !== undefined) {
+    return { ...NO_CACHE, signal };
+  }
+  return { ...NO_CACHE, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) };
 }
 
 export async function fetchTargets(signal?: AbortSignal): Promise<TargetsPayload> {
@@ -432,6 +439,9 @@ function sendRegen(key: RegenKey): Promise<Response> {
     method: "POST",
     cache: "no-store",
     headers: { "Idempotency-Key": key },
+    // A regen runs for minutes; 10 min bounds a hung server without cutting
+    // a long pipeline short.
+    signal: AbortSignal.timeout(10 * 60_000),
   });
 }
 

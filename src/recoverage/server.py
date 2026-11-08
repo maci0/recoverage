@@ -311,7 +311,14 @@ def origin_is_this_dashboard(origin: str, host: str) -> bool:
         return False
     request_host = _authority_of(host)
     if not request_host:
-        return _hostname_of(origin) in LOOPBACK_HOSTS
+        hostname = _hostname_of(origin)
+        if hostname in LOOPBACK_HOSTS:
+            return True
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            return False
+        return isinstance(ip, ipaddress.IPv4Address) and ip.is_loopback
     return _authority_of(origin) == request_host
 
 
