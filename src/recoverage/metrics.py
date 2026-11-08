@@ -332,7 +332,7 @@ class RequestStats:
                 "latency_window": len(window),
                 "p50_ms": round(percentile(window, P50), MS_DIGITS),
                 "p95_ms": round(percentile(window, P95), MS_DIGITS),
-                "by_status": dict(self._by_status),
+                "by_status": {k: self._by_status[k] for k in sorted(self._by_status)},
                 "by_route": by_route,
             }
 
@@ -536,7 +536,7 @@ class CacheStats:
         with self._lock:
             return {
                 name: {"hits": row.hits, "misses": row.misses}
-                for name, row in self._by_cache.items()
+                for name, row in sorted(self._by_cache.items())
             }
 
     def reset(self) -> None:
