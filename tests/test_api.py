@@ -1674,6 +1674,25 @@ class TestRegenFailureMapping:
         self._post_regen(monkeypatch, ValueError("corrupt JSON"))
         assert "after regen" in cleared
 
+    def test_portable_precondition_is_400_not_500(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Portable mode is a precondition, not a pipeline failure.
+
+        The SPA fires Regenerate from the topbar unconditionally; in portable
+        mode the click used to answer 500 and the notice read as a broken
+        server. A 400 names the mode, and the refusal is counted separately
+        from pipeline failures.
+        """
+        from recoverage.regen import RegenError
+
+        status, headers, body = self._post_regen(
+            monkeypatch,
+            RegenError("Portable snapshots are read-only", 2, precondition=True),
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Regenerate unavailable"
+        assert "read-only portable snapshots" in data["detail"]
+
 
 class TestRegenIdempotencyKey:
     """POST /api/regen dedups a retry that carries a completed key.

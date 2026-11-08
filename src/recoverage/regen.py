@@ -10,9 +10,10 @@ from recoverage.config import RecoError
 class RegenError(RecoError, RuntimeError):
     """A live coverage refresh could not produce every configured target."""
 
-    def __init__(self, message: str, exit_code: int = 1) -> None:
+    def __init__(self, message: str, exit_code: int = 1, *, precondition: bool = False) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+        self.precondition = precondition
 
 
 def run_regen(root: Path) -> None:
@@ -23,7 +24,9 @@ def run_regen(root: Path) -> None:
 
     if snapshot_override() is not None:
         raise RegenError(
-            "Portable snapshots are read-only; unset RECOVERAGE_SNAPSHOTS to refresh a project.", 2
+            "Portable snapshots are read-only; unset RECOVERAGE_SNAPSHOTS to refresh a project.",
+            2,
+            precondition=True,
         )
     try:
         view = load_project_coverage(root, refresh=True)

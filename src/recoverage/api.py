@@ -1737,7 +1737,11 @@ def handle_api_targets() -> bytes | HTTPResponse:
     # Beside the list, never folded into it: a document that does not parse is
     # not a target with no data, and the reader has to be told which file
     # failed and why rather than handed the empty-project state.
-    payload = {"targets": targets_list, "unreadable": _server.unreadable_documents()}
+    payload = {
+        "targets": targets_list,
+        "unreadable": _server.unreadable_documents(),
+        "portable": _config.snapshot_override() is not None,
+    }
 
     etag = _etag_or_304(
         _snapshot_db_mtime(),
@@ -3189,6 +3193,22 @@ def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
         # rebrew's error_exit reported the failure and its status is carried
         # here.  Map it to the JSON 500 contract instead of letting it escape
         # as a traceback.
+        if e.precondition:
+            elapsed = clock.monotonic() - started_at
+            _log.warning(
+                "Regen refused after %.1fs: %s",
+                elapsed,
+                e,
+                extra=_metrics.regen_log_fields("rejected", elapsed),
+            )
+            _metrics.REGEN.finish(None, elapsed * 1000.0)
+            return _json_err(
+                400,
+                {
+                    "error": "Regenerate unavailable",
+                    "detail": "This dashboard serves read-only portable snapshots.",
+                },
+            )
         _regen_failed(started_at, "rebrew exited with status %s", e.exit_code)
         return _json_err(
             500,

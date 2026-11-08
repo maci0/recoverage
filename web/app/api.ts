@@ -136,6 +136,7 @@ export type UnreadableDocument = {
 export type TargetsPayload = {
   targets: Array<TargetInfo>;
   unreadable: Array<UnreadableDocument>;
+  portable?: boolean | undefined;
 };
 
 /** `cache: "no-cache"` on every read: the server answers 304 from its ETag, so
@@ -165,7 +166,11 @@ export async function fetchTargets(signal?: AbortSignal): Promise<TargetsPayload
   // `recoverage.api.handle_api_targets` pins to `{"targets": [...],
   // "unreadable": [...]}`.
   const body = await decodeJson<Partial<TargetsPayload>>(res, "GET /api/targets");
-  return { targets: body.targets ?? [], unreadable: body.unreadable ?? [] };
+  return {
+    targets: body.targets ?? [],
+    unreadable: body.unreadable ?? [],
+    ...(body.portable === undefined ? {} : { portable: body.portable }),
+  };
 }
 
 export async function fetchData(

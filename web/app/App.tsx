@@ -141,6 +141,11 @@ export function App() {
   // is corrupt otherwise reads as an empty project, and a broken document
   // beside good ones loses its target from the picker without a word.
   const [unreadable, setUnreadable] = useState<Array<UnreadableDocument>>([]);
+  // Portable mode: the server only serves read-only snapshot exports. The
+  // Regenerate button stays visible (removing it would be a layout shift and
+  // hide the action in the mode where it is most often pressed), but its
+  // tooltip and the empty-state copy say it cannot run here.
+  const [portable, setPortable] = useState(false);
   // A `?target=` in the URL is the page's own state, so it seeds the selection
   // before the target list arrives: `/api/targets/<t>/data` then starts in
   // parallel with `/api/targets` instead of one round trip behind it, which is
@@ -366,6 +371,7 @@ export function App() {
         const listed = await fetchTargets(signal);
         setTargets(listed.targets);
         setUnreadable(listed.unreadable);
+        setPortable(listed.portable ?? false);
         setLoadError(null);
         setTargetReady(true);
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, which carries the Retry, and the dashboard still renders its empty state
@@ -892,7 +898,7 @@ export function App() {
    * on screen, so the arrow-key walk (which scrolls the map on every move) is
    * untouched, and the scroll is instant under `prefers-reduced-motion`. */
   useEffect(() => {
-    if (selectedIndex === null) {
+    if (selectedIndex === null || panes.fn === null) {
       return;
     }
     const panel = document.querySelector<HTMLElement>("#panel");
@@ -905,7 +911,7 @@ export function App() {
     }
     const smooth = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== true;
     panel.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
-  }, [selectedIndex]);
+  }, [selectedIndex, panes.fn]);
 
   // Clicking the block already open closes it, which is the one way back from
   // the detail panel to the whole map. Without it the only ways out were a
@@ -1249,7 +1255,13 @@ export function App() {
               // the honest name for what the click runs: rebrew's catalog
               // analysis, for minutes at a time.
               aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
-              title={busy ? MSG.REGEN_IN_PROGRESS : "Re-run the coverage analysis. Takes minutes."}
+              title={
+                busy
+                  ? MSG.REGEN_IN_PROGRESS
+                  : portable
+                    ? "Unavailable: this dashboard serves read-only portable snapshots."
+                    : "Re-run the coverage analysis. Takes minutes."
+              }
               // Under a minute-scale run the button must leave the tab order
               // while keeping a visible busy state: a keep-focusable button
               // invites a second click and a second pipeline, and the
@@ -1389,6 +1401,7 @@ export function App() {
               coverage={coverage}
               active={active}
               sectionEmpty={sectionEmpty}
+              portable={portable}
               loadError={failure}
               onRetry={retryFailedLoad}
               filters={filters}
@@ -1484,6 +1497,7 @@ type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
   coverage: Coverage;
   active: Section | null;
   sectionEmpty: boolean;
+  portable: boolean;
   /** A read the shell could not recover from, or null. */
   loadError: string | null;
   /** Re-run the read behind `loadError`. */
@@ -1499,6 +1513,7 @@ function MapArea({
   coverage,
   active,
   sectionEmpty,
+  portable,
   loadError,
   onRetry,
   filters,
@@ -1577,9 +1592,9 @@ function MapArea({
           No coverage data for <span className="font-mono">{target}</span>
         </p>
         <p className="m-0 max-w-prose">
-          This target has no coverage yet — either its first build has not
-          run, or this section holds no blocks. Use <b>Regenerate</b> in the
-          topbar to run the analysis now.
+          {portable
+            ? "This dashboard serves read-only portable snapshots, so this target cannot be built from here. Point the server at a live project to run the analysis."
+            : "This target has no coverage yet — either its first build has not run, or this section holds no blocks. Use Regenerate in the topbar to run the analysis now."}
         </p>
       </div>
     );
