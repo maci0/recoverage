@@ -959,6 +959,21 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
                 "'recoverage regen' cannot recover what a rollback discards. "
                 "Re-run with --force if the rollback is what you want."
             )
+    # Naturally idempotent: a destination already holding the archive's
+    # bytes is left untouched, so a rerun (retry, replayed drill, cron
+    # redelivery) converges instead of rewriting every document and moving
+    # its mtime, which downstream freshness checks read as a new build.
+    # The check runs for every member before any write, so a partial
+    # match still publishes the differing members atomically below.
+    unchanged: set[str] = set()
+    for name, path in existing.items():
+        try:
+            if path.is_file() and path.read_bytes() == members[name]:
+                unchanged.add(name)
+        except OSError as exc:
+            raise BackupError(f"cannot read {path} to compare it: {exc}") from exc
+    if len(unchanged) == len(existing):
+        return list(existing.values())
     try:
         db_dir.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(dir=db_dir, prefix=".restore-"))
@@ -972,8 +987,12 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
         previous.mkdir()
         # Finish every allocation before replacing any original document.
         for name, data in members.items():
-            _atomic_write(staging / name, data)
+            if name not in unchanged:
+                _atomic_write(staging / name, data)
         for name, destination in existing.items():
+            if name in unchanged:
+                written.append(destination)
+                continue
             if destination.exists() or destination.is_symlink():
                 destination.replace(previous / name)
                 saved.append(destination)

@@ -443,9 +443,30 @@ class TestRestoreBackup:
         assert written and written[0].parent == fresh
 
     def test_restoring_what_is_already_there_is_a_no_op(self, db: Path, archive: Path) -> None:
-        before = {p.name: p.read_bytes() for p in db.glob("coverage-*.toml")}
+        before = {
+            p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in db.glob("coverage-*.toml")
+        }
         restore_backup(archive, db)
-        assert {p.name: p.read_bytes() for p in db.glob("coverage-*.toml")} == before
+        assert {
+            p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in db.glob("coverage-*.toml")
+        } == before
+
+    def test_a_second_force_restore_of_the_same_archive_is_a_no_op(
+        self, db: Path, archive: Path
+    ) -> None:
+        """Rerunning a forced restore converges instead of rewriting again.
+
+        The first forced restore rolls a differing document back; a retry
+        or replayed drill running it again must leave the now-identical
+        bytes (and their mtime, which freshness checks read as a build)
+        untouched.
+        """
+        document = next(db.glob("coverage-*.toml"))
+        document.write_bytes(document.read_bytes() + b"\n# newer\n")
+        restore_backup(archive, db, force=True)
+        before = (document.read_bytes(), document.stat().st_mtime_ns)
+        restore_backup(archive, db, force=True)
+        assert (document.read_bytes(), document.stat().st_mtime_ns) == before
 
     @pytest.mark.parametrize("failure", ["stage", "publish"])
     @pytest.mark.parametrize("original", [None, b"newer original"])
