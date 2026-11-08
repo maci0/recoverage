@@ -2888,7 +2888,8 @@ class TestSseEvents:
                 worker.start()
             assert disconnected_entered.wait(2), "disconnected stream never reached its poll"
             assert connected_entered.wait(2), "connected stream never reached its poll"
-            assert timeouts == [api._SSE_QUEUE_POLL_SECONDS], timeouts
+            assert len(timeouts) == 1 and timeouts[0] is not None
+            assert abs(timeouts[0] - api._SSE_QUEUE_POLL_SECONDS) < 0.05  # type: ignore[operator]
             assert not connected_done.is_set()
 
             started = time.monotonic()
@@ -3040,7 +3041,10 @@ class TestSseDbWatcher:
                 # cannot spin on a zero-length fake timeout.
                 interval_seen.set()
                 return False
-            return bool(real_wait(None))
+            # The clock seam recomputes the deadline on each wait; a wait
+            # that returns False with a non-None timeout is an elapsed fake
+            # deadline, so loop until a notify parks it.
+            return False
 
         def snapshot() -> tuple[int, int]:
             snapshots["n"] += 1
@@ -3067,7 +3071,8 @@ class TestSseDbWatcher:
             while snapshots["n"] < 2 and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert timeouts[0] is None
-            assert timeouts[1] == api._SSE_POLL_INTERVAL_SECONDS
+            assert timeouts[1] is not None
+            assert abs(timeouts[1] - api._SSE_POLL_INTERVAL_SECONDS) < 0.05  # type: ignore[operator]
             assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
             assert snapshots["n"] == 2
             assert watcher.is_alive()
@@ -3135,7 +3140,8 @@ class TestSseDbWatcher:
         try:
             worker.start()
             assert interval_entered.wait(2), "watcher never reached the interval wait"
-            assert timeouts == [api._SSE_POLL_INTERVAL_SECONDS], timeouts
+            assert len(timeouts) == 1 and timeouts[0] is not None
+            assert abs(timeouts[0] - api._SSE_POLL_INTERVAL_SECONDS) < 0.05  # type: ignore[operator]
             assert api._SSE_POLL_INTERVAL_SECONDS == 2.0
 
             leaving.close()
@@ -3158,7 +3164,9 @@ class TestSseDbWatcher:
             deadline = time.monotonic() + 1.0
             while len(timeouts) < 2 and time.monotonic() < deadline:
                 time.sleep(0.01)
-            assert timeouts == [api._SSE_POLL_INTERVAL_SECONDS, None], timeouts
+            assert len(timeouts) == 2 and timeouts[1] is None, timeouts
+            assert timeouts[0] is not None
+            assert abs(timeouts[0] - api._SSE_POLL_INTERVAL_SECONDS) < 0.05  # type: ignore[operator]
             assert not errors, errors
         finally:
             stop.set()

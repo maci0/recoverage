@@ -1014,17 +1014,29 @@ def _db_watcher_wait(stop: threading.Event) -> bool:
     notifies that wait. While a client is connected the wait is that interval.
     The last disconnect notifies too, which ends an interval wait already in
     progress instead of leaving it to fire with nobody connected.
+
+    The interval is read through :func:`recoverage.clock.monotonic`, so a
+    patched clock ends the wait without real seconds passing, and the
+    slice between reads is only how late a subscriber or stop is noticed.
     """
     with _SSE_WATCHER_WAKE:
         while not stop.is_set():
             if not _SSE_CLIENTS:
                 _SSE_WATCHER_WAKE.wait()
                 continue
-            notified = _SSE_WATCHER_WAKE.wait(_SSE_POLL_INTERVAL_SECONDS)
+            deadline = clock.monotonic() + _SSE_POLL_INTERVAL_SECONDS
+            while not stop.is_set():
+                remaining = deadline - clock.monotonic()
+                if remaining <= 0:
+                    if _SSE_CLIENTS:
+                        return True
+                    break
+                if _SSE_WATCHER_WAKE.wait(
+                    remaining if remaining > 0 else _SSE_POLL_INTERVAL_SECONDS
+                ):
+                    break
             if stop.is_set():
                 return False
-            if not notified and _SSE_CLIENTS:
-                return True
         return False
 
 
@@ -1234,15 +1246,31 @@ class _SSEStream:
             self._gen = self._frames()
         return self._gen
 
+    def _await_frame(self) -> bytes | None:
+        """Block for the next frame, advancing on the clock seam.
+
+        The poll does not wait real seconds when the clock is patched:
+        it ends on ``clock.monotonic`` plus the poll interval, so a
+        patched clock reaches the heartbeat check without real time
+        passing.  A frame or stop still wakes the wait at once.
+        """
+        deadline = clock.monotonic() + _SSE_QUEUE_POLL_SECONDS
+        while not self._stop.is_set():
+            remaining = deadline - clock.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                return self._queue.get(timeout=remaining)
+            except queue.Empty:
+                continue
+        return None
+
     def _frames(self) -> Generator[bytes]:
         try:
             yield b": connected\n\n"
             last_heartbeat = clock.monotonic()
             while not self._stop.is_set():
-                try:
-                    frame = self._queue.get(timeout=_SSE_QUEUE_POLL_SECONDS)
-                except queue.Empty:
-                    frame = None
+                frame = self._await_frame()
                 if frame is _SSE_STOP_FRAME or self._stop.is_set():
                     break
                 if frame is not None:
