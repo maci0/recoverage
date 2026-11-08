@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 lazy import contextlib
 lazy import hashlib
 lazy import io
@@ -228,6 +228,24 @@ def _atomic_write(path: Path, data: bytes) -> None:
                 f"backup {path} already exists; refusing to overwrite it "
                 "(a repeat run must not silently replace an earlier backup)"
             ) from exc
+        except OSError:
+            # Windows: hard links need privilege / share the volume and
+            # fail with PermissionError (EPERM) on some filesystems.
+            # Fall back to an atomic exclusive create: open the
+            # destination with "xb" so a repeat run still fails if a
+            # winner landed first, then copy the temp bytes in.
+            if os.name != "nt":
+                raise
+            try:
+                with path.open("xb") as dst:
+                    dst.write(tmp.read_bytes())
+                    dst.flush()
+                    os.fsync(dst.fileno())
+            except FileExistsError as exists_exc:
+                raise BackupError(
+                    f"backup {path} already exists; refusing to overwrite it "
+                    "(a repeat run must not silently replace an earlier backup)"
+                ) from exists_exc
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink()
@@ -441,7 +459,12 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
             # the directory the restore was pointed at.  `Path(name).name !=
             # name` is the containment half: no separator, no drive, no
             # parent hop, whatever the platform's idea of one is.
-            if not isinstance(name, str) or Path(name).name != name or not _is_coverage(name):
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or PureWindowsPath(name).name != name
+                or not _is_coverage(name)
+            ):
                 raise BackupError(f"{path}: member name {name!r} is not a coverage document")
             data = members.get(name)
             if data is None:
