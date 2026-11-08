@@ -409,7 +409,12 @@ def _prune_old_archives(archive_dir: Path) -> None:
             for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
             if p.is_file() and not p.is_symlink()
         )
-    except OSError:
+    except OSError as exc:
+        _log.warning(
+            "backup: cannot list archives in %r to prune old ones: %r",
+            str(archive_dir),
+            str(exc),
+        )
         return
     for stale in candidates[:-_RETENTION_COUNT] if len(candidates) > _RETENTION_COUNT else []:
         try:

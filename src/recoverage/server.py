@@ -578,7 +578,8 @@ def _contained_source_path(
         return None
     try:
         base = (project_dir / source_root).resolve()
-    except OSError, ValueError:
+    except (OSError, ValueError) as exc:
+        _log.debug("Source root %r cannot be resolved (%r)", source_root, exc)
         return None
     # The plain-relative rule above is lexical: it holds "src/evil" whatever
     # src/evil is, and resolve() follows a symlink. A base that leaves the
@@ -602,7 +603,8 @@ def _contained_source_path(
     raw = match_filesystem_spelling(base, raw)
     try:
         c_path = (base / raw).resolve()
-    except OSError, ValueError:
+    except (OSError, ValueError) as exc:
+        _log.debug("Source path %r under %r cannot be resolved (%r)", raw, base, exc)
         return None
     if not c_path.is_relative_to(base):
         return None
