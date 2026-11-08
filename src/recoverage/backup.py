@@ -203,6 +203,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
     stays inside one filesystem, and both the file and the directory are fsynced
     before the name is published — a rename whose bytes were never flushed is a
     name pointing at nothing after a crash.
+
+    Repeatability: the caller names the destination, and a repeat with the
+    same name is refused rather than overwriting. ``tmp.replace(path)`` would
+    silently replace an archive an earlier run wrote — the same stamp from a
+    frozen/patched clock, a cron retry inside one microsecond, or a deliberate
+    re-run at the same output path — losing the earlier backup. The publish
+    uses ``os.link`` (fail-if-exists) + unlink so the check and the publish
+    are one step, not a check-then-replace race between two backup runs.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -212,11 +220,18 @@ def _atomic_write(path: Path, data: bytes) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        tmp.replace(path)
+        try:
+            os.link(tmp, path)
+        except FileExistsError as exc:
+            raise BackupError(
+                f"backup {path} already exists; refusing to overwrite it "
+                "(a repeat run must not silently replace an earlier backup)"
+            ) from exc
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
+    tmp.unlink()
     _fsync_dir(path.parent)
 
 

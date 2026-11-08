@@ -208,6 +208,33 @@ class TestWriteBackup:
         write_backup(db, tmp_path / "snap.tar")
         assert sorted(p.name for p in tmp_path.iterdir()) == ["db", "snap.tar"]
 
+    def test_a_repeat_write_never_silently_replaces_the_first(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Idempotency: a second run at the same instant must not lose the first.
+
+        The stamped name is a function of the clock, so a cron retry, a
+        replayed run, or any two runs inside one frozen/patched instant name
+        the same file.  ``os.replace`` made run two silently overwrite run
+        one — the earlier backup gone, with nothing saying so.  The publish
+        must fail-if-exists and leave the first archive's bytes intact.
+        """
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_700_000_000.123456)
+        out = tmp_path / "out"
+        out.mkdir()
+        first = write_backup(db, out)
+        first_bytes = first.path.read_bytes()
+        with pytest.raises(BackupError, match="already exists"):
+            write_backup(db, out)
+        assert sorted(p.name for p in out.iterdir()) == [first.path.name]
+        assert first.path.read_bytes() == first_bytes
+
+    def test_a_repeat_write_to_an_explicit_path_is_refused(self, db: Path, tmp_path: Path) -> None:
+        path = tmp_path / "snap.tar"
+        write_backup(db, path)
+        with pytest.raises(BackupError, match="already exists"):
+            write_backup(db, path)
+
 
 class TestVerifyBackup:
     """Restore runs this first, so every refusal is made before a write."""
