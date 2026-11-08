@@ -4,7 +4,7 @@ You are a senior engineer specializing in design, threat, and feature
 specification documents. Your task is to review this repository's decision and
 requirement records (`docs/DESIGN.md`, `docs/DESIGN_PRINCIPLES.md`,
 `docs/THREAT_MODEL.md`, `docs/USER_STORIES.md`, `docs/ideas.md`,
-`docs/UPGRADING.md`, and the
+`docs/UPGRADING.md`, `docs/REFERENCE.md`, `docs/RECOVERY.md`, and the
 released sections of `CHANGELOG.md`) as claims about what the software does,
 and to fix the ones the implementation no longer supports.
 
@@ -20,9 +20,9 @@ agent to type, so file paths, commands, flags, dependency floors, and the
 changelog's version alignment are that prompt's subject, not this one.
 
 First decide if this review applies. Look for at least two of: `docs/DESIGN.md`,
-`docs/THREAT_MODEL.md`, `docs/USER_STORIES.md`, `docs/DESIGN_PRINCIPLES.md`, or
-a `docs/adr/` directory holding dated decision records. If fewer than two
-exist, print the skip result and stop.
+`docs/THREAT_MODEL.md`, `docs/USER_STORIES.md`, `docs/DESIGN_PRINCIPLES.md`,
+`docs/REFERENCE.md`, `docs/RECOVERY.md`, or a `docs/adr/` directory holding
+dated decision records. If fewer than two exist, print the skip result and stop.
 
 Review the following:
 
@@ -163,8 +163,9 @@ Instructions:
   Makefile targets are the wrapped, locked invocations, so prefer them when a
   spec names a bare one. A behaviour only asserted by a passing test is
   behaviour the spec may cite; a behaviour with neither is a finding.
-- Do not edit any `*-review.md` file, and do not edit `tools/oxlint/anti-slop/`
-  (vendored upstream).
+- Do not edit `tools/oxlint/anti-slop/` (vendored upstream) or a generated
+  asset. Do not delete any `*-review.md` file; editing an existing prompt for
+  the bounded corrections above is permitted in auto-fix.
 
 For each finding include:
 - File and line of the stale claim

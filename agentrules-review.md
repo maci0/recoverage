@@ -4,7 +4,7 @@ You are a senior prompt and documentation engineer specializing in agent rule fi
 
 Your goal is to evaluate whether the rule files still describe the tree they are filed in: every file path, command, flag, endpoint, dependency, and hardcoded number an agent would act on. This is the inverse of a code review, which asks whether the code is right; here the subject is whether the written contract still matches the implementation, because a wrong instruction is followed verbatim and a missing one is invented from nothing. It differs from `specs-review.md`, which reviews the decision and requirement records in `docs/` (design, threat model, user stories, ideas, and the upgrade guide) for claims the code no longer supports, so leave those documents alone unless a rule file quotes them wrongly: this prompt owns the instructions an agent acts on, that one owns what the specs claim about behaviour. `SECURITY.md` and `man/recoverage.1` are this one's by the same test — each names commands, flags, env vars, and code paths a reader acts on, and `tests/test_build.py` ships the man page through the wheel, so a flag it misspells is an installed instruction.
 
-First decide if this review applies. Look for at least one of: `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, or a `docs/` directory with rule-bearing markdown. If none exist, print the skip result and stop.
+First decide if this review applies. Look for at least one of: `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `README.md`, or a lint config file (`oxlint.config.ts`, `.yamllint.yaml`, `pyproject.toml` `[tool.ruff]`/`[tool.mypy]`). If none exist, print the skip result and stop; a bare `docs/` directory without those is `specs-review.md`'s subject, not this one's.
 
 Review the following:
 
@@ -28,7 +28,7 @@ Review the following:
 
 4. Dependency drift
    - The required and optional dependency lists in `AGENTS.md` against `pyproject.toml` `dependencies` and `optional-dependencies`, including version floors.
-   - The `rebrew` path dependency and its role (`rebrew.workspace` for resolution, catalog and build-db for regen) against the imports in `src/recoverage/regen.py` and `_paths.py`. A dependency described as optional that is imported unconditionally is a real defect; report it as a finding, not as a doc fix.
+   - The `rebrew` dependency and its role (`rebrew.workspace` for resolution, `rebrew.coverage_project.load_project_coverage` for regen) against the imports in `src/recoverage/regen.py` (`ProjectCoverageError, load_project_coverage` from `rebrew.coverage_project`) and `_paths.py` (`CONFIG_NAME, find_root, read_config` from `rebrew.workspace`). A dependency described as optional that is imported unconditionally is a real defect; report it as a finding, not as a doc fix.
 
 5. Numbers and performance claims
    - Every measured or threshold constant asserted in prose, each checked against the file that owns it:
