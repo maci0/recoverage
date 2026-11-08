@@ -100,7 +100,11 @@ CRON_TZ=UTC
 
 `check-backup` exits 1 when the backup directory does not exist, holds no
 stamped archive, or its newest archive is older than `--max-age-hours`
-(default 25, one missed nightly run plus an hour of slack). A schedule that
+(default 25, one missed nightly run plus an hour of slack). It also verifies
+the newest archive before reporting fresh: age alone let a corrupt or
+truncated newest archive — including one a failed `backup` verify left
+behind — pass the monitor and then fail the restore, and a symlink named
+like a stamped archive never counts as a backup. A schedule that
 runs less often than daily passes its own `--max-age-hours`. Between
 drills, run `recoverage verify /srv/backups/nightly.tar` to re-prove an archive
 older runs wrote or that was copied to another volume; it writes nothing and

@@ -728,6 +728,43 @@ class TestBackupFreshness:
         with pytest.raises(BackupError, match="overdue"):
             check_backup_freshness(out)
 
+    def test_a_corrupt_newest_archive_is_not_fresh(self, db: Path, tmp_path: Path) -> None:
+        """Age alone is not freshness: a corrupt newest archive passes an mtime
+        check and then fails the restore it was meant to protect against."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20200101T000000.000000Z.tar")
+        (out / "coverage-20260101T000000.000000Z.tar").write_bytes(b"not a tar")
+        with pytest.raises(BackupError, match="does not verify"):
+            check_backup_freshness(out)
+
+    def test_a_symlink_named_like_an_archive_is_not_a_backup(self, tmp_path: Path) -> None:
+        """A link is not a backup: counting it let a symlink pass a freshness
+        monitor for bytes nobody wrote, while the prune path refuses links."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        target = out / "real.tar"
+        target.write_bytes(b"placeholder")
+        (out / "coverage-20260101T000000.000000Z.tar").symlink_to(target)
+        with pytest.raises(BackupError, match="no stamped backup"):
+            check_backup_freshness(out)
+
+    def test_a_failed_verify_leaves_no_archive_behind(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unverified archive left in the backup directory becomes its newest
+        file and reads as fresh on mtime alone."""
+        out = tmp_path / "backups"
+
+        def fail(path: Path) -> None:
+            raise BackupError("simulated verify failure")
+
+        monkeypatch.setattr(backup, "verify_backup", fail)
+        with pytest.raises(BackupError, match="simulated verify failure"):
+            write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        assert out.exists()
+        assert list(out.glob("*")) == []
+
     @pytest.mark.parametrize("bound", [float("inf"), float("nan"), -1.0])
     def test_a_non_finite_or_negative_bound_is_refused(self, tmp_path: Path, bound: float) -> None:
         """inf/nan compare False against every age, so an unguarded bound

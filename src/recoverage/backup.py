@@ -585,7 +585,18 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
         _atomic_write(destination, blob)
     except OSError as exc:
         raise BackupError(f"cannot write backup {destination}: {exc}") from exc
-    info = verify_backup(destination)
+    try:
+        info = verify_backup(destination)
+    except BackupError:
+        # A failed verify must not leave the unverified archive behind: it
+        # becomes the newest file in the backup directory, and a freshness
+        # monitor reading mtime alone would call it fresh while it cannot
+        # be restored. Remove it (best effort) so the directory holds only
+        # archives that were read back once.
+        with contextlib.suppress(OSError):
+            destination.unlink()
+        _fsync_dir(destination.parent)
+        raise
     _prune_old_archives(destination.parent)
     return info
 
@@ -798,6 +809,35 @@ def verify_archive_command(archive: Path) -> BackupInfo:
     return verify_backup(archive)
 
 
+def _newest_stamped_archive(directory: Path) -> Path | None:
+    """The newest stamped archive file in *directory*, or None.
+
+    Only regular files with this module's own name shape count: a symlink
+    pointing at an archive is not itself a backup (the prune path and the
+    document reader both refuse symlinks), and counting it let a link named
+    like a fresh archive pass a freshness monitor for bytes nobody wrote.
+    """
+    try:
+        candidates = [
+            path
+            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+            if path.is_file() and not path.is_symlink()
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+
+    def _mtime_ns(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    newest = max(candidates, key=_mtime_ns)
+    return newest if _mtime_ns(newest) else None
+
+
 def newest_archive_age_hours(directory: Path) -> float | None:
     """Age in hours of the newest stamped archive in *directory*, or None.
 
@@ -808,20 +848,9 @@ def newest_archive_age_hours(directory: Path) -> float | None:
     files never count as a backup. Read through the clock seam so a test
     drives the overdue crossing from a patched clock.
     """
-    try:
-        candidates = [
-            path
-            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-            if path.is_file()
-        ]
-    except OSError:
+    newest = _newest_stamped_archive(directory)
+    if newest is None:
         return None
-    if not candidates:
-        return None
-    newest = max(
-        candidates,
-        key=lambda path: path.stat().st_mtime_ns if path.exists() else 0,
-    )
     try:
         mtime = newest.stat().st_mtime_ns
     except OSError:
@@ -862,6 +891,17 @@ def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVE
             f"newest backup in {directory} is {age:.1f}h old, past the "
             f"{max_age_hours}h overdue bound; the backup schedule may have stopped"
         )
+    # Age alone is not freshness: a corrupt or truncated newest archive is the
+    # backup that will fail the restore, and it must fail this monitor too.
+    # The check that makes a backup a backup is reading it back.
+    newest = _newest_stamped_archive(directory)
+    if newest is not None:
+        try:
+            verify_backup(newest)
+        except BackupError as exc:
+            raise BackupError(
+                f"newest backup in {directory} does not verify and cannot be restored: {exc}"
+            ) from exc
 
 
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
