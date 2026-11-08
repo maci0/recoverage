@@ -688,7 +688,8 @@ class TestConfigureSecurityValidatesLikeTheCli:
     def test_refuses_values_no_client_could_use(self, kwargs: dict) -> None:
         from recoverage import server
 
-        with pytest.raises(config.ConfigError):
+        expected = "auth_token" if "auth_token" in kwargs else "cors_allowed_origins"
+        with pytest.raises(config.ConfigError, match=expected):
             server.configure_security(**kwargs)
 
     def test_stores_normalized_origins_and_a_usable_token(self) -> None:

@@ -530,7 +530,8 @@ class TestRestoreBackup:
 
         monkeypatch.setattr(backup, "_atomic_write", fail_write)
         monkeypatch.setattr(Path, "replace", fail_replace)
-        with pytest.raises(BackupError):
+        expected = "disk full" if failure == "stage" else "destination locked"
+        with pytest.raises(BackupError, match=expected):
             restore_backup(archive, destination, force=True)
         if original is not None:
             assert first.read_bytes() == original
@@ -577,7 +578,7 @@ class TestRestoreBackup:
         write_backup(source, archive)
         destination = tmp_path / "destination"
         (destination / "coverage-B.toml").mkdir(parents=True)
-        with pytest.raises(BackupError):
+        with pytest.raises(BackupError, match="cannot restore"):
             restore_backup(archive, destination, force=True)
         assert not (destination / "coverage-A.toml").exists()
 
@@ -602,7 +603,7 @@ class TestRestoreBackup:
             return real_replace(path, target)
 
         monkeypatch.setattr(Path, "replace", fail_replace)
-        with pytest.raises(BackupError):
+        with pytest.raises(BackupError, match="destination locked"):
             restore_backup(archive, destination, force=True)
         assert (destination / "coverage-A.toml").read_bytes() == (
             source / "coverage-A.toml"
@@ -680,7 +681,7 @@ class TestRestoreBackup:
                 info = tarfile.TarInfo(member.name)
                 info.size = len(data)
                 sink.addfile(info, io.BytesIO(data))
-        with pytest.raises(BackupError):
+        with pytest.raises(BackupError, match="does not match its manifest digest"):
             restore_backup(tampered, db)
         assert {p.name: p.read_bytes() for p in db.glob("coverage-*.toml")} == good
 
@@ -742,7 +743,7 @@ class TestRestoreBackup:
 
         document = next(db.glob("coverage-*.toml"))
         document.write_text("this is not toml = = =\n", encoding="utf-8")
-        with pytest.raises(BackupError):
+        with pytest.raises(BackupError, match="refusing to roll coverage back"):
             restore_backup(archive, db)
         restore_backup(archive, db, force=True)
         assert load_all_coverage_from(db)
