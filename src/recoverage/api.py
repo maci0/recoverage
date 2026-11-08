@@ -100,8 +100,14 @@ def register_cache_invalidator(invalidate: Callable[[], None]) -> None:
     Called by ``recoverage.webapp`` at import time, which is the one place
     that already imports every route module to mount its routes: the wiring
     lands beside the mounting, not in a consumer of it.
+
+    Idempotent per callable: the composition root imports ``webapp`` once,
+    but test harnesses and ``importlib.reload`` re-run the import, and the
+    list is process-lifetime — appending again would run the same
+    invalidation on every rebuild forever, once per reload.
     """
-    _EXTRA_INVALIDATORS.append(invalidate)
+    if invalidate not in _EXTRA_INVALIDATORS:
+        _EXTRA_INVALIDATORS.append(invalidate)
 
 
 def _clear_derived_caches() -> None:
@@ -1103,13 +1109,22 @@ def _ensure_db_watcher() -> None:
         if _DB_WATCHER_THREAD is not None and _DB_WATCHER_THREAD.is_alive():
             return
         _DB_WATCHER_STOP.clear()
-        _DB_WATCHER_THREAD = threading.Thread(
+        watcher = threading.Thread(
             target=_db_watcher_loop,
             args=(_DB_WATCHER_STOP,),
             name="recoverage-db-watcher",
             daemon=True,
         )
-        _DB_WATCHER_THREAD.start()
+        # Publish only after start() succeeds: a RuntimeError under thread
+        # exhaustion must not leave a never-started thread referenced, or
+        # every later ensure returns early (is_alive() is False for it, so
+        # it would replace it — but a retained dead reference also makes
+        # _stop_db_watcher join a thread that never ran, masking the real
+        # failure).  The caller in handle_api_events already rolls back
+        # its SSE registration on BaseException; this keeps the watcher
+        # half of that pair from leaking too.
+        watcher.start()
+        _DB_WATCHER_THREAD = watcher
 
 
 def _db_watcher() -> threading.Thread | None:
