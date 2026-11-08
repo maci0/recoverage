@@ -1,3 +1,5 @@
+import { useEffect } from "preact/compat";
+
 import type { ComponentChildren } from "preact";
 
 import type { SearchEntry } from "@/api";
@@ -43,17 +45,22 @@ export type SearchResultsProps = {
  * one match survived, guessing a spelling. The list is that answer, ordered by
  * address so it reads in the same order the map does, and capped by
  * `SEARCH_RESULT_LIMIT` in the shell. */
-export function SearchResults({
-  status,
-  results,
-  total,
-  section,
-  activeIndex,
-  listId,
-  optionId,
-  onPick,
-}: SearchResultsProps): ComponentChildren {
+export function SearchResults(props: SearchResultsProps): ComponentChildren {
+  const { status, results, total, section, activeIndex, listId, optionId, onPick } = props;
   const hidden = total - results.length;
+  // The row the arrows walked to is announced through `aria-activedescendant`
+  // and worn as a ring, but a row below the fold of the list's own scroll
+  // area is neither seen nor announced: the ring is on a row the reader cannot
+  // see, and Enter picks it blind. Scroll the active row into the list's
+  // viewport whenever the arrows move it, keeping focus in the field.
+  useEffect(() => {
+    if (activeIndex === null) {
+      return;
+    }
+    // The row's id is built from the search box's own id, so the selector
+    // needs no escaping: it is the same string `aria-activedescendant` names.
+    document.querySelector(`#${optionId(activeIndex)}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, optionId]);
   return (
     // Positioned under the box rather than in the topbar's flow: the topbar is
     // sticky and measured into `--topbar-h`, so a list that grew it would move

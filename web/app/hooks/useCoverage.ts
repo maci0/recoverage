@@ -19,6 +19,8 @@ export type Coverage = {
    * load and after a rebuild asks for them again. */
   stats: StatsPayload | null;
   statsError: string | null;
+  /** Re-run the /stats read after it failed, without refetching the cells. */
+  retryStats: () => void;
   loading: boolean;
   error: string | null;
   /** A section whose cells could not be fetched, with the reason. */
@@ -166,6 +168,16 @@ export function useCoverage(target: string, section: string): Coverage {
     return () => control.abort();
   }, [load, reloadToken, section, target]);
 
+  // The stats read lives in its own effect so its failure can be retried
+  // without refetching the cells: `retryStats` bumps the token the effect
+  // keys on, which is the same signal a rebuild uses. Held in a ref so the
+  // shell's retry can call it without the hook re-creating the callback.
+  const statsToken = useState(0);
+  const [statsRetry, bumpStatsRetry] = statsToken;
+  const retryStats = useCallback((): void => {
+    bumpStatsRetry((token) => token + 1);
+  }, [bumpStatsRetry]);
+
   // The stats are target-wide, so this asks once per (target, build) and not
   // per section: the section cells come from /data, the numbers from here.
   useEffect(() => {
@@ -190,7 +202,7 @@ export function useCoverage(target: string, section: string): Coverage {
       }
     })();
     return () => control.abort();
-  }, [reloadToken, target]);
+  }, [reloadToken, statsRetry, target]);
 
   const ensureCells = useCallback(
     (name: string): void => {
@@ -285,6 +297,7 @@ export function useCoverage(target: string, section: string): Coverage {
     paths,
     stats,
     statsError,
+    retryStats,
     loading,
     error: loadError,
     cellError,

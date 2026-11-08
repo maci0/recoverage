@@ -1285,6 +1285,7 @@ export function App() {
             <StatsStrip
               stats={coverage.stats}
               error={coverage.statsError}
+              onRetry={coverage.retryStats}
               loading={coverage.loading || holdMapArea}
               section={active?.name ?? null}
               filters={filters}

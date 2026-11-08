@@ -4951,6 +4951,25 @@ class TestSpaLocaleFormatting:
         assert "percentLabel(sectionPct)" in strip
         assert "count(summary.totalFunctions)" in strip
 
+    def test_the_stats_failure_line_carries_its_retry(self) -> None:
+        """A failed /stats read names the reason on the strip and stays
+        missing until the read is re-run, so the line itself has to carry
+        the way back. The map's own failure line has one; a strip with
+        only the reason is a dead end the reader escapes by finding the
+        map's Retry by eye. The retry re-runs /stats alone, not the cells,
+        which are already on screen."""
+        strip = _web("components/StatsStrip.tsx")
+        failure = strip.index("Coverage summary unavailable: {error}")
+        assert "onRetry" in strip[failure : failure + 400], (
+            "the stats failure line names no way back"
+        )
+        coverage = _web("hooks/useCoverage.ts")
+        assert "retryStats" in coverage
+        effect = coverage.index("statsRetry")
+        assert "retryStats" in coverage[effect : effect + 1200]
+        app = _web("App.tsx")
+        assert "onRetry={coverage.retryStats}" in app
+
     def test_the_section_figure_names_its_section(self) -> None:
         """The strip's last figure is the section's coverage, and on a project
         that is complete it reads word for word the same as the target's first
@@ -6165,6 +6184,18 @@ class TestSpaSearchIsACombobox:
         start = app.index("onChange={(event) => {\n                    setQuery")
         block = app[start : app.index("}}", start) + 2]
         assert "setActiveResult(null);" in block
+
+    def test_the_active_row_is_scrolled_into_the_lists_viewport(self) -> None:
+        """The active row is announced through `aria-activedescendant` and
+        worn as a ring, but a row below the fold of the capped list's own
+        scroll area neither shows nor is announced to the eye: Enter would
+        pick a row the reader never saw. The list scrolls the row the
+        arrows walked to into its own viewport, without moving focus out
+        of the field or scrolling the page."""
+        results = _web("components/SearchResults.tsx")
+        assert "scrollIntoView({ block: \"nearest\" })" in results
+        effect = results[results.index("useEffect(() => {") : results.index("useEffect(() => {") + 300]
+        assert "activeIndex" in effect
 
     def test_the_active_row_is_worn_not_merely_announced(self) -> None:
         """The option holds no focus, so the ring is the only cue a sighted

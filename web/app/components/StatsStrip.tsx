@@ -31,6 +31,8 @@ export type StatsStripProps = {
   stats: StatsPayload | null;
   /** Why the numbers are missing, when they are. */
   error: string | null;
+  /** Re-run the /stats read behind `error`, as the map's failure line does. */
+  onRetry?: (() => void) | undefined;
   /** A load is in flight, which is also the state a regen puts the strip in
    * while it runs for minutes. */
   loading: boolean;
@@ -52,6 +54,7 @@ export type StatsStripProps = {
 export function StatsStrip({
   stats,
   error,
+  onRetry,
   loading,
   section,
   filters,
@@ -67,6 +70,7 @@ export function StatsStrip({
       <Summary
         stats={stats}
         error={error}
+        onRetry={onRetry}
         loading={loading}
         section={row === undefined ? null : section}
         sectionPct={row?.coverage_pct ?? null}
@@ -170,12 +174,14 @@ function useMoves(scope: string | null, values: Record<string, number | null>): 
 function Summary({
   stats,
   error,
+  onRetry,
   loading,
   section,
   sectionPct,
 }: {
   stats: StatsPayload | null;
   error: string | null;
+  onRetry?: (() => void) | undefined;
   loading: boolean;
   section: string | null;
   sectionPct: number | null;
@@ -183,7 +189,20 @@ function Summary({
   const moves = useMoves(stats?.target ?? null, { coverage: stats?.summary.coveragePercent ?? null });
   if (stats === null) {
     if (error !== null) {
-      return <p className="m-0 text-data text-text-muted">Coverage summary unavailable: {error}</p>;
+      // The failure line names the reason and carries the way back: the
+      // pills below still filter the map, but the figures stay missing
+      // until the read is re-run, so a line with no control is a dead end
+      // the reader has to leave for the map's own Retry to escape.
+      return (
+        <p className="m-0 flex flex-wrap items-center gap-3 text-data text-text-muted">
+          <span className="min-w-0">Coverage summary unavailable: {error}</span>
+          {onRetry === undefined ? null : (
+            <Button size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          )}
+        </p>
+      );
     }
     return loading ? (
       <p className="m-0 text-data text-text-muted">Loading the coverage summary…</p>
