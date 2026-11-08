@@ -157,7 +157,7 @@ export type Geometry = {
 const GAP = 2;
 const PAD = 8;
 /** Columns per row when a section declares none, matching rebrew's
- * `build_db.DEFAULT_GRID_GEOMETRY` (a 0 is "absent", not "no columns"). */
+ * `coverage_db.DEFAULT_GRID_GEOMETRY` (a 0 is "absent", not "no columns"). */
 export const DEFAULT_GRID_COLUMNS = 64;
 /** The ceiling Potato Mode clamps to (`potato._MAX_GRID_COLUMNS`), so both
  * surfaces draw the same document at the same lattice width. */

@@ -7,7 +7,7 @@ import json
 import pytest
 
 contract = pytest.importorskip(
-    "rebrew.coverage_input_contract", reason="requires the Rebrew 6.22 candidate"
+    "rebrew.coverage_input_contract", reason="requires Rebrew 6.23.1 with coverage_input_contract"
 )
 CoverageInputError = contract.CoverageInputError
 canonical_coverage_input = contract.canonical_coverage_input

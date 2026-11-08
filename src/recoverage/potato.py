@@ -91,7 +91,7 @@ _log = logging.getLogger("recoverage")
 # ── UI Constants ────────────────────────────────────────────────────────────────────────
 # Every state rebrew's coverage_db can write to cells.state needs a key here, or
 # the grid falls back to COLORS["none"] and paints the cell as an undocumented
-# gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
+# gap.  That fallback is a data-fidelity bug, not a cosmetic one: coverage_db
 # counts 'verified' as an exact match (section_cell_stats folds it into
 # exact_count) and covered_bytes covers every state != 'none', so a VERIFIED
 # byte shown as "undocumented" contradicts the number printed beside it.  The
@@ -120,7 +120,7 @@ COLORS = {
     "data": "#4f7088",  # cell-live
     "thunk": "#7063a0",  # cell-thunk
     "none": "#212124",  # cell-unlit
-    # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
+    # Data-metadata verdicts.  VERIFIED is a match (coverage_db counts it as
     # exact), so it takes the exact fill; DRIFT, DISPLACED and UNCHECKED are
     # the problem states here, and all three take _COLORS_PROBLEM, the fill the
     # SPA paints the problem slot with.  DISPLACED (the link map places the

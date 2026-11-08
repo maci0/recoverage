@@ -459,7 +459,7 @@ _VERDICT_COLORS: dict[str, str] = {
 }
 
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
-# between the commands that embed it in their database-error messages.
+# between the commands that embed it in their coverage-error messages.
 _REBUILD_HINT = "(inspect project inputs or RECOVERAGE_SNAPSHOTS)"
 
 #: The spellings a path argument ends with to name a directory.
@@ -502,8 +502,8 @@ def _use_utf8_stdout() -> None:
     """Make stdout encode UTF-8, whatever the environment's locale says.
 
     `export`, `check`, `stats`, `serve`, `config` and `regen` write target ids,
-    section names and filesystem paths straight from the database and the
-    project, and those come out of PE images and off a disk: any byte is
+    section names and filesystem paths straight from the coverage documents
+    and the project, and those come out of PE images and off a disk: any byte is
     possible.  stdout carries the locale's codec, so under LC_ALL=C (with
     locale coercion off) or a Windows code page the write raises
     UnicodeEncodeError part-way through the output, and for `serve` that is
@@ -547,7 +547,7 @@ def _utf8_stream(stream: IO[str]) -> IO[str]:
     the user is redirecting into a spreadsheet ends up truncated.
     Re-decoding the existing buffer keeps one destination and the ``\\n``
     line terminator's "written once, natively" contract; ``errors="replace"``
-    keeps a lone surrogate from the database out of the crash path.  The
+    keeps a lone surrogate from the coverage document out of the crash path.  The
     caller must detach the result, since a wrapper's destructor closes the
     buffer it wraps.
     """
@@ -975,7 +975,7 @@ def _serve_regen(root: Path) -> None:
 
     * ``metrics.REGEN`` was never opened, so ``/api/health``'s ``regen`` block
       read ``runs: 0, in_flight: 0, last_ok: null`` for the life of a server
-      that had just rebuilt the whole database, and a later failed
+      that had just rebuilt the whole coverage view, and a later failed
       ``POST /api/regen`` was the run count of one.  The two entry points into
       ONE pipeline disagreed about how many runs there had ever been.
     * The outcome reached the log as a bare ``Error: ...`` printed by the

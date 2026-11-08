@@ -18,7 +18,7 @@ from recoverage import ops
 
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("rebrew.coverage_input_contract") is None,
-    reason="requires the Rebrew 6.22 candidate",
+    reason="requires Rebrew 6.23.1 with coverage_input_contract",
 )
 
 START_TIMEOUT = 30.0

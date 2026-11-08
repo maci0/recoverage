@@ -25,9 +25,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inputs on all four ops: a request carries the snapshot's files and binary as
   objects (`key` under `--filestore`, or `url`), the worker stages and checks
   them, and scoring needs the backend's `coverage_input` envelope with its
-  digest and verification records. Snapshot requests need a Rebrew source with
-  `retained_target_snapshot` and `coverage_input_contract`; 6.20.0 has neither.
-  Rebuilt from an uncommitted 2026-11-05 change that was never pushed.
+  digest and verification records. Snapshot requests use the pinned Rebrew
+  6.23.1, which carries `retained_target_snapshot` and
+  `coverage_input_contract`.
 - `recoverage ops call` answers the relumea backend's `recoverage.coverage_gate`
   and `recoverage.coverage_export` ops: one JSON request on stdin, one JSON
   reply on stdout, and a target named by its binary's SHA-256. `--workspace`

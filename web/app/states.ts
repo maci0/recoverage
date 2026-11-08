@@ -18,7 +18,7 @@ import { count, plural } from "@/lib/format";
 /** Cells are packed into palette slots.
  *
  * Every state rebrew can write is listed: an unlisted one must not fall through
- * to 0, because `build_db` counts `verified` as an exact match and covered
+ * to 0, because `coverage_db` counts `verified` as an exact match and covered
  * bytes cover every state except `none`, so painting one as an undocumented gap
  * contradicts the number beside it.  The tooling-failure states share slot 7
  * ("other"): distinguishable from a gap without spending a palette entry each. */

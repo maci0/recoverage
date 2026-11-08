@@ -2104,7 +2104,7 @@ _DEFAULT_SLICE_SIZE = 256
 _MAX_SEARCH_CHARS = _server.MAX_SEARCH_CHARS
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
-#: (``rebrew.workspace.status.COVERAGE_DB_STATUSES``, which build_db installs as
+#: (``rebrew.workspace.status.COVERAGE_DB_STATUSES``, which coverage_db installs as
 #: ``FUNCTION_DB_STATUSES``) read from rebrew rather than restated, so a status
 #: rebrew adds is filterable the day it lands, and one it withdraws stops being
 #: accepted the day it goes.  The same rule ``server.DATA_MARKER_TYPES`` follows
