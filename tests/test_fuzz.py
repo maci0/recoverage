@@ -5770,7 +5770,11 @@ class TestBackupArchiveBytes:
         missing_digest = self._archive(
             [("coverage-A.toml", data)],
             json.dumps(
-                {"format": 1, "created": "x", "members": [{"name": "coverage-A.toml", "size": len(data)}]}
+                {
+                    "format": 1,
+                    "created": "x",
+                    "members": [{"name": "coverage-A.toml", "size": len(data)}],
+                }
             ).encode(),
         )
         string_member = self._archive(
@@ -5809,6 +5813,178 @@ class TestBackupArchiveBytes:
             num_tokens=(b"0", b"1", b"-1", b"99999999999999999999", b"1.5", b"true"),
             label="TestBackupArchiveBytes.test_no_archive_escapes_as_anything_but_backup_error",
         )
+
+
+_OPS_SEEDS = [
+    b'{"project_dir": "/tmp/x", "sha256": "' + b"a" * 64 + b'", "min_coverage": 50}',
+    b'{"project_dir": "/tmp/x", "sha256": "' + b"a" * 64 + b'", "min_coverage": 87.5}',
+    b'{"project_dir": "/tmp/x", "sha256": "'
+    + b"a" * 64
+    + b'", "min_coverage": 50, "metric": "verified", "section": ".text"}',
+    b'{"project_dir": "/tmp/x", "sha256": "'
+    + b"a" * 64
+    + b'", "min_coverage": 50, "format": "json"}',
+    b'{"project_dir": "/tmp/x", "sha256": "'
+    + b"a" * 64
+    + b'", "min_coverage": 50, "files": [{"path": "a", "digest": "'
+    + b"b" * 64
+    + b'", "size": 1}], "rebrew_target": "t", "binary_key": "k", '
+    + b'"coverage_input": {}, "coverage_input_digest": "x", "verification_records": []}',
+    b"{}",
+    b"[]",
+    b"",
+    b"null",
+    b'{"project_dir": "/tmp/x", "sha256": "' + b"a" * 64 + b'", "min_coverage": 1e309}',
+    b'{"project_dir": "/tmp/x", "sha256": "' + b"a" * 64 + b'", "min_coverage": NaN}',
+]
+
+#: Structure tokens for the ops JSON surface: byte mutation alone never
+#: reaches the typed-field refusals (unknown field, wrong type, missing
+#: field, retained-snapshot envelope) because a mutated seed rarely stays
+#: valid JSON with the right keys.  Each token is a complete field spelling
+#: so splicing one into a seed exercises a distinct decode arm.
+_OPS_TOKENS = (
+    b'"project_dir": "/tmp/x"',
+    b'"project_dir": 123',
+    b'"project_dir": null',
+    b'"sha256": "' + b"a" * 64 + b'"',
+    b'"sha256": "A"',
+    b'"sha256": ""',
+    b'"min_coverage": 50',
+    b'"min_coverage": true',
+    b'"min_coverage": "50"',
+    b'"min_coverage": 1e309',
+    b'"min_coverage": -1',
+    b'"min_coverage": 101',
+    b'"min_coverage": NaN',
+    b'"min_coverage": Infinity',
+    b'"format": "json"',
+    b'"format": "../etc/passwd"',
+    b'"metric": "verified"',
+    b'"metric": "identified"',
+    b'"metric": 1',
+    b'"files": []',
+    b'"files": [{"path": "a", "digest": "' + b"b" * 64 + b'", "size": 1}]',
+    b'"files": [{"path": "../x", "digest": "x", "size": -1}]',
+    b'"files": [{"path": "a", "digest": "x", "size": true}]',
+    b'"files": ["a"]',
+    b'"coverage_input": []',
+    b'"coverage_input": {"a": 1}',
+    b'"verification_records": []',
+    b'"verification_records": [{}]',
+    (
+        b'"verification_records": [{"source": "s", "va": 1, "size": 2, '
+        b'"status": "EXACT", "match_count": 1}]'
+    ),
+    b'"verification_records": [{"source": "s", "va": "1", "size": 2}]',
+    b'"unknown_field": 1',
+    b'"project_dir": "/tmp/x", "project_dir": "/tmp/y"',
+)
+
+
+class TestOpsDispatch:
+    """``recoverage.ops.dispatch`` — the JSON op worker, the other structured-input surface.
+
+    The HTTP campaigns fuzz query strings and one batch POST body; the ops
+    worker is the only other entry point that decodes a whole
+    attacker-supplied JSON document and decodes it against a typed request
+    schema (``parse_request`` / ``_decode``) before any file is touched.  It
+    had no fuzz coverage at all: every malformed shape fell to whichever
+    arm happened to see it first, and a decoder assuming a field's type
+    (``KeyError``, ``TypeError``) would surface as a 500 engine error or a
+    process crash instead of the documented ``invalid-request`` refusal.
+
+    Contract under fuzz, for every op name and every mutated body:
+
+    * ``dispatch`` never raises; it answers ``(status, body)`` with a
+      status in the documented set;
+    * the body is strict JSON (no ``NaN``/``Infinity`` token a non-Python
+      JSON parser rejects) and, on a refusal, carries the
+      ``{"error", "detail", "status"}`` envelope with the status matching
+      the tuple's;
+    * a 200 body is a JSON object (the reply document), never a traceback;
+    * no internal path or exception class leaks into the reply.
+    """
+
+    _OPS_NAMES = (
+        "recoverage.coverage_gate",
+        "recoverage.coverage_export",
+        "recoverage.coverage_plan",
+        "recoverage.coverage_map",
+        "recoverage.unknown",
+        "",
+    )
+
+    def _config(self, tmp_path: Path) -> Any:
+        from recoverage.ops import WorkerConfig
+
+        return WorkerConfig(workspace=tmp_path)
+
+    def test_dispatch_never_raises_and_answers_the_envelope(self, tmp_path: Path) -> None:
+        from recoverage.ops import dispatch
+
+        config = self._config(tmp_path)
+
+        def check(data: bytes) -> None:
+            for name in self._OPS_NAMES:
+                try:
+                    status, body = dispatch(config, name, data)
+                except BaseException as exc:
+                    raise AssertionError(
+                        f"op={name!r}: dispatch raised {type(exc).__name__}: "
+                        f"{exc} for {data[:200]!r}"
+                    ) from exc
+                assert status in (200, 400, 404, 409, 413, 500), (
+                    f"op={name!r}: status {status} for {data[:200]!r}: {body[:200]!r}"
+                )
+                text = body.decode("utf-8")
+                for marker in _LEAK_MARKERS:
+                    assert marker not in text, f"op={name!r}: leaks {marker!r}: {text[:300]!r}"
+                assert "Traceback" not in text, f"op={name!r}: leaks traceback: {text[:300]!r}"
+                payload = _strict_json(text)
+                if status >= 400:
+                    assert isinstance(payload, dict), f"op={name!r}: refusal not an object"
+                    assert isinstance(payload.get("error"), str) and payload["error"], (
+                        f"op={name!r}: refusal has no error label: {payload!r}"
+                    )
+                    assert isinstance(payload.get("detail"), str), (
+                        f"op={name!r}: refusal has no detail: {payload!r}"
+                    )
+                    assert payload.get("status") == status, (
+                        f"op={name!r}: envelope status {payload.get('status')!r} != {status}"
+                    )
+                else:
+                    assert isinstance(payload, dict), (
+                        f"op={name!r}: 200 reply is not an object: {payload!r}"
+                    )
+
+        _fuzz(
+            _OPS_SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=_OPS_TOKENS,
+            num_tokens=_OPS_TOKENS,
+            label="TestOpsDispatch.test_dispatch_never_raises_and_answers_the_envelope",
+        )
+
+    def test_a_valid_request_is_never_accepted_as_a_different_op(self, tmp_path: Path) -> None:
+        """Pair assertion across the name/body boundary.
+
+        The same well-formed body must not be answered as a different op's
+        reply: dispatching the gate seed under the export name (or an
+        unknown name) must refuse, never echo a 200 document.  A routing
+        regression that ignored the op name would answer 200 for every
+        name with one op's body.
+        """
+        from recoverage.ops import dispatch
+
+        config = self._config(tmp_path)
+        seed = _OPS_SEEDS[0]
+        for name in ("recoverage.unknown", "", "coverage_gate"):
+            status, body = dispatch(config, name, seed)
+            assert status == 404, f"op={name!r}: {status}: {body[:200]!r}"
+            payload = _strict_json(body.decode("utf-8"))
+            assert payload.get("error") == "unknown-op", f"op={name!r}: {payload!r}"
 
 
 class TestCampaignSeeds:
