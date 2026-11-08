@@ -1032,7 +1032,7 @@ export function App() {
         <div className="flex min-w-0 flex-col items-start gap-x-5 gap-y-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex items-center gap-2">
             <Mark />
-            <h1 className="title m-0 text-intro font-bold leading-title tracking-logo">recoverage</h1>
+            <h1 className="title m-0 text-figure font-bold leading-title tracking-logo">recoverage</h1>
           </div>
           {/* A tablist, not a row of toggle buttons: the section tabs select
               what the ONE panel below them shows, and the pattern pairs the
