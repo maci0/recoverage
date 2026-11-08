@@ -805,6 +805,27 @@ def truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     cut = value[:limit]
+    # Extend past continuation code points the cut landed before its base:
+    # combining marks (Mn/Me/Mc + combining class) and emoji skin-tone
+    # modifiers are part of the preceding grapheme, and a trailing ZWJ
+    # joins the glyph after it, so a ZWJ emoji sequence cut at the base
+    # must carry the whole sequence.  Mirrors ``ops._bounded`` without
+    # pulling that module's DETAIL cap.  Reuse unicodedata lazily via the
+    # module import already at top of file.
+    idx = len(cut)
+    while idx < len(value):
+        char = value[idx]
+        if (
+            unicodedata.combining(char)
+            or unicodedata.category(char) in ("Cf", "Mn", "Me", "Mc")
+            or (unicodedata.category(char) == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff")
+            or (idx > 0 and value[idx - 1] == "\u200d")
+        ):
+            idx += 1
+            continue
+        break
+    if idx > len(cut):
+        cut = value[:idx]
     cut = cut.removesuffix("\u200d")
     trailing_ri = 0
     for char in reversed(cut):

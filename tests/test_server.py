@@ -95,6 +95,7 @@ from recoverage.server import (
     origin_is_this_dashboard,
     select_static_variant,
     static_variant_key,
+    truncate_text,
     verify_by_va,
 )
 from recoverage.server import (
@@ -883,6 +884,42 @@ class TestSearchFolding:
             (None, ""),
         ):
             assert fold_match_folded(haystack, fold_needle(needle)) == fold_match(haystack, needle)
+
+
+class TestTruncateText:
+    """The cap must not sever a grapheme cluster.
+
+    ``value[:limit]`` cuts code points, so a cap can land between a base
+    and its combining mark, inside a ZWJ emoji sequence, or between the
+    two Regional Indicators of a flag.  The fixed helper carries the
+    continuation with the base, like ``ops._bounded`` does.
+    """
+
+    def test_combining_mark_is_kept_with_its_base(self) -> None:
+        combining_acute = "\u0301"
+        value = "x" * 399 + "e" + combining_acute + "tail"
+        assert truncate_text(value, 400).endswith("e" + combining_acute)
+
+    def test_zwj_sequence_is_kept_whole(self) -> None:
+        woman_technologist = "\U0001f469\u200d\U0001f4bb"
+        value = "x" * 398 + woman_technologist + "tail"
+        assert truncate_text(value, 400).endswith(woman_technologist)
+
+    def test_skin_tone_modifier_is_kept_with_its_base(self) -> None:
+        wave_medium = "\U0001f44b\U0001f3fd"
+        value = "x" * 399 + wave_medium + "tail"
+        assert truncate_text(value, 400).endswith(wave_medium)
+
+    def test_lone_regional_indicator_is_dropped(self) -> None:
+        flag = "\U0001f1e6\U0001f1e7"
+        value = "x" * 399 + flag + "tail"
+        result = truncate_text(value, 400)
+        assert chr(0x1F1E6) not in result
+        assert result.endswith("x")
+
+    def test_ascii_and_short_values_pass_through(self) -> None:
+        assert truncate_text("hello world", 5) == "hello"
+        assert truncate_text("short", 10) == "short"
 
 
 class TestSearchColumnGuards:
