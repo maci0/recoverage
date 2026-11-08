@@ -40,7 +40,7 @@ lazy import bottle
 
 import recoverage.api as _api  # mounts /api/* routes on server.app
 import recoverage.potato as _potato  # mounts /potato on server.app
-import recoverage.ui  # noqa: F401 — mounts / and the static routes
+import recoverage.ui  # noqa: F401
 from recoverage.server import _json_err, _log_safe, app, request
 
 __all__ = ["app"]

@@ -362,7 +362,7 @@ class StructuredFormatter(logging.Formatter):
     carry no fields, and the formatter must not invent any.
     """
 
-    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 - logging's own name
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802
         # Imported here, not at module scope: the CLI deliberately reaches for
         # the server lazily so `recoverage stats` does not import bottle.  By
         # the time a record is formatted, ``serve`` has already imported it, so
@@ -1350,7 +1350,7 @@ def _is_browser_origin(value: str) -> bool:
     if not parts.netloc or parts.username is not None or parts.password is not None:
         return False
     try:
-        parts.port  # noqa: B018  -- raises ValueError on a non-numeric port
+        _ = parts.port
     except ValueError:
         return False
     return bool(parts.hostname)

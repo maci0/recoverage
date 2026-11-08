@@ -20,7 +20,7 @@ import pytest
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
-import lint_html  # noqa: E402 — tools/ is on sys.path on the line above
+import lint_html  # noqa: E402
 
 
 class _Completed:
