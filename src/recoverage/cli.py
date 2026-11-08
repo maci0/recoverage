@@ -2668,6 +2668,9 @@ def open_cmd(
         help="Address the running server is bound to (default: "
         f"{config.DEFAULT_BIND}; env: RECOVERAGE_BIND)",
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Errors on stderr are a single JSON object"
+    ),
     no_color: bool = _no_color_option(),
 ) -> None:
     """Open the dashboard in a browser.
@@ -2688,27 +2691,24 @@ def open_cmd(
     script or a container entrypoint that runs this and finds nothing open
     learns why.
     """
+    json_output = _json_on(json_output)
     _check_env_or_exit()
     try:
         resolved_port = config.port() if port is None else _checked_port(port)
     except config.ConfigError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
+        _fail(f"Error: {exc}", str(exc), 2, json_output)
     if resolved_port == config.MIN_PORT:
         source = "RECOVERAGE_PORT" if port is None else "--port"
-        _secho(
-            f"Error: {source} 0 is not an address: it asks the server for a free "
+        message = (
+            f"{source} 0 is not an address: it asks the server for a free "
             "port of the OS's choosing. Open the URL from the serve banner, or "
-            "pass the port it printed.",
-            fg=typer.colors.RED,
-            err=True,
+            "pass the port it printed."
         )
-        raise typer.Exit(2) from None
+        _fail(f"Error: {message}", message, 2, json_output)
     try:
         resolved_bind = config.bind() if bind is None else config.validate_bind(bind, "--bind")
     except config.ConfigError as exc:
-        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(2) from None
+        _fail(f"Error: {exc}", str(exc), 2, json_output)
     # The same rule `serve` opens its own tab with, so a deployment that moved
     # off loopback lands on the server that is actually listening.
     url = dashboard_url(resolved_bind, resolved_port)
@@ -2730,13 +2730,11 @@ def open_cmd(
             err=True,
         )
     if not open_browser(url):
-        _secho(
-            f"Error: no browser available to open {url}. Open the URL by hand, "
-            "or check that a desktop opener (xdg-open, open) is installed.",
-            fg=typer.colors.RED,
-            err=True,
+        message = (
+            f"no browser available to open {url}. Open the URL by hand, "
+            "or check that a desktop opener (xdg-open, open) is installed."
         )
-        raise typer.Exit(1)
+        _fail(f"Error: {message}", message, 1, json_output)
 
 
 @app.command("config")
@@ -2783,6 +2781,12 @@ def config_cmd(
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
     if refusal is not None:
+        # The settings are already on stdout (the preflight data); the
+        # refusal is the error, so in JSON mode it is the one stderr object
+        # appended after them, not a bare prose line beside JSON on stdout.
+        if as_json:
+            _write_error("failure", refusal, "")
+            raise typer.Exit(1) from None
         _secho(refusal, fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 

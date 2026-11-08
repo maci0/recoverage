@@ -1822,6 +1822,26 @@ class TestOpenPort:
         result = runner.invoke(app, ["open"])
         assert result.exit_code == 2
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["-o", "json", "open", "--port", "0"],
+            ["open", "--json", "--port", "abc"],
+            ["-o", "json", "open", "--bind", "10.0.0.5:80"],
+        ],
+    )
+    def test_open_usage_errors_are_a_json_envelope_in_json_mode(self, argv: list[str]) -> None:
+        """Every `open` refusal goes through the same envelope as the rest.
+
+        `open` exited through bare _secho, so `-o json` produced prose on
+        stderr beside a JSON-shaped stdout contract: a script parsing the
+        last stderr line as the error object read a sentence, not an object.
+        """
+        result = runner.invoke(app, argv)
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert _error_body(result)["kind"] == "usage"
+
     def test_no_browser_exits_1(self, monkeypatch: Any) -> None:
         """Nothing was launched, so exit 0 would be a false success.
 
@@ -1833,6 +1853,13 @@ class TestOpenPort:
         result = runner.invoke(app, ["open"])
         assert result.exit_code == 1
         assert "no browser available" in result.stderr
+
+    def test_no_browser_failure_is_a_json_envelope_in_json_mode(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: False)
+        result = runner.invoke(app, ["open", "--json"])
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert _error_body(result)["kind"] == "failure"
 
     def test_nothing_reaches_stdout(self, monkeypatch: Any) -> None:
         """`open` writes status, not data, so a failed launch cannot read as
@@ -2689,6 +2716,19 @@ class TestAllowRemoteWithoutRemoteBind:
 
         assert result.exit_code == 0
         assert "allow-remote is set but --bind 127.0.0.1" in result.output
+
+    def test_a_remote_bind_refusal_is_a_json_envelope_in_json_mode(self, monkeypatch: Any) -> None:
+        """The `config` preflight refusal is the error, not prose beside JSON.
+
+        The settings go to stdout either way; in JSON mode the refusal must
+        still be the one stderr object appended after them, which a script
+        reads as the failure rather than as a stray text line.
+        """
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        result = runner.invoke(app, ["-o", "json", "config"])
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["bind"] == "0.0.0.0"
+        assert _error_body(result)["kind"] == "failure"
 
     def test_a_remote_bind_with_the_acknowledgment_does_not_warn(self, monkeypatch: Any) -> None:
         monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
