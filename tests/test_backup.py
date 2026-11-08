@@ -985,3 +985,21 @@ class TestCheckBackupBoundParsing:
         write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
         result = runner.invoke(app, ["check-backup", str(out), "--max-age-hours", "25.5"])
         assert result.exit_code == 0, result.output
+
+    def test_a_bound_wider_than_a_float_is_a_usage_error(self, tmp_path: Path) -> None:
+        """A bound past the float range must not overflow to infinity.
+
+        ``_checked_max_age_hours`` builds the value from integers instead of
+        through ``float()``; a digit run wide enough to overflow the float
+        used to reach the comparison as ``inf`` (or crash with ``OverflowError``),
+        so the stale-backup monitor read every age as fresh.  That is the
+        failure ``--min-coverage`` already guards against, and the one this
+        bound exists to catch: the monitor must refuse rather than pass.
+        """
+        db = build_synthetic_coverage(tmp_path / "db").parent
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        result = runner.invoke(app, ["check-backup", str(out), "--max-age-hours", "1" * 400])
+        assert result.exit_code == 2, result.output
+        assert "--max-age-hours" in result.output + str(result.stderr or "")

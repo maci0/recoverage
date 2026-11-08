@@ -936,6 +936,22 @@ class TestCheckCommand:
         result = runner.invoke(app, ["check", "--min-coverage", "abc"])
         assert result.exit_code == 2
 
+    def test_check_min_coverage_wider_than_a_float_is_a_usage_error(self) -> None:
+        """A gate wider than a float is usage-error 2, not a traceback.
+
+        Building the threshold from integers overflows ``float()`` on a long
+        digit run, so the parse must refuse it the way it refuses any other
+        unusable spelling rather than letting the OverflowError escape as a
+        traceback (exit 1) instead of the usage-error the caller reports.
+        """
+        result = runner.invoke(app, ["check", "--min-coverage", "1" * 400])
+        assert result.exit_code == 2, (result.output, result.exception)
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert (
+            "min-coverage" in result.output.lower()
+            or "min-coverage" in (result.stderr_bytes or b"").decode().lower()
+        )
+
     def test_check_nonexistent_section(self) -> None:
         """A --section matching nothing is an error, not a gate failure: exit 1
         alone would also accept a genuine coverage failure, so the message and

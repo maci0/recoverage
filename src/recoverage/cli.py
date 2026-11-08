@@ -8,6 +8,7 @@ import enum
 import io
 import json
 import logging
+import math
 import os
 import platform
 import signal
@@ -2110,7 +2111,22 @@ def _checked_max_age_hours(value: str, json_output: bool) -> float:
             parsed = whole_int + frac_int / scale if frac else float(whole_int)
         except ValueError:
             parsed = None
-    if parsed is None or parsed < 0:
+        except OverflowError:
+            # A digit run wide enough to overflow ``float()``: the value is
+            # not a bound anyone can schedule against, so refuse it here
+            # rather than returning an infinity the caller would compare
+            # against silently.
+            _fail(
+                f"Error: --max-age-hours is not a valid bound: {value!r}.",
+                "--max-age-hours is not a valid bound",
+                2,
+                json_output,
+            )
+    # An absurdly long digit run overflows ``float()`` to ``inf`` instead of
+    # being refused by the parse, so finiteness is a separate guard: the
+    # bound is a comparison, and a non-finite one can never be a "past this
+    # age" monitor.
+    if parsed is None or parsed < 0 or not math.isfinite(parsed):
         _fail(
             f"Error: --max-age-hours is not a valid bound: {value!r}.",
             "--max-age-hours is not a valid bound",
@@ -2152,7 +2168,7 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
                 parsed = -parsed
             if not (0.0 <= parsed <= 100.0):
                 parsed = None
-        except ValueError:
+        except ValueError, OverflowError:
             parsed = None
     if parsed is None:
         _fail(
