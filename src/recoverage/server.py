@@ -645,25 +645,53 @@ def _contained_source_path(
     return c_path
 
 
+_FUNCTION_STORE_CACHE: dict[tuple[str, Any, str], Path] = {}
+_FUNCTION_STORE_CACHE_LOCK = threading.Lock()
+_FUNCTION_STORE_CACHE_MAX = 64
+
+
 def _function_store_dir(project_dir: Path, target: str) -> Path | None:
-    """Directory of ``rebrew-functions.toml`` for *target*, or None when the project has none."""
-    from rebrew.config import ConfigError, load_config
+    """Directory of ``rebrew-functions.toml`` for *target*, or None when the project has none.
+
+    Memoized on the config stat: :func:`rebrew.config.load_config` parses
+    ``rebrew-project.toml`` on every call (~1-3 ms), so a batch lookup that
+    attached documentation per row paid it once per row.  The stat is the
+    same token :func:`_get_targets_config` keys on, so an edit that moves
+    ``metadata_dir`` invalidates the entry.  What is cached is the resolved
+    directory, not the existence verdict: ``is_file()`` still runs per call,
+    so a store file created after the resolution is seen.  A failed config
+    read is not cached and is retried on the next call, like the config memo.
+    """
+    fingerprint = config_fingerprint(project_dir)
+    key = (str(project_dir), fingerprint, target)
+    with _FUNCTION_STORE_CACHE_LOCK:
+        if key in _FUNCTION_STORE_CACHE:
+            directory = _FUNCTION_STORE_CACHE[key]
+            _touch(_FUNCTION_STORE_CACHE, key)
+        else:
+            directory = None
+    if directory is None:
+        from rebrew.config import ConfigError, load_config
+
+        try:
+            cfg = load_config(project_dir, target=target)
+        except ConfigError:
+            try:
+                cfg = load_config(project_dir)
+            except ConfigError as exc:
+                _log.debug(
+                    "Function store for target %s unreadable: %s: %s",
+                    _log_safe(target),
+                    type(exc).__name__,
+                    _log_safe(str(exc)),
+                )
+                return None
+        directory = Path(cfg.metadata_dir)
+        with _FUNCTION_STORE_CACHE_LOCK:
+            _evict_oldest(_FUNCTION_STORE_CACHE, _FUNCTION_STORE_CACHE_MAX)
+            _FUNCTION_STORE_CACHE[key] = directory
     from rebrew.metadata.functions import METADATA_FILENAME
 
-    try:
-        cfg = load_config(project_dir, target=target)
-    except ConfigError:
-        try:
-            cfg = load_config(project_dir)
-        except ConfigError as exc:
-            _log.debug(
-                "Function store for target %s unreadable: %s: %s",
-                _log_safe(target),
-                type(exc).__name__,
-                _log_safe(str(exc)),
-            )
-            return None
-    directory = Path(cfg.metadata_dir)
     if (directory / METADATA_FILENAME).is_file():
         return directory
     return None
@@ -2053,6 +2081,8 @@ def clear_target_cache() -> None:
         _TOML_CONFIG_CACHE = None
         _TOML_CACHE_MTIME = None
         _RESOLVED_TARGETS_CACHE = None
+    with _FUNCTION_STORE_CACHE_LOCK:
+        _FUNCTION_STORE_CACHE.clear()
 
 
 def _target_filename(tid: str, t_info: Any) -> str:
