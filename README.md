@@ -183,7 +183,7 @@ the process listing). Validation, signals and service examples are under
 `.env.example` carries the same surface in a copy-pasteable form, commented
 out, each variable with its stock value and a note on what it accepts. It is
 what a `systemd` `EnvironmentFile` or a container spec is drafted from.
-`RECOVERAGE_BACKUP_DIR` and `RECOVERAGE_DEV_API` are not in it yet;
+`RECOVERAGE_DEV_API` is not in it (it is a frontend dev-server proxy target, not a deployment setting);
 `tests/test_config.py` fails when any other variable in `config.KNOWN_VARS` is
 missing from it.
 

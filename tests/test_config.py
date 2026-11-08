@@ -1288,15 +1288,11 @@ class TestEnvExample:
     #: (tests/test_build.py, ``_NOT_A_SETTING``), so the two artifacts cannot
     #: drift apart.
     #:
-    #: ``RECOVERAGE_BACKUP_DIR`` is here for a different reason and the
-    #: distinction matters: it is a real deployment setting, read by
+    #: ``RECOVERAGE_BACKUP_DIR`` is a real deployment setting, read by
     #: `recoverage backup`, documented in the man page and in
-    #: `docs/RECOVERY.md`, and it belongs on a line here like the rest. It is
-    #: listed as an exception ONLY until that line is added — a backup operator
-    #: drafting a unit file from this file gets no `RECOVERAGE_BACKUP_DIR`, and
-    #: the README's cron example writes it by hand instead. Remove it from this
-    #: set in the same change that adds the line.
-    _NOT_A_SETTING = frozenset({"RECOVERAGE_BACKUP_DIR", "RECOVERAGE_DEV_API"})
+    #: `docs/RECOVERY.md`, and it carries a line here like the rest (the
+    #: previous exception was temporary until that line was added).
+    _NOT_A_SETTING = frozenset({"RECOVERAGE_DEV_API"})
 
     @staticmethod
     def _documented() -> dict[str, str]:
