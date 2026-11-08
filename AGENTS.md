@@ -81,6 +81,13 @@ recoverage/
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_ops.py           # The backend op worker: gate/export replies, refusals, target
 │   │                         #   resolution, workspace confinement, project override
+│   ├── test_ops_retained.py  # Retained-input ops: staged files/binary, coverage envelope
+│   ├── test_ops_serve.py     # `ops serve`: HTTP dispatch, token, Host allow-list, concurrency
+│   ├── test_clispec.py       # clispec 0.3 document for the CLI (`recoverage schema`)
+│   ├── test_coverage_input.py # Coverage envelope binds a closed set of staged inputs
+│   ├── test_coverage_map_once.py # A block selection reuses the opened file's coverage map
+│   ├── test_opened_file_etag.py # An opened source file's ETag is hashed once, until bytes change
+│   ├── test_target_files.py  # `/files/<target>/` routes preserve project + per-target containment
 │   ├── test_lifecycle.py     # Lifecycle: live refresh, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
@@ -119,13 +126,16 @@ recoverage/
     │                        #   class, keep-alive handlers, admission cap + socket deadline
     │                        #   (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
+    ├── clispec.py           # clispec 0.3 document for the CLI (`recoverage schema`)
+    ├── status_colors.py     # Shared status colors (relumea-brand copy)
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
     ├── reporting.py         # Rows, CSV/Markdown escaping, export rendering and gate verdicts,
     │                        #   shared by `export`/`check` and the op worker
-    ├── ops.py               # The backend's recoverage ops (`ops call <op>`): JSON request on
-    │                        #   stdin, JSON reply on stdout, target named by binary SHA-256
+    ├── ops.py               # The backend's recoverage ops (`ops call <op>` / `ops serve`):
+    │                        #   JSON request on stdin, JSON reply on stdout, target named by
+    │                        #   binary SHA-256
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, ops, regen,
-    │                        #   backup, restore, open)
+    │                        #   backup, restore, open, config, schema)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   per-thread Cs per image width (read off the PE/ELF
@@ -613,8 +623,9 @@ simpler and strictly wider.
 Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13,<1` (web server)
 - `brotli>=1.1,<2` (Brotli compression)
+- `click>=8.0,<9` (transitive CLI parsing under Typer)
 - `rcssmin>=1.1,<2` (CSS minification)
-- Rebrew 6.8.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
+- Rebrew 6.23.1 (public GitHub wheel URL and SHA-256 in the manifest): shared
   live accounting, format-3 function metadata, source provenance and portable exports
 - `rich>=15.0.0,<16` (terminal tables)
 - `typer>=0.27.2,<1` (CLI framework)
@@ -625,7 +636,7 @@ Optional extras:
 - `pygments>=2.21.0,<3` (Potato Mode syntax highlighting)
 - `playwright` (browser tests: `playwright>=1.62,<2`, `pytest-playwright>=0.9.0,<1`; `tests/test_playwright.py` is excluded from the default `addopts`)
 
-Dev extra (`.[dev]`, what CI installs): `mypy>=1.14,<3`, `pytest>=9.1.1,<10`, `ruff>=0.16.7,<1`.
+Dev extra (`.[dev]`, what CI installs): `mypy>=1.14,<3`, `packaging>=26.3,<27`, `pytest>=9.1.1,<10`, `ruff>=0.16.7,<1`.
 
 `src/recoverage/py.typed` is the PEP 561 marker and ships in both artifacts
 through `[tool.setuptools.package-data]`, so the annotations the mypy gate

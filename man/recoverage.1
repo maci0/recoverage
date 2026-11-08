@@ -25,7 +25,9 @@ to the directory created by
 .BR "rebrew coverage export --output snapshots/" .
 Preserve old exported history with
 .B "rebrew coverage import-history --snapshots db/ --dry-run"
-and repeat without --dry-run before retiring exports. Status history lives in
+and repeat without
+.BR \&\-\-dry\-run
+before retiring exports. Status history lives in
 canonical function metadata. Keep configured inventory files even under db/.
 .PP
 .B serve
@@ -67,14 +69,31 @@ Answer the relumea backend's recoverage ops over stdin/stdout.
 .B ops serve
 answers the same ops over HTTP (see
 .BR RECOVERAGE_OPS_TOKEN ).
+.BI \-\-port " PORT"
+TCP port (default: required; 0 picks a free one).
+.BI \-\-host " HOST"
+Address to bind (default: 127.0.0.1).
+.BI \-\-workspace " DIR"
+Required: every request
+.I project_dir
+must resolve inside it (env:
+.BR RECOVERAGE_OPS_WORKSPACE ).
+.BI \-\-filestore " DIR"
+Retained object store (env:
+.BR RECOVERAGE_OPS_FILESTORE ).
+.BI \-\-concurrency " N"
+Calls answered at once; the next is refused 503 with Retry-After (default: 2;
+env:
+.BR RECOVERAGE_OPS_CONCURRENCY ).
+.BI \-\-allowed\-hosts " HOSTS"
+Comma-separated exact additional HTTP Host authorities, including ports (env:
+.BR RECOVERAGE_OPS_ALLOWED_HOSTS ).
 .B ops call
 .I op
 reads one JSON request on stdin and writes the JSON reply on stdout; a
 refusal prints an object naming the error, its detail and its status, and
 exits 2. The ops are
-.B recoverage.coverage_gate
-and
-.BR recoverage.coverage_export ;
+.BR recoverage.coverage_plan ", " recoverage.coverage_gate ", " recoverage.coverage_map " and " recoverage.coverage_export ;
 a request names an absolute
 .I project_dir
 and the sha256 of a target's binary.
@@ -85,6 +104,9 @@ to
 .I DIR
 (env:
 .BR RECOVERAGE_OPS_WORKSPACE ).
+.BI \-\-filestore " DIR"
+Retained object store (env:
+.BR RECOVERAGE_OPS_FILESTORE ).
 .TP
 .B regen
 Refresh the live project view without generating files. Progress and errors go to
