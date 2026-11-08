@@ -6368,6 +6368,7 @@ class TestCampaignSeeds:
         assert f"campaign={label}" in message, message
         assert f"seed={campaign_seed(label)}" in message, message
 
+
 # ── the report export and the gate ─────────────────────────────────
 # `reporting.render_export` / `csv_text` / `markdown_text` / `json_text` and
 # `reporting.gate` / `section_verdict` / `_coverage_meets` / `coverage_pct` /
@@ -6384,9 +6385,85 @@ class TestCampaignSeeds:
 # 100.0, a verdict that quotes 100.00 beside FAIL), and the gate has the
 # exact-boundary one (23/40 against 57.5).
 
+
+#: Seeds for the CSP path classifier: each is a real request-path spelling
+#: the dashboard's own routes answer (a project-file prefix here, a document
+#: prefix there), so a mutated copy stays one misspelled prefix away from
+#: exercising the decision rather than a random string.
+_CSP_PATH_SEEDS: list[bytes] = [
+    b"/src/main.c",
+    b"/original/target.dll",
+    b"/files/FAKEDLL/source/x.html",
+    b"/files/FAKEDLL/binary",
+    b"/src/x.html",
+    b"/",
+    b"/index.html",
+    b"/potato",
+    b"/api/health",
+    b"/app.js",
+    b"/api/targets/demo/data",
+    b"/SRc/main.c",
+    b"/srcother/main.c",
+    b"//src/main.c",
+    b"/./src/main.c",
+    b"src/main.c",
+    b"",
+]
+
+#: The grammar tokens the classifier branches on: the three prefixes
+#: byte-for-byte, the near-misses byte mutation rarely spells (a case
+#: change, a doubled slash, a dot segment, a prefix that runs on into
+#: another name), and a percent-encoded spelling of the leading slash and
+#: of the first letter, since the WSGI server hands ``request.path`` over
+#: as the raw request target.
+_CSP_PATH_TOKENS: tuple[bytes, ...] = (
+    b"/src/",
+    b"/original/",
+    b"/files/",
+    b"/src/x.html",
+    b"/original/target.dll",
+    b"/files/FAKEDLL/binary",
+    b"/SRc/",
+    b"/SRC/",
+    b"/srcother/",
+    b"/originals/",
+    b"/filesx/",
+    b"//src/",
+    b"/./src/",
+    b"/../src/",
+    b"/%2e/src/",
+    b"%2fsrc/",
+    b"/%73rc/",
+    b"/src%2f",
+    b"/src",
+    b"/original",
+    b"/files",
+    b"/api/",
+    b"/potato",
+    b"/",
+    b"",
+    b"\x00",
+    b"%00",
+)
+
 _REPORT_NUMBERS: tuple[str, ...] = (
-    "0", "1", "50", "50.5", "57.5", "99.99", "99.999", "100", "100.01", "101",
-    "-1", "1e309", "NaN", "Infinity", "-Infinity", "true", '"50"',
+    "0",
+    "1",
+    "50",
+    "50.5",
+    "57.5",
+    "99.99",
+    "99.999",
+    "100",
+    "100.01",
+    "101",
+    "-1",
+    "1e309",
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "true",
+    '"50"',
 )
 
 _REPORT_SEEDS: list[bytes] = [
@@ -6418,20 +6495,34 @@ _REPORT_SEEDS: list[bytes] = [
 ]
 
 _REPORT_TOKENS: tuple[bytes, ...] = (
-    b'"coverage_pct": 99.99', b'"coverage_pct": 100', b'"coverage_pct": 1e309',
-    b'"coverage_pct": NaN', b'"covered_bytes": -1',
-    b'"covered_bytes": 999999999999999999999999', b'"total_bytes": 0',
-    b'"total_bytes": -5', b'"exact": "5"', b'"exact": true', b'"size_bytes": 1e309',
-    b'"target": "=1+1"', b'"target": "@1+1"', b'"target": "a|b"', b'"target": "a\nb"',
-    b'".text":', b'"=1+1":', b'"a|b":', b'"min_coverage": 57.5',
-    b'"min_coverage": 100', b'"min_coverage": NaN',
+    b'"coverage_pct": 99.99',
+    b'"coverage_pct": 100',
+    b'"coverage_pct": 1e309',
+    b'"coverage_pct": NaN',
+    b'"covered_bytes": -1',
+    b'"covered_bytes": 999999999999999999999999',
+    b'"total_bytes": 0',
+    b'"total_bytes": -5',
+    b'"exact": "5"',
+    b'"exact": true',
+    b'"size_bytes": 1e309',
+    b'"target": "=1+1"',
+    b'"target": "@1+1"',
+    b'"target": "a|b"',
+    b'"target": "a\nb"',
+    b'".text":',
+    b'"=1+1":',
+    b'"a|b":',
+    b'"min_coverage": 57.5',
+    b'"min_coverage": 100',
+    b'"min_coverage": NaN',
 )
 
 
 def _report_stats(raw: bytes) -> dict[str, Any] | None:
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError, RecursionError):
+    except UnicodeError, ValueError, RecursionError:
         return None
     if not isinstance(data, dict):
         return None
@@ -6455,13 +6546,11 @@ class TestReportExportAndGate:
             min_coverage = 57.5
             try:
                 named = json.loads(raw.decode("utf-8"))
-                if isinstance(named, dict) and isinstance(
-                    named.get("min_coverage"), (int, float)
-                ):
+                if isinstance(named, dict) and isinstance(named.get("min_coverage"), (int, float)):
                     candidate = float(named["min_coverage"])
                     if candidate not in (float("inf"), float("-inf")) and candidate * 0 == 0:
                         min_coverage = candidate
-            except (UnicodeError, ValueError, RecursionError):
+            except UnicodeError, ValueError, RecursionError:
                 pass
             outcome = reporting.gate(
                 [("T", stats)], min_coverage=min_coverage, section="__absent__"
@@ -6489,7 +6578,7 @@ class TestReportExportAndGate:
             for fmt in reporting.EXPORT_FORMATS:
                 try:
                     text = reporting.render_export(fmt, [stats])
-                except (TypeError, ValueError, OverflowError, KeyError):
+                except TypeError, ValueError, OverflowError, KeyError:
                     continue
                 assert isinstance(text, str), f"{raw[:80]!r}: {fmt} rendered a non-text"
                 assert "Traceback" not in text, f"{raw[:80]!r}: {fmt} leaked a traceback"
@@ -6560,9 +6649,7 @@ class TestReferencedPathsParse:
             except backup.BackupError:
                 return
             except Exception as exc:  # the contract is BackupError only
-                raise AssertionError(
-                    f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}"
-                ) from exc
+                raise AssertionError(f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}") from exc
             for ref in refs:
                 assert isinstance(ref, str), f"{raw[:60]!r}: non-text ref {ref!r}"
                 assert ref, f"{raw[:60]!r}: an empty ref was carried"
@@ -6581,4 +6668,38 @@ class TestReferencedPathsParse:
             ),
             num_tokens=(b"0", b"1", b"-1", b"[]", b"{}"),
             label="TestReferencedPathsParse.test_a_document_that_does_not_parse_is_a_backup_error",
+        )
+
+
+class TestCSPForPath:
+    """server.csp_for_path -- which policy a path is answered under."""
+
+    def test_the_policy_decision_follows_the_literal_prefix(self) -> None:
+        def check(data: bytes) -> None:
+            path = data.decode("utf-8", "surrogateescape")
+            try:
+                policy = srv.csp_for_path(path)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"csp_for_path raised {type(exc).__name__}: {exc} for {path!r}"
+                ) from exc
+            assert policy in (srv._CSP, srv._INERT_CSP), (
+                f"{path!r}: answered a policy the module does not hold: {policy!r}"
+            )
+            if path.startswith(srv._REPO_FILE_PREFIXES):
+                assert policy == srv._INERT_CSP, f"{path!r}: not inert"
+            else:
+                assert policy == srv._CSP, f"{path!r}: not the dashboard policy"
+            for document in ("/", "/index.html", "/potato", "/api/health", "/app.js"):
+                assert srv.csp_for_path(document) == srv._CSP, (
+                    f"dashboard document {document!r} left the owning policy"
+                )
+
+        _fuzz(
+            _CSP_PATH_SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=_CSP_PATH_TOKENS,
+            num_tokens=_CSP_PATH_TOKENS,
+            label="TestCSPForPath.test_the_policy_decision_follows_the_literal_prefix",
         )
