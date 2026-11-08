@@ -1018,7 +1018,14 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     for path in source.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _log.warning(
+                "cannot stat %s for the freshness stamp: %s",
+                str(path),
+                exc.strerror or exc,
+            )
             continue
         entries.append((path.name, st.st_mtime_ns, st.st_size))
     entries.sort()

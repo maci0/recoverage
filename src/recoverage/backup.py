@@ -223,17 +223,20 @@ def _atomic_write(path: Path, data: bytes) -> None:
 def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     """``(name, bytes)`` for every coverage document in *db_dir*, name-sorted.
 
-    The same glob and the same skip-on-``OSError`` discipline
-    :func:`recoverage.documents._stat_key` walks, so a backup covers exactly
-    what the server would read, and a document that vanishes mid-backup is one
-    fewer member rather than a failed run.
+    A document that vanishes mid-backup is one fewer member rather than a
+    failed run.  Any other read failure is not a vanish: an unreadable
+    document omitted from the archive would make the backup verify while
+    silently missing the target, so it raises :class:`BackupError` naming
+    the file and the cause.
     """
     out: list[tuple[str, bytes]] = []
     for path in sorted(db_dir.glob(COVERAGE_GLOB)):
         try:
             out.append((path.name, path.read_bytes()))
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError as exc:
+            raise BackupError(f"cannot read coverage document {path} for backup: {exc}") from exc
     return out
 
 
