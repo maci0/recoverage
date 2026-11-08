@@ -463,7 +463,7 @@ class TestLongDescriptionLinksResolveWhereItIsRendered:
             target = match["target"]
             for prefix in (self._REPO_BLOB, self._REPO_RAW):
                 if target.startswith(prefix):
-                    path = target.removeprefix(prefix)
+                    path = target.removeprefix(prefix).split("#", 1)[0]
                     assert (_ROOT / path).is_file(), (
                         f"{target} names a file this commit does not have"
                     )
