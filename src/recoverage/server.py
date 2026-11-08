@@ -24,7 +24,7 @@ lazy import json
 lazy import math
 lazy import unicodedata
 lazy from collections import deque
-lazy from pathlib import Path, PurePath
+lazy from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 lazy from types import MappingProxyType
 lazy from urllib.parse import quote, unquote, urlsplit
 
@@ -473,8 +473,19 @@ def is_plain_relative(path: PurePath) -> bool:
     The one definition for every path that crosses into the filesystem from a
     request or from a coverage document, so a second spelling of the rule
     cannot answer for a different host than the one the guard was written for.
+    The anchor and the parent-hop are judged under BOTH flavours: a
+    Windows-shaped value (``C:\\evil``, ``a\\..\\b``) read through the host
+    flavour on a POSIX host is a single opaque segment, so it passes the
+    host check and then escapes the moment the tree is checked out on
+    Windows — the document outlives the machine that serves it.
     """
-    return not path.anchor and ".." not in path.parts
+    if path.anchor or ".." in path.parts:
+        return False
+    win_view = PureWindowsPath(str(path))
+    if win_view.anchor or ".." in win_view.parts:
+        return False
+    posix_view = PurePosixPath(str(path))
+    return not posix_view.anchor and ".." not in posix_view.parts
 
 
 def _existing_spelling(directory: Path, name: str) -> str:
