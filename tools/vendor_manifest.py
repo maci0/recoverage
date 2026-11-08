@@ -118,7 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     # read a stack instead of the file and the errno that says which of the two
     # it was.  Non-zero, and it names the file, matching the refusals above.
     try:
-        MANIFEST.write_text(body, encoding="utf-8")
+        # newline="" because the body is LF by construction (json.dumps with
+        # a trailing "\n"): text mode's default translates every \n to
+        # os.linesep, so a run on Windows would rewrite the manifest with
+        # CRLF line endings.
+        MANIFEST.write_text(body, encoding="utf-8", newline="")
     except OSError as exc:
         print(f"cannot write {MANIFEST} ({exc.strerror or exc})", file=sys.stderr)
         return 1

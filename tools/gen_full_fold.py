@@ -150,7 +150,10 @@ def main(argv: list[str] | None = None) -> int:
         if not stale:
             print("format.ts is already current")
             return 0
-        _FORMAT_TS.write_text(source[:start] + block + source[end:], encoding="utf-8")
+        # newline="" because the body is LF by construction: text mode's
+        # default translates every \n to os.linesep, so a run on Windows
+        # would rewrite format.ts with CRLF line endings.
+        _FORMAT_TS.write_text(source[:start] + block + source[end:], encoding="utf-8", newline="")
         print(f"rewrote {_FORMAT_TS.relative_to(_ROOT)}")
         return 0
 
