@@ -708,6 +708,17 @@ class TestBackupFreshness:
         with pytest.raises(BackupError, match="overdue"):
             check_backup_freshness(out)
 
+    @pytest.mark.parametrize("bound", [float("inf"), float("nan"), -1.0])
+    def test_a_non_finite_or_negative_bound_is_refused(self, tmp_path, bound):
+        """inf/nan compare False against every age, so an unguarded bound
+        reads a stale backup as fresh; a negative bound fails even a fresh
+        one. The bound is refused, not compared."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        (out / "coverage-20260101T000000.000000Z.tar").write_bytes(b"placeholder")
+        with pytest.raises(BackupError, match="non-negative"):
+            check_backup_freshness(out, max_age_hours=bound)
+
 
 class TestBackupLocation:
     """Where the archive goes when nothing names a directory."""
@@ -860,3 +871,25 @@ class TestBackupCli:
                 sink.addfile(info, io.BytesIO(data))
         result = runner.invoke(app, ["verify", str(tampered)])
         assert result.exit_code == 1
+
+
+class TestCheckBackupBoundParsing:
+    """--max-age-hours spellings that must not read as a fresh verdict."""
+
+    @pytest.mark.parametrize("bound", ["inf", "-inf", "nan", "1_0", "-5", "1e3", ""])
+    def test_a_bad_max_age_hours_is_a_usage_error(self, tmp_path: Path, bound: str) -> None:
+        db = build_synthetic_coverage(tmp_path / "db").parent
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        result = runner.invoke(app, ["check-backup", str(out), "--max-age-hours", bound])
+        assert result.exit_code == 2, (bound, result.output)
+        assert "--max-age-hours" in result.output + str(result.stderr or "")
+
+    def test_a_decimal_max_age_hours_is_accepted(self, tmp_path: Path) -> None:
+        db = build_synthetic_coverage(tmp_path / "db").parent
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        result = runner.invoke(app, ["check-backup", str(out), "--max-age-hours", "25.5"])
+        assert result.exit_code == 0, result.output

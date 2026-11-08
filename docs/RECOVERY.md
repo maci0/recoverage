@@ -15,6 +15,16 @@ own version control and backups. `recoverage backup` never backs up that project
 | Portable `coverage-<target>.toml` exports | Explicit snapshot directory | Verified `recoverage backup` / `restore` |
 | Referenced original binaries and source roots named in `metadata.paths` | Explicit snapshot directory (must be inside it) | Archived flat beside the documents; `backup` refuses a set whose referenced file is absent, escaping, or name-colliding, because a restore without it serves the map but not `/asm` or the source pane |
 | Parse caches and in-process memos | Recoverage | Rebuilt on demand |
+| Retained ops inputs: staged files, the selected binary, and any temp snapshot a call builds under the ops workspace | `RECOVERAGE_OPS_FILESTORE` / `RECOVERAGE_OPS_WORKSPACE` (`recoverage ops call`/`serve`) | Not covered by `recoverage backup`; the backend that staged them re-supplies them, so losing the store loses in-flight work, not coverage history |
+
+The ops workspace holds scratch: a retained snapshot is a temp directory
+under it, removed when the call returns. Its loss mid-call aborts the call
+rather than corrupting a served document. The filestore is the backend's
+object store, keyed by retained keys and hashed on read; treat it as
+ephemeral input, never as the record — the record is the backend's own
+retained manifest. Neither directory is archived by `recoverage backup`,
+and neither needs to be for a restore to be honest: a restore that
+claimed them would be claiming bytes it never read.
 
 Before retiring older exports, run
 `rebrew coverage import-history --snapshots <directory> --dry-run`, review the
@@ -119,4 +129,5 @@ SHA256; verify those digests before serving restored data.
 ## What is deliberately not covered
 
 Recoverage backup excludes canonical project metadata, source, reference binaries,
-configuration, build output and caches. Back up those through their owning project.
+configuration, build output, caches, and the ops filestore/workspace above.
+Back up those through their owning project or backend.

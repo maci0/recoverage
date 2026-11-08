@@ -60,6 +60,7 @@ a coverage document and a later backup would carry the earlier one.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 lazy import contextlib
@@ -833,7 +834,19 @@ def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVE
     archive ageing past the cadence. A missing directory or an empty one
     is the same refusal, naming the directory so a cron alert says where
     the backup was expected rather than that a file was absent.
+
+    A bound that is not a finite, non-negative number is refused rather
+    than compared: ``inf`` and ``nan`` compare False against every age, so
+    a monitor handed either reads a stale backup as fresh and exits 0
+    forever — the one failure this command exists to catch, masked by its
+    own argument. A negative bound fails every archive, including a fresh
+    one, which is a false alarm from the same unguarded spelling.
     """
+    if not math.isfinite(max_age_hours) or max_age_hours < 0:
+        raise BackupError(
+            f"invalid --max-age-hours {max_age_hours!r}: "
+            "must be a finite, non-negative number of hours"
+        )
     if not directory.is_dir():
         raise BackupError(f"no backup directory at {directory}; no backup has been taken there")
     age = newest_archive_age_hours(directory)

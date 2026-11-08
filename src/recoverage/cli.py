@@ -2044,6 +2044,41 @@ def export(
             _export_write_failed(exc, "Markdown", f"after {written} of {total} section rows")
 
 
+def _checked_max_age_hours(value: str, json_output: bool) -> float:
+    """*value* as a backup overdue bound in hours, or exit 2 through ``_fail``.
+
+    The flag is text for the same reason ``--min-coverage`` is: click's
+    ``FLOAT`` runs the value through ``float()``, which accepts ``inf``,
+    ``nan``, Unicode digits and the ``_`` separator. ``inf``/``nan`` are not
+    merely odd spellings here — neither compares greater than an age, so a
+    monitor handed either reads a stale backup as fresh and exits 0
+    forever, the one failure ``check-backup`` exists to catch. ``1_0``
+    would be read as 10h rather than refused. Only ASCII digits and one
+    ASCII dot survive, and the bound must be finite and non-negative.
+    """
+    from recoverage.server import parse_ascii_int
+
+    text = value.strip()
+    whole, dot, frac = text.partition(".")
+    parsed: float | None = None
+    if whole and not (dot and not frac) and "." not in frac:
+        try:
+            whole_int = parse_ascii_int(whole)
+            frac_int = parse_ascii_int(frac) if frac else 0
+            scale = 10 ** len(frac) if frac else 1
+            parsed = whole_int + frac_int / scale if frac else float(whole_int)
+        except ValueError:
+            parsed = None
+    if parsed is None or parsed < 0:
+        _fail(
+            f"Error: --max-age-hours is not a valid bound: {value!r}.",
+            "--max-age-hours is not a valid bound",
+            2,
+            json_output,
+        )
+    return parsed
+
+
 def _checked_min_coverage(value: str, json_output: bool) -> float:
     """*value* as a coverage percentage, or exit 2 through ``_fail``.
 
@@ -2407,8 +2442,8 @@ def check_backup(
         metavar="DIRECTORY",
         help="Backup directory holding stamped archives (default: the backup directory)",
     ),
-    max_age_hours: float = typer.Option(
-        25.0,
+    max_age_hours: str = typer.Option(
+        "25",
         "--max-age-hours",
         metavar="HOURS",
         help="Hours the newest archive may be old before this is a failure (default: 25)",
@@ -2436,14 +2471,15 @@ def check_backup(
     _check_env_or_exit()
     path = Path(directory).expanduser()
     try:
-        check_backup_freshness(path, max_age_hours=max_age_hours)
+        limit = _checked_max_age_hours(max_age_hours, as_json)
+        check_backup_freshness(path, max_age_hours=limit)
     except BackupError as exc:
         _fail(f"Error: {exc}", str(exc), 1, as_json)
     if as_json:
         typer.echo(_dumps({"directory": str(path), "fresh": True}))
         return
     _secho(
-        f"Backup fresh: {path} holds a stamped archive within {max_age_hours:g}h.",
+        f"Backup fresh: {path} holds a stamped archive within {limit:g}h.",
         fg=typer.colors.GREEN,
         err=True,
     )
