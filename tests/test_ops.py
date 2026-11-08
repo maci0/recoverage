@@ -323,6 +323,33 @@ class TestRequests:
         assert body["error"] == "unknown-op"
         assert body["status"] == 404
 
+    def test_unknown_op_detail_cut_keeps_combining_mark(self, project: Path) -> None:
+        # An op name whose 400th code point lands before a combining mark:
+        # the refusal detail must carry the mark with its base character,
+        # not sever the NFD grapheme at the cap.
+        from recoverage.ops import DETAIL_MAX_CHARS, _bounded
+
+        combining_acute = "́"
+        # The op alone exceeds the cap, with the base at position 399 and
+        # its combining mark at 400: the cut must carry the mark with it.
+        op = "x" * (DETAIL_MAX_CHARS - 1) + "e" + combining_acute + "tail"
+        body = _refusal(_gate(project), op=op)
+        assert body["error"] == "unknown-op"
+        assert body["detail"].endswith("e" + combining_acute)
+        assert _bounded(op).endswith("e" + combining_acute)
+
+    def test_unknown_op_detail_cut_keeps_zwj(self, project: Path) -> None:
+        from recoverage.ops import DETAIL_MAX_CHARS, _bounded
+
+        woman_technologist = "👩‍💻"
+        # The base lands at 398, the ZWJ at 399, the joined glyph past the
+        # cap: the cut must carry the whole sequence, not end on the joiner.
+        op = "x" * (DETAIL_MAX_CHARS - 2) + woman_technologist + "tail"
+        body = _refusal(_gate(project), op=op)
+        assert body["error"] == "unknown-op"
+        assert body["detail"].endswith(woman_technologist)
+        assert _bounded(op).endswith(woman_technologist)
+
     @pytest.mark.parametrize("body", ["not json", "", '{"a": }'])
     def test_not_json(self, project: Path, body: str) -> None:
         refusal = _refusal(body)
