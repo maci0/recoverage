@@ -1011,6 +1011,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
                 "that dashboard will not refresh until it is reloaded",
                 peer,
                 _SSE_QUEUE_MAX,
+                extra=_server.request_log_fields(503, peer=peer),
             )
 
 
@@ -2427,6 +2428,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
             "Reading the batch request body failed: %s: %s",
             type(exc).__name__,
             _server._log_safe(str(exc)),
+            extra=_server.request_log_fields(400),
         )
         return [], _body_rejected(
             400,

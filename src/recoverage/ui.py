@@ -722,6 +722,7 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
                 _server._log_safe(filename),
                 type(exc).__name__,
                 _server._log_safe(str(exc)),
+                extra=_server.request_log_fields(404),
             )
             return static_file(filename, root=str(_assets_dir()))
         etag = _asset_etag(filename, "identity", identity_bytes)
@@ -754,6 +755,7 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
                 _server._log_safe(filename),
                 type(exc).__name__,
                 _server._log_safe(str(exc)),
+                extra=_server.request_log_fields(404),
             )
             return static_file(filename, root=str(_assets_dir()))
         body, encoding = compress_static_variants(raw, accept_encoding)

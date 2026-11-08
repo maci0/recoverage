@@ -620,6 +620,7 @@ def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
             "pygments is installed but unusable; Potato code panes render unhighlighted (%s: %s)",
             type(exc).__name__,
             exc,
+            extra=request_log_fields(500),
         )
         return None
 

@@ -2199,6 +2199,7 @@ def _find_dll_path(target: str) -> Path | None:
             "Refusing [targets.%s].binary outside the project tree: %s",
             _log_safe(target),
             _log_safe(filename),
+            extra=request_log_fields(500, target=_log_safe(target)),
         )
         return None
     return candidate
@@ -2353,7 +2354,7 @@ def _load_dll(target: str) -> bytes | None:
             # from rebrew-project.toml; escaped so a project file carrying a
             # control byte cannot split the line.
             _log_safe(str(exc)),
-            extra=request_log_fields(500),
+            extra=request_log_fields(500, target=_log_safe(target)),
         )
         return None
     with DLL_LOCK:
@@ -3762,6 +3763,7 @@ def set_auth_cookie() -> None:
             _log_safe(request.method),
             _log_safe(request.path),
             exc_info=True,
+            extra=request_log_fields(500),
         )
 
 
