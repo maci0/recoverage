@@ -105,8 +105,6 @@ from coverage_fixture import (
 )
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
 from typer.testing import CliRunner
-from typer.testing import Result
-from collections.abc import Sequence
 
 from recoverage import cli, config, devserver, potato, reporting
 from recoverage import server as srv
@@ -6943,6 +6941,7 @@ class TestOpsAllowedHosts:
             num_tokens=self._TOKENS,
             label="TestOpsAllowedHosts.test_a_host_is_accepted_only_as_one_plain_authority",
         )
+
 
 class TestJsonDepthGuard:
     """`config.json_depth_exceeds` differential guard vs `json.loads` depth."""

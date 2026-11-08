@@ -53,7 +53,7 @@ lazy from rebrew.workspace import (
 )
 
 from recoverage import clock, config, metrics
-from recoverage.config import _ASCII_DIGITS, RecoError, parse_ascii_int, strip_sign
+from recoverage.config import _ASCII_DIGITS, RecoError, parse_ascii_int
 from recoverage.reporting import coverage_pct
 lazy from recoverage._paths import config_fingerprint, coverage_source
 lazy from recoverage.documents import COVERAGE_GLOB, load_all, snapshot_set, versions
