@@ -75,7 +75,7 @@ lazy import tarfile
 lazy import tempfile
 lazy from typing import Any, Final
 
-from recoverage.config import RecoError
+from recoverage.config import RecoError, json_depth_exceeds
 lazy from recoverage import clock
 lazy from recoverage.documents import COVERAGE_GLOB
 
@@ -745,6 +745,8 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     if manifest_raw is None:
         raise BackupError(f"{path} holds no {MANIFEST_NAME}; it is not a recoverage backup")
     try:
+        if json_depth_exceeds(manifest_raw):
+            raise ValueError("manifest JSON nests too deeply")
         manifest: Any = json.loads(manifest_raw)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise BackupError(f"{path}: {MANIFEST_NAME} is not readable JSON: {exc}") from exc

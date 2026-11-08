@@ -31,6 +31,41 @@ from ipaddress import IPv6Address, ip_address
 from pathlib import Path
 from typing import Final
 
+#: Deepest JSON container nesting a request may carry.  ``json.loads``
+#: nests one stack frame per ``{``/``[``, so a body under the byte cap can
+#: still nest past the interpreter's recursion limit and surface as
+#: ``RecursionError`` (or, at depths the scanner survives, allocate a
+#: structure tens of megabytes deep for a refusal).  Valid bodies nest a
+#: handful of containers; the bound sits well under where the scanner
+#: itself fails, and is refused before the decoder allocates anything.
+MAX_JSON_DEPTH: Final = 256
+
+#: One JSON string (escape-aware) or one bracket: the tokeniser
+#: :func:`json_depth_exceeds` scans with, at C speed.
+_JSON_STRING_RE: Final = re.compile(rb'"(?:\\.|[^"\\])*"|[{}\[\]]')
+
+
+def json_depth_exceeds(raw: bytes) -> bool:
+    """Whether *raw* nests more than :data:`MAX_JSON_DEPTH` containers.
+
+    A linear scan tracking bracket depth outside string literals, stopping
+    the moment the bound is crossed, so the common shallow body pays one
+    tokeniser pass and the hostile deep body is refused after
+    ``MAX_JSON_DEPTH`` opens rather than after the whole nesting is walked
+    and allocated by the decoder.
+    """
+    depth = 0
+    for match in _JSON_STRING_RE.finditer(raw):
+        token = match.group()
+        if token == b"{" or token == b"[":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return True
+        elif (token == b"}" or token == b"]") and depth:
+            depth -= 1
+    return False
+
+
 #: Prefix every configuration variable carries.  Namespaced so a stray
 #: environment variable cannot be mistaken for one of ours.
 ENV_PREFIX: Final = "RECOVERAGE_"

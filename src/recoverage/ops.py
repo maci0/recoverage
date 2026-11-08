@@ -52,7 +52,7 @@ import typer
 lazy from rebrew.coverage_toml import CoverageTomlError
 lazy from rebrew.workspace import CONFIG_NAME
 
-from recoverage.config import RecoError
+from recoverage.config import RecoError, json_depth_exceeds
 lazy from recoverage import reporting
 lazy from recoverage._paths import project_override
 
@@ -619,6 +619,8 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
             f"request exceeds {MAX_REQUEST_BYTES} bytes", code=INVALID_REQUEST, status=413
         )
     try:
+        if json_depth_exceeds(body):
+            raise _invalid("request is not JSON")
         raw = json.loads(body)
     except json.JSONDecodeError, UnicodeDecodeError, RecursionError:
         raise _invalid("request is not JSON") from None

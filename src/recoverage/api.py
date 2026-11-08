@@ -2436,12 +2436,13 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
             f"the body stream failed before it was received ({type(exc).__name__})",
         )
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        payload = None if _config.json_depth_exceeds(raw) else json.loads(raw.decode("utf-8"))
     except UnicodeDecodeError, json.JSONDecodeError, RecursionError:
         # RecursionError is a decode failure like the other two, not a crash:
         # the C scanner nests one frame per bracket, so `{"vas": [[[...` runs
         # out of stack in a body a kilobyte long. The byte cap bounds the body,
-        # not the depth inside it.
+        # not the depth inside it. json_depth_exceeds refuses the deep body
+        # before the decoder allocates it.
         payload = None
     if not isinstance(payload, dict):
         return [], _json_err(
