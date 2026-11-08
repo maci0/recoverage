@@ -255,7 +255,7 @@ BUNDLE_DIR = src/recoverage/assets
 # bundle fails the build instead of shipping.
 BUNDLE_ASSETS = app.js archivo.woff2 favicon.svg highlight.js index.html jetbrains-mono.woff2 print.css style.css
 
-check-bundle-clean:
+check-bundle-clean: web-build
 	@$(SET_STRICT) \
 	if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 	  echo "ERROR: check-bundle-clean compares the rebuilt bundle against the"; \
