@@ -6645,8 +6645,7 @@ class TestReferencedPathsParse:
                 return
             except Exception as exc:  # the contract is BackupError only
                 raise AssertionError(f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}") from exc
-            for key, ref in refs:
-                assert isinstance(key, str) and key, f"{raw[:60]!r}: bad key {key!r}"
+            for ref in refs:
                 assert isinstance(ref, str), f"{raw[:60]!r}: non-text ref {ref!r}"
                 assert ref, f"{raw[:60]!r}: an empty ref was carried"
 
