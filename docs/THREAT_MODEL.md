@@ -4,6 +4,25 @@ Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
 source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-09
+Sixth pass at HEAD `cf1218a` (2026-11-09): the changes between `91a3264` and
+HEAD were re-checked against the model below. `backup._source_root_refusal`
+(`src/recoverage/backup.py`, `217badd`) refuses a document naming
+`metadata.paths.sourceRoot` at backup time — the flat tar cannot carry a tree,
+so the refusal names the exclusion rather than archiving around it and
+restoring a map with no source pane. `server._plain` (`src/recoverage/server.py`,
+`9c0a4a6`, `fea5e3a`) now sanitizes lone surrogates to U+FFFD and `_plain_key`
+keeps dict keys hashable, so a hostile document value cannot 500 a payload
+through the strict UTF-8 encode. `_function_store_dir` is memoized on the
+config stat (`533cc07`, capped at 64 entries); `api.register_cache_invalidator`
+is idempotent per callable and the db-watcher thread is published only after
+`start()` succeeds (`9bafc95`); `devserver.listen_family` bounds an abandoned
+DNS resolution with a cancel event and logs a `gaierror` fallback (`0884b56`);
+`cli.open_browser` catches a webbrowser driver raise (`327fffb`); the dead
+`_regen_rejected` helper is removed (`874a1c7`). No entry point, trust
+boundary or mitigation below changed in a way that moves the risk ranking,
+except the risk-2 memo table now correctly reads `_SNAPSHOT_INDEX_KINDS` is 9
+and `_SNAPSHOT_INDEX_MAX` is 18, as the fifth pass already stated and the
+table below still mis-stated.
 Fifth pass at HEAD `91a3264` (2026-11-09): the changes between `0cc379c` and
 HEAD were re-checked against the model below. `config.KNOWN_VARS`
 (`src/recoverage/config.py`) gained `RECOVERAGE_OPS_PORT` and
@@ -150,7 +169,7 @@ this update does not claim to refresh every older file/line reference below.
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
 | 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.webapp.app` and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/webapp.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
-| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3192` and `:3235`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 6, so `_SNAPSHOT_INDEX_MAX` is 14 (`src/recoverage/server.py:3161`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all six kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:661`) since the last pass. |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3192` and `:3235`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 9, so `_SNAPSHOT_INDEX_MAX` is 18 (`src/recoverage/server.py:3259` and `:3272`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all nine kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:661`) since the last pass. |
 | 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3942`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
 | 5 | Project configuration controls live analysis inputs, which may extend outside HTTP-served file subtrees | `_paths.coverage_source`, `coverage_project.load_project_coverage`, `ui.serve_repo_file` | Operator trust and input validation; route containment does not sandbox project analysis |
@@ -587,6 +606,11 @@ describe, not a wrong one.
    verifies the complete archive and manifest, enforces plain coverage basenames,
    duplicate/size bounds and differing-file refusal before publishing; document
    writes use temporary files and replacement with rollback on failure.
+   At backup time `backup._referenced_files` collects only `metadata.paths.
+   originalDll` (one flat file per name); a document naming `sourceRoot` is a
+   backup refusal by key (`backup._source_root_refusal`,
+   `src/recoverage/backup.py`), never an omission, so a restored archive can
+   never silently drop the source pane it did not carry.
    These writes affect selected offline facts only. They never overwrite live
    Rebrew metadata or roll canonical verdicts/history back. The manifest proves
    archive consistency, not the operator's identity or authenticity of evidence.
