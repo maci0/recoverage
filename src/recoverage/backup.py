@@ -210,8 +210,15 @@ def _epoch_plus(seconds: float) -> datetime:
     roughly 1970-3000.  Integer seconds plus a microsecond remainder keeps
     the conversion exact and off that path; out-of-range values clamp.
     """
-    whole, frac = divmod(seconds, 1.0)
-    whole = min(max(int(whole), _MIN_WALL_SECONDS), _MAX_WALL_SECONDS)
+    if not math.isfinite(seconds):
+        # A bad RTC or a frozen replay can hand back inf/nan; divmod on either
+        # yields nan and int() on it raises, taking the backup down over a
+        # stamp it was meant to clamp.  Pin to the extreme in the direction
+        # the sign names, nan to the epoch.
+        whole_int = _MAX_WALL_SECONDS if seconds > 0 else _MIN_WALL_SECONDS if seconds < 0 else 0
+        return _EPOCH + timedelta(seconds=whole_int)
+    whole_float, frac = divmod(seconds, 1.0)
+    whole = min(max(int(whole_float), _MIN_WALL_SECONDS), _MAX_WALL_SECONDS)
     micros = int(frac * 1_000_000)
     return _EPOCH + timedelta(seconds=whole, microseconds=micros)
 
@@ -935,7 +942,11 @@ def newest_archive_age_hours(directory: Path) -> float | None:
         return None
     seconds, remainder = divmod(clock.wall_time(), 1.0)
     now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
-    return max(0.0, (now_ns - int(instant.timestamp() * 1_000_000_000)) / 3_600_000_000_000)
+    delta = instant - _EPOCH
+    instant_ns = (
+        (delta.days * 86400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1000
+    )
+    return max(0.0, (now_ns - instant_ns) / 3_600_000_000_000)
 
 
 def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVERDUE_HOURS) -> None:
