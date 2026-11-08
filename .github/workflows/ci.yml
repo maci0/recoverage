@@ -332,6 +332,11 @@ jobs:
           retention-days: 30
 
   smoke:
+    # Same gate as `build`: a smoke run boots the dashboard against a
+    # corrupt document and probes it, so a commit whose suite fails still
+    # passing smoke is a green check on a broken tree. Wait for `test` so
+    # the smoke evidence is on a tree that passed it.
+    needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
