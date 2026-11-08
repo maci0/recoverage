@@ -207,6 +207,8 @@ the process listing). Validation, signals and service examples are under
 | `RECOVERAGE_OPS_TOKEN` | unset | bearer token `recoverage ops serve` requires on every request (at least 32 bytes); read by `ops.py`, not by `serve` |
 | `RECOVERAGE_OPS_CONCURRENCY` | `2` | calls `recoverage ops serve` answers at once; the next is refused 503 with `Retry-After`; read by `ops.py`, not by `serve` |
 | `RECOVERAGE_OPS_ALLOWED_HOSTS` | unset | comma-separated exact additional HTTP `Host` authorities `recoverage ops serve` accepts; read by `ops.py`, not by `serve` |
+| `RECOVERAGE_OPS_HOST` | `127.0.0.1` | address `recoverage ops serve` binds to; loopback by default; read by `ops.py`, not by `serve` |
+| `RECOVERAGE_OPS_PORT` | unset (required by `ops serve`) | TCP port `recoverage ops serve` binds to; integer `0`-`65535` (`0` picks a free port); read by `ops.py`, not by `serve` |
 
 `.env.example` carries the same surface in a copy-pasteable form, commented
 out, each variable with its stock value and a note on what it accepts. It is
