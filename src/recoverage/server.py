@@ -1195,7 +1195,13 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     still has a microsecond field to add to.
     """
     seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
-    seconds = min(max(seconds, _MIN_MTIME_SECONDS), _MAX_MTIME_SECONDS)
+    if seconds < _MIN_MTIME_SECONDS:
+        # Below the range: clamp to the extreme itself.  The remainder is
+        # positive (divmod floors), so riding it on the clamped second
+        # would report an instant up to a second AFTER the extreme for a
+        # stamp that predates it.
+        return _EPOCH + timedelta(seconds=_MIN_MTIME_SECONDS)
+    seconds = min(seconds, _MAX_MTIME_SECONDS)
     return _EPOCH + timedelta(seconds=seconds, microseconds=nanoseconds // _NS_PER_MICROSECOND)
 
 
