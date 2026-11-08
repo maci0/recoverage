@@ -104,6 +104,19 @@ application, and a WSGI host may serve it directly instead of running
 
 `docs/THREAT_MODEL.md` carries this as boundary 8 and folds it into risk 1.
 
+## The ops worker is a second listener
+
+`recoverage ops serve` (`src/recoverage/ops.py`) answers `POST /<op>` over HTTP
+through rebrew's ops server, and it is the one listener in this package whose
+credential is mandatory: `RECOVERAGE_OPS_TOKEN` must hold at least
+`MIN_TOKEN_BYTES` (32) bytes or the process refuses to start. The token is
+environment-only, never a CLI flag. `--workspace` is required and confines
+every request's `project_dir`; `--allowed-hosts` and `--concurrency` bound who
+may call and how many calls run at once. The dashboard's `--token` has no
+equivalent length floor, and the ops surface has no `--allow-remote`
+acknowledgement: its remote posture is whatever `--host` was passed. The model
+carries this as boundary 10, risk 15 and unmitigated 18.
+
 ## Threat model
 
 `docs/THREAT_MODEL.md` is the maintained model: the attack surface, the trust
