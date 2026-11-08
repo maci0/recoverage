@@ -11,6 +11,12 @@ _RETRY = (
     " knowing whether the first run finished."
 )
 
+_IDEMPOTENT_NOTE = (
+    " A repeat run converges: a retry (stamped name, identical bytes, or an"
+    " already-restored destination) is verified against what the first run"
+    " left rather than rewriting it."
+)
+
 _ITEMS = [
     {"name": "items", "type": "array", "items": {"type": "object"}},
     {"name": "total", "type": "integer"},
@@ -27,6 +33,8 @@ def _command(
     text = description
     if effects == "non_idempotent":
         text += _RETRY
+    elif effects == "idempotent":
+        text += _IDEMPOTENT_NOTE
     spec: dict[str, Any] = {
         "name": name,
         "description": text,
@@ -80,17 +88,17 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
     _command(
         "regen",
         "Refresh the live project view without writing coverage files.",
-        "non_idempotent",
+        "idempotent",
     ),
     _command(
         "backup",
         "Copy portable coverage documents into one new archive.",
-        "non_idempotent",
+        "idempotent",
     ),
     _command(
         "restore",
         "Put a verified backup back into the coverage directory.",
-        "non_idempotent",
+        "idempotent",
     ),
     _command(
         "verify",

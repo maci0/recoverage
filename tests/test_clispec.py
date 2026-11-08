@@ -33,6 +33,12 @@ def test_schema_is_json_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--output" in names
     assert "--json" in names
     assert {command["effects"] for command in document["commands"]} <= _EFFECTS
+    by_name = {command["name"]: command for command in document["commands"]}
+    assert by_name["backup"]["effects"] == "idempotent"
+    assert by_name["restore"]["effects"] == "idempotent"
+    assert by_name["regen"]["effects"] == "idempotent"
+    assert "No idempotency key is accepted" not in by_name["regen"]["description"]
+    assert by_name["serve"]["effects"] == "non_idempotent"
     help_result = runner.invoke(app, ["--help"])
     assert help_result.exit_code == 0
     assert "schema" in help_result.stdout
