@@ -42,7 +42,6 @@ import re
 import sys
 import tempfile
 import typing
-import unicodedata
 from dataclasses import MISSING, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
@@ -129,40 +128,9 @@ def _bounded(text: str) -> str:
     that continuation, the cheaper trade than a severed mark re-colouring or
     re-accenting nothing.
     """
-    one_line = " ".join(text.split())
-    if len(one_line) <= DETAIL_MAX_CHARS:
-        return one_line
-    cut = one_line[:DETAIL_MAX_CHARS]
-    # Extend past continuation code points the cut landed before: the same
-    # set potato._is_continuation treats as continuing a grapheme, plus the
-    # base a trailing ZWJ joins.  Without the last arm a ZWJ emoji sequence
-    # still severs: the ZWJ is kept as a continuation, the joined glyph after
-    # it (a So the cut does not see as a continuation) is dropped, and the
-    # detail ends on a dangling joiner.
-    idx = DETAIL_MAX_CHARS
-    while idx < len(one_line):
-        char = one_line[idx]
-        if (
-            unicodedata.combining(char)
-            or unicodedata.category(char) in ("Cf", "Mn", "Me", "Mc")
-            or (unicodedata.category(char) == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff")
-            or (idx > 0 and one_line[idx - 1] == "‍")
-        ):
-            idx += 1
-            continue
-        break
-    result = one_line[:idx] if idx > DETAIL_MAX_CHARS else cut
-    # As server.truncate_text does, never leave a lone Regional Indicator:
-    # half a flag renders as a letter, not a flag.
-    trailing_ri = 0
-    for char in reversed(result):
-        if 0x1F1E6 <= ord(char) <= 0x1F1FF:
-            trailing_ri += 1
-        else:
-            break
-    if trailing_ri % 2 == 1:
-        result = result[:-1]
-    return result
+    from recoverage.server import truncate_text
+
+    return truncate_text(" ".join(text.split()), DETAIL_MAX_CHARS)
 
 
 def error_body(code: str, detail: str, status: int) -> bytes:
