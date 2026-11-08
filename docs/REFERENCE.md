@@ -429,7 +429,7 @@ the worker could not classify.
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages (no query parameters) |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary, or a `sort` column the list does not carry, is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |
-| `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
+| `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order; any other top-level key is a 400 |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail. Revalidates like the list: the tag names the snapshot, the target and the requested spelling |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |

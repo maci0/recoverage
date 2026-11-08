@@ -3537,6 +3537,16 @@ class TestBatchFunctionLookup:
         # list is the one case that used to answer with the field left blank.
         assert data["detail"]
 
+    def test_batch_unknown_fields_400(self) -> None:
+        target = require_target()
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001000"], "extra": 1})
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "extra" in data["detail"]
+
     def test_every_api_error_carries_the_full_envelope(self) -> None:
         """error + code + detail, whatever the endpoint or the status.
 

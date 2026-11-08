@@ -2408,6 +2408,15 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
                 "detail": 'expected {"vas": ["0x10001000", ...]}',
             },
         )
+    unknown = sorted(set(payload) - {"vas"})
+    if unknown:
+        return [], _json_err(
+            400,
+            {
+                "error": "Body has unknown fields",
+                "detail": f"unknown fields: {', '.join(unknown)}; expected only vas",
+            },
+        )
     vas = payload.get("vas")
     if not isinstance(vas, list):
         return [], _json_err(
