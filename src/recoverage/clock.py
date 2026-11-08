@@ -14,13 +14,21 @@ A blocking wait is on the seam too, not just a read of one: a poll loop whose
 every other time access is a patched :func:`monotonic` still burns real seconds
 between attempts, so the test that drove its deadline waits alongside it and a
 replay of the run inherits that cadence.  :func:`sleep` is that wait.
+
+A deferred callback is on the seam too: :func:`timer` parks on :func:`sleep`
+rather than on :mod:`threading`'s own clock, so a simulation that advances the
+patched clock fires the callback at the same simulated instant in every run,
+instead of wherever the OS scheduler happened to wake the thread.
 """
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
+from typing import Any
 lazy import time
 
-__all__ = ["monotonic", "sleep", "wall_time"]
+__all__ = ["Timer", "monotonic", "sleep", "wall_time"]
 
 
 def monotonic() -> float:
@@ -41,3 +49,41 @@ def sleep(seconds: float) -> None:
     same attempts in the same order as a production run without waiting for it.
     """
     time.sleep(seconds)
+
+
+class Timer(threading.Thread):
+    """Deferred callback on this module's clock.
+
+    Parks on :func:`sleep` rather than on ``threading``'s own wait, so a
+    patched clock fires the callback at the same simulated instant in every
+    run.  ``cancel`` only prevents a callback that has not yet fired.
+    """
+
+    def __init__(
+        self,
+        interval: float,
+        function: Callable[..., Any],
+        args: Any = None,
+        kwargs: Any = None,
+    ) -> None:
+        super().__init__()
+        self._interval = interval
+        self._function = function
+        self._args = args if args is not None else ()
+        self._kwargs = kwargs if kwargs is not None else {}
+        self._cancelled = threading.Event()
+        self.daemon = True
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        deadline = monotonic() + max(self._interval, 0.0)
+        while not self._cancelled.is_set():
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(remaining, 0.05))
+        if self._cancelled.is_set():
+            return
+        self._function(*self._args, **self._kwargs)

@@ -1749,17 +1749,15 @@ def serve(
         )
     )
 
-    browser_timer: threading.Timer | None = None
+    browser_timer: clock.Timer | None = None
     if not no_open:
         # Daemon + kept reference: a hung opener must never delay interpreter
         # exit.  The finally below cancels the timer, and the opener asks the
         # listener before it launches, so a start that never got as far as
         # accepting does not pop a browser tab pointing at a dead port by
-        # either route.
-        browser_timer = threading.Timer(
-            _BROWSER_OPEN_DELAY_SECONDS, _open_when_listening, args=(url,)
-        )
-        browser_timer.daemon = True
+        # either route.  The timer parks on clock.sleep, the seam every other
+        # wait in this module uses, so a patched clock fires it in simulation.
+        browser_timer = clock.Timer(_BROWSER_OPEN_DELAY_SECONDS, _open_when_listening, args=(url,))
         browser_timer.start()
 
     # Start the watcher thread before the listener accepts. It parks until the

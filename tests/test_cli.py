@@ -10,7 +10,6 @@ import logging
 import os
 import socket
 import sys
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from rebrew.coverage_toml import CoverageTomlError
 from rich.text import Text
 from typer.testing import CliRunner
 
-from recoverage import cli, devserver, metrics, server
+from recoverage import cli, clock, devserver, metrics, server
 from recoverage.cli import ExportFormat, app
 from recoverage.devserver import _server_class_for
 
@@ -2276,16 +2275,16 @@ class TestResponseFraming:
 _OPEN_DELAY = 0.5
 
 
-def _watch_for_opener_probe(monkeypatch: Any) -> tuple[list[str], list[threading.Timer]]:
+def _watch_for_opener_probe(monkeypatch: Any) -> tuple[list[str], list[Any]]:
     """Record real timers and their connection probes, refusing every connection."""
     import recoverage.cli as cli
 
     assert cli._BROWSER_OPEN_DELAY_SECONDS == _OPEN_DELAY
     attempted: list[str] = []
-    timers: list[threading.Timer] = []
-    real_timer = threading.Timer
+    timers: list[Any] = []
+    real_timer = clock.Timer
 
-    def timer(*args: Any, **kwargs: Any) -> threading.Timer:
+    def timer(*args: Any, **kwargs: Any) -> clock.Timer:
         created = real_timer(*args, **kwargs)
         timers.append(created)
         return created
@@ -2294,14 +2293,14 @@ def _watch_for_opener_probe(monkeypatch: Any) -> tuple[list[str], list[threading
         attempted.append(f"{address[0]}:{address[1]}")
         raise OSError("nothing is listening")
 
-    monkeypatch.setattr(cli.threading, "Timer", timer)
+    monkeypatch.setattr(cli.clock, "Timer", timer)
     monkeypatch.setattr(cli.socket, "create_connection", refuse)
     monkeypatch.setattr(cli, "_OPEN_LISTEN_WAIT_SECONDS", 0.0)
     return attempted, timers
 
 
 def _assert_cancelled_opener(
-    attempted: list[str], timers: list[threading.Timer], opened: list[str], why: str
+    attempted: list[str], timers: list[Any], opened: list[str], why: str
 ) -> None:
     """Join the real opener so an unscheduled callback cannot hide a missed cancel."""
     assert len(timers) == 1, f"{why}: serve did not arm exactly one opener"
@@ -2355,7 +2354,7 @@ class TestDeferredOpenerIsArmedAtAll:
         opened: list[str] = []
         monkeypatch.setattr(cli, "open_browser", lambda url: opened.append(url) or True)
 
-        timer = cli.threading.Timer(0, cli._open_when_listening, args=("http://127.0.0.1:8123",))
+        timer = cli.clock.Timer(0, cli._open_when_listening, args=("http://127.0.0.1:8123",))
         timer.start()
         with pytest.raises(AssertionError, match="callback ran its probe"):
             _assert_cancelled_opener(attempted, timers, opened, "an uncancelled timer")
