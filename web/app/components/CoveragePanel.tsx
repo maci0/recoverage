@@ -190,6 +190,11 @@ function FunctionMeta({
               href={sourceFileUrl(target, file)}
               target="_blank"
               rel="noopener noreferrer"
+              // The link opens a new tab: a screen-reader announcement that
+              // names only the file leaves the reader unsure focus left the
+              // page (WCAG 3.2.5). The visible text stays the file name, so
+              // the frame word travels in the accessible name alone.
+              aria-label={`Open source file ${file} in a new tab`}
             >
               {file}
             </a>

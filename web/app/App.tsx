@@ -1263,6 +1263,9 @@ export function App() {
               className={cn(controlVariants({ variant: "ghost" }), "no-underline")}
               href={potatoHref}
               title="Potato Mode: this view as plain server-rendered HTML, with no JavaScript"
+              // Potato Mode replaces the dashboard in this tab, so the
+              // frame word travels in the accessible name alone (WCAG 3.2.5).
+              aria-label="Potato Mode (opens in this tab)"
             >
               Potato Mode
             </a>

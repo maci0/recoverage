@@ -5897,6 +5897,20 @@ class TestSpaLayoutAndFeedback:
         assert "Potato Mode" in link, link
         assert "server-rendered HTML" in link, link
         assert "Plain HTML" not in link, link
+        assert "aria-label=" in link, link
+        assert "this tab" in link, link
+
+    def test_a_source_file_link_names_the_new_tab_it_opens(self) -> None:
+        """A link opening a new tab whose accessible name is only the file
+        leaves a screen-reader user unsure focus left the page (WCAG 3.2.5).
+        The wrapper names the frame while the visible text stays the file.
+        """
+        panel = _web("components/CoveragePanel.tsx")
+        at = panel.index('className="source-link"')
+        link = panel[at : panel.index("</a>", at)]
+        assert 'target="_blank"' in link, link
+        assert "aria-label=" in link, link
+        assert "new tab" in link, link
 
     def test_deep_links_carry_target_section_query_and_filter(self) -> None:
         app = _web("App.tsx")
