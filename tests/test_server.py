@@ -1734,10 +1734,16 @@ class TestTokenAuthEndpoint:
         srv._clear_auth_failures(WSGI_PEER)
 
     def test_missing_token_is_401(self) -> None:
+        import json
+
         from conftest import wsgi_get
 
-        status, _, _ = wsgi_get("/api/health")
+        status, headers, body = wsgi_get("/api/health")
         assert status.startswith("401")
+        payload = json.loads(body)
+        assert payload["error"] == "unauthorized"
+        assert payload["code"] == "unauthorized"
+        assert payload["detail"] == "missing or invalid token"
 
     def test_failed_auth_is_audit_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         """A rejected token attempt must leave an audit trail (brute-force
@@ -1751,10 +1757,18 @@ class TestTokenAuthEndpoint:
         assert all("wrong-guess-123" not in r.getMessage() for r in caplog.records)
 
     def test_bearer_token_accepted(self) -> None:
+        import json
+
         from conftest import wsgi_get
 
-        status, _, _ = wsgi_get("/api/health", headers={"Authorization": "Bearer unit-test-token"})
+        status, headers, body = wsgi_get(
+            "/api/health", headers={"Authorization": "Bearer unit-test-token"}
+        )
         assert status.startswith("200")
+        # The health payload itself, not an error envelope a 200 could carry.
+        payload = json.loads(body)
+        assert payload["status"] == "healthy"
+        assert payload["version"]
 
     @pytest.mark.parametrize("path", ["/archivo.woff2", "/jetbrains-mono.woff2"])
     def test_the_brand_fonts_answer_without_a_token(self, path: str) -> None:
@@ -1795,19 +1809,25 @@ class TestTokenAuthEndpoint:
 
     def test_query_param_token_accepted(self) -> None:
         """The documented share-link flow: /?token=<token> authenticates."""
+        import json
+
         from conftest import wsgi_get
 
-        status, _, _ = wsgi_get("/api/health?token=unit-test-token")
+        status, headers, body = wsgi_get("/api/health?token=unit-test-token")
         assert status.startswith("200")
+        assert json.loads(body)["status"] == "healthy"
 
     def test_cookie_token_accepted(self) -> None:
         """After the SPA cookie is set, plain navigation authenticates."""
+        import json
+
         from conftest import wsgi_get
 
-        status, _, _ = wsgi_get(
+        status, headers, body = wsgi_get(
             "/api/health", headers={"Cookie": "recoverage_token=unit-test-token"}
         )
         assert status.startswith("200")
+        assert json.loads(body)["status"] == "healthy"
 
     def test_the_cookie_the_page_sets_is_the_one_the_gate_reads(self) -> None:
         """The share-link round trip, end to end and by NAME rather than by literal.

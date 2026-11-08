@@ -81,8 +81,13 @@ class TestTargetFileRoutes:
     ) -> None:
         root = _project(tmp_path, monkeypatch)
         (root / "reversed/secret.c").write_bytes(b"secret")
-        status, _, _ = wsgi_get("/files/game/source/" + quote(path, safe=""))
-        assert status.startswith(("403", "404")), status
+        status, headers, body = wsgi_get("/files/game/source/" + quote(path, safe=""))
+        # Every escape spelling is the containment refusal, not a missing
+        # file: a 404 here would mean the guard stopped judging the spelling
+        # and fell through to the filesystem, and could serve reversed/secret.c.
+        assert status.startswith("403"), (path, status)
+        assert json.loads(decode_body(body, headers))["code"] == "forbidden"
+        assert b"secret" not in body
 
     @pytest.mark.parametrize("escape_root", [False, True])
     def test_source_symlinks_cannot_escape(
@@ -144,8 +149,18 @@ class TestTargetFileRoutes:
     ) -> None:
         root = _project(tmp_path, monkeypatch)
         write_coverage(root / "exports", "game", {}, paths={"originalDll": "../secret.exe"})
-        status, _, body = wsgi_get("/files/game/binary")
-        assert status.startswith("404") and body != b"game binary"
+        status, headers, body = wsgi_get("/files/game/binary")
+        # An escaping portable ref resolves to no binary, which the route
+        # answers as the 404 "target binary unavailable" envelope: serving
+        # the configured binary would be the fallback this test exists to
+        # forbid, so the body must be that envelope, not a bare "not 200".
+        assert status.startswith("404"), status
+        assert json.loads(decode_body(body, headers)) == {
+            "error": "Not found",
+            "code": "not_found",
+            "detail": "target binary unavailable",
+        }
+        assert body != b"game binary"
 
     def test_portable_binary_without_project_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -230,8 +245,14 @@ class TestTargetFileRoutes:
         secret.write_bytes(b"secret")
         (root / "binaries/escape.exe").symlink_to(secret)
         write_coverage(root / "exports", "game", {}, paths={"originalDll": binary})
-        status, _, body = wsgi_get("/files/game/binary")
-        assert status.startswith("404") and body != b"secret"
+        status, headers, body = wsgi_get("/files/game/binary")
+        # The portable ref is judged, not the symlink it points at: every
+        # spelling here resolves to no binary, so the route answers the 404
+        # envelope and the body carries neither the secret nor the configured
+        # binary (a fallback would be a 200 with one of those bytes).
+        assert status.startswith("404"), (binary, status)
+        assert json.loads(decode_body(body, headers))["code"] == "not_found"
+        assert body != b"secret" and body != b"game binary"
 
     @pytest.mark.parametrize(
         "source_root", ["/reversed/\x00bad", "/reversed/loop", "../outside", "C:/outside"]
@@ -242,10 +263,16 @@ class TestTargetFileRoutes:
         root = _project(tmp_path, monkeypatch)
         (root / "reversed/loop").symlink_to("loop")
         write_coverage(root / "exports", "game", {}, paths={"sourceRoot": source_root})
-        status, _, _ = wsgi_get("/files/game/source/main.c")
+        status, headers, body = wsgi_get("/files/game/source/main.c")
         # Non-strict resolution can leave an unreadable loop for the file server
         # to report missing; neither a path error nor an absent file may become 500.
-        assert status.startswith(("403", "404"))
+        # The two answers are not interchangeable, though: the escaping roots
+        # are the 403 containment refusal, only the symlink loop is the 404.
+        if source_root == "/reversed/loop":
+            assert status.startswith("404"), (source_root, status)
+        else:
+            assert status.startswith("403"), (source_root, status)
+            assert json.loads(decode_body(body, headers))["code"] == "forbidden"
 
     def test_portable_binary_symlink_loop_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
