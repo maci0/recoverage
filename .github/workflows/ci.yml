@@ -48,6 +48,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
@@ -99,6 +104,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
@@ -176,6 +186,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
@@ -224,6 +239,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
@@ -348,6 +368,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
@@ -387,6 +412,11 @@ jobs:
           # pushes, so there is nothing for it to authenticate: drop it as soon
           # as the tree is on disk.
           persist-credentials: false
+          # Single-commit clone: every git use in this workflow reads HEAD
+          # only (`git log -1 --format=%ct` for SOURCE_DATE_EPOCH, `git
+          # ls-files` for the second build tree, `git status` for the bundle
+          # check), so a full-history fetch buys nothing but clone time.
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # uv runs every install, lint and test in this workflow, so an
