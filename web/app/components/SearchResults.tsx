@@ -67,7 +67,7 @@ export function SearchResults(props: SearchResultsProps): ComponentChildren {
     // the map the reader is looking at every keystroke. Wider than the field
     // from `lg`, where the field is 20rem: a decompiled name and its symbol
     // were both truncated to a few letters at that width.
-    <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-control bg-surface shadow-lift lg:w-form">
+    <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-panel bg-surface shadow-lift lg:w-form">
       <p className="m-0 border-0 border-b border-border px-3 py-2 text-micro text-text-muted" aria-hidden="true">
         {status}
       </p>

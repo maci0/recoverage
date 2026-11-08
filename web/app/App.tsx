@@ -1330,7 +1330,7 @@ export function App() {
             className={
               notice === null
                 ? "sr-only"
-                : "fixed inset-x-4 bottom-4 z-30 mx-auto flex max-w-prose items-center gap-3 rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text shadow-lift"
+                : "fixed inset-x-4 bottom-4 z-30 mx-auto flex max-w-prose items-center gap-3 rounded-action border border-border bg-live-soft px-3 py-2 text-data text-text shadow-lift"
             }
             role="status"
             aria-live="polite"
@@ -1362,7 +1362,7 @@ export function App() {
           )}
           {failure !== null && !blank && (
             <p
-              className="mb-3 flex flex-wrap items-center gap-3 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-st-fail"
+              className="mb-3 flex flex-wrap items-center gap-3 rounded-action border border-border bg-fail-soft px-3 py-2 text-data text-st-fail"
               role="alert"
             >
               <span className="min-w-0">{failure}</span>
@@ -1609,7 +1609,7 @@ function MapArea({
     if (loadError !== null) {
       return (
         <div
-          className="flex flex-col items-start gap-3 rounded-control border border-border bg-fail-soft p-4 text-data text-st-fail"
+          className="flex flex-col items-start gap-3 rounded-action border border-border bg-fail-soft p-4 text-data text-st-fail"
           role="alert"
         >
           <p className="m-0">Coverage data unavailable: {loadError}</p>
@@ -1627,7 +1627,7 @@ function MapArea({
     }
     return (
       <div
-        className="flex flex-col items-start gap-3 rounded-control border border-border bg-fail-soft p-4 text-data text-st-fail"
+        className="flex flex-col items-start gap-3 rounded-action border border-border bg-fail-soft p-4 text-data text-st-fail"
         aria-busy="true"
       >
         <p className="m-0">
@@ -1722,7 +1722,7 @@ function UnreadableNotice({
 }): ComponentChildren {
   return (
     <div
-      className="mb-3 flex flex-col gap-1 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-text"
+      className="mb-3 flex flex-col gap-1 rounded-action border border-border bg-fail-soft px-3 py-2 text-data text-text"
       role="status"
     >
       <p className="m-0">
