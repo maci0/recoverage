@@ -981,7 +981,7 @@ def _build_url(
 # caption nor a header row.
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>recoverage · Potato Mode</title><meta name="description" content="The recoverage coverage map as plain server-rendered HTML, for a browser without JavaScript."><!-- The relumea mark the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>recoverage · Potato Mode</title><style>a:focus,a:focus-visible{outline:2px solid {{ACCENT_COLOR}};outline-offset:2px}input:focus,select:focus{outline:2px solid {{ACCENT_COLOR}};outline-offset:1px}</style><meta name="description" content="The recoverage coverage map as plain server-rendered HTML, for a browser without JavaScript."><!-- The relumea mark the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" link="{{TEXT_COLOR}}" vlink="{{TEXT_COLOR}}" alink="{{ACCENT_COLOR}}">
 <font face="{{SANS_FONT}}">
 <main>
