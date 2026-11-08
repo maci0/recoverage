@@ -1325,6 +1325,7 @@ export function App() {
               activeFn={panes.fnKey}
               theme={theme}
               onSelect={onGridSelect}
+              onClearFilters={() => toggleFilter("all")}
               onGridReady={(focus) => {
                 gridFocus.current = focus;
               }}
@@ -1429,6 +1430,7 @@ function MapArea({
   theme,
   onSelect,
   onGridReady,
+  onClearFilters,
 }: MapAreaProps): ComponentChildren {
   if (noTargets && unreadable.length > 0) {
     const one = unreadable.length === 1;
@@ -1544,6 +1546,7 @@ function MapArea({
       theme={theme}
       onSelect={onSelect}
       onGridReady={onGridReady}
+      onClearFilters={onClearFilters}
     />
   );
 }

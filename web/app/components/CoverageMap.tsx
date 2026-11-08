@@ -2,6 +2,7 @@ import type { TargetedKeyboardEvent } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/compat";
 
 import type { Section } from "@/api";
+import { Button } from "@/components/ui/button";
 import {
   DEFAULT_GRID_COLUMNS,
   MAX_GRID_COLUMNS,
@@ -127,6 +128,8 @@ export type CoverageMapProps = {
   /** Replaced by the component: jumps the roving tab stop and scrolls to a
    * cell (search Enter, an asm link, an arrow-key walk). */
   onGridReady?: (focusCell: (index: number) => void) => void;
+  /** Clear the status filter, from the caption that says it hid the map. */
+  onClearFilters?: (() => void) | undefined;
 };
 
 type GridState = {
@@ -150,6 +153,7 @@ export function CoverageMap({
   theme,
   onSelect,
   onGridReady,
+  onClearFilters,
 }: CoverageMapProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -620,7 +624,14 @@ export function CoverageMap({
             everything here"; this line says which rule did it, what it left and
             what undoes it. */}
         {summary !== null && (
-          <p className="border-t border-border px-3 py-2 text-micro text-text-muted">{summary}</p>
+          <p className="m-0 flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-micro text-text-muted">
+            <span>{summary}</span>
+            {filters.size > 0 && onClearFilters !== undefined && (
+              <Button size="sm" onClick={onClearFilters}>
+                Clear filter
+              </Button>
+            )}
+          </p>
         )}
         <p id={hintId} className="sr-only">
           Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
