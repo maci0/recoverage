@@ -449,7 +449,9 @@ def _metadata_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, dict[
 
 def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
     """Every paths value a document names under its metadata table, as stored."""
-    return [value for _name, paths in _metadata_paths(documents) for value in paths.values() if value]
+    return [
+        value for _name, paths in _metadata_paths(documents) for value in paths.values() if value
+    ]
 
 
 def _source_root_refusal(documents: list[tuple[str, bytes]]) -> None:
@@ -459,7 +461,7 @@ def _source_root_refusal(documents: list[tuple[str, bytes]]) -> None:
     it; a backup that archives around it would restore the map and silently
     drop the source pane. The refusal names the exclusion, not "not present".
     """
-    for name, paths in _metadata_paths(documents):
+    for _name, paths in _metadata_paths(documents):
         if "sourceRoot" in paths:
             raise BackupError(
                 "referenced path 'sourceRoot' names a source tree, which the flat "
