@@ -462,8 +462,14 @@ regen-oxlint: ensure-rebrew ensure-bun
 # re-vendor, and the bare `uv run python tools/vendor_manifest.py` the README
 # used to spell is the one place a contributor ran outside the locked env.
 #
-# This stdlib-only tool needs no environment bootstrap.
+# This stdlib-only tool needs no environment bootstrap, but it writes a committed
+# file, so it pins the same locale/timezone and umask 'build' and 'web-build' do:
+# a non-C locale or a restrictive umask regenerated the manifest with bytes no
+# CI run ever byte-compared.
 vendor-manifest:
+	@$(SET_STRICT) \
+	export LC_ALL=C TZ=UTC; \
+	umask 022; \
 	$(UV_STDLIB) $(PYTHON) tools/vendor_manifest.py
 
 smoke: ensure-rebrew
@@ -500,7 +506,8 @@ browser-sbom:
 # differs between two runs of one commit cannot be diffed.
 browser-sbom-spdx:
 	@$(SET_STRICT) \
-	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)"; \
+	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
+	umask 022; \
 	$(UV_STDLIB) $(PYTHON) tools/bundled_js_inventory.py --format spdx
 
 # The other half of the sbom job's output: the resolved Python tree, every
