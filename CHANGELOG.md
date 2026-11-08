@@ -7,6 +7,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage verify-backups` verifies every stamped archive in a backup
+  directory, not only the newest one `check-backup` reads back, and exits 1
+  naming the first archive that fails. It writes nothing and needs no
+  `RECOVERAGE_SNAPSHOTS` selection.
 - `recoverage verify` checks a backup archive against its manifest without
   restoring it, and exits 1 naming the member whose size or digest disagrees.
 - `recoverage check-backup` refuses when a backup directory holds no fresh
