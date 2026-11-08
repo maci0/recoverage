@@ -3455,14 +3455,18 @@ _STATUS_ERROR_CODES: dict[int, str] = {
 
 
 def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse:
-    """Return a JSON error response.
+    """Return a JSON error response, always ``Allow``-headered on a 405.
 
     Body is always ``{"error": <human message>, "code": <machine code>,
     "detail": <context>}``.  ``code`` defaults to a status-based mapping
     (call sites may override it) and any extra keys in ``data`` (e.g.
     ``retry_after``) are preserved alongside the standard trio.  Extra
     response headers (e.g. ``Retry_After=...``, underscores become dashes)
-    ride along for statuses that carry them (429).
+    ride along for statuses that carry them (429).  A 405 sent without an
+    explicit ``Allow`` header falls back to ``OPTIONS`` (the CORS preflight
+    catch-all, the one verb every path accepts): the webapp composition
+    root passes its probed Allow explicitly, this is only the floor for a
+    posture a bare ``recoverage.server`` mount might take.
     """
     body_data: dict[str, Any] = {
         "error": data.get("error", "error"),
@@ -3478,6 +3482,8 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse
     # Errors must never be cached by intermediaries: a proxy could serve a
     # stale 503 after the DB recovers.
     resp = HTTPResponse(status=status, body=body)
+    if status == 405 and "Allow" not in headers and "allow" not in headers:
+        headers = {"Allow": "OPTIONS", **headers}
     _finalized(resp, body, "application/json", encoding, Cache_Control="no-store", **headers)
     return resp
 
