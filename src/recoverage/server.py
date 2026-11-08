@@ -4232,7 +4232,13 @@ def _handle_unexpected_error(error: Any) -> HTTPResponse:
         extra=request_log_fields(500),
     )
     if request.path.startswith("/api/"):
-        return _json_err(500, {"error": "Internal server error"})
+        return _json_err(
+            500,
+            {
+                "error": "Internal server error",
+                "detail": "the server log names the cause",
+            },
+        )
     return app.default_error_handler(error)
 
 
