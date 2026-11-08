@@ -103,12 +103,11 @@ export function loadHighlighter(): Promise<Highlighter> {
   }
   // A failed load must not be memoised as the answer: the reader reloads the
   // page or clicks a second cell, and the retry is what lets the pane recover
-  // without one. The rejection passes through unchanged — `loadScript` rejects
-  // with a `HighlightLoadError` and nothing else, so there is nothing to parse
-  // and nothing to re-wrap.
-  pending ??= loadScript().catch(() => {
+  // without one.
+  // oxlint-disable-next-line promise/prefer-await-to-callbacks -- a rejection handler must run as the load settles, clearing the memo so the next call retries; an async wrapper would reconnect the throw downstream instead
+  pending ??= loadScript().catch((error: HighlightLoadError) => {
     pending = null;
-    throw loadFailure("unreachable");
+    throw error;
   });
   return pending;
 }
