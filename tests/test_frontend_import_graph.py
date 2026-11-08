@@ -112,15 +112,9 @@ def test_imports_point_one_way(importer: str) -> None:
 
 
 def test_no_import_cycles() -> None:
-    graph = _graph()
-    cycles: list[tuple[str, ...]] = []
-    for start in sorted(graph):
-        stack: list[tuple[str, tuple[str, ...]]] = [(start, (start,))]
-        while stack:
-            node, path = stack.pop()
-            for nxt in sorted(graph[node]):
-                if nxt in path:
-                    cycles.append((*path[path.index(nxt) :], nxt))
-                else:
-                    stack.append((nxt, (*path, nxt)))
+    # The cycle walk is the same one test_import_graph runs over the Python
+    # package; imported rather than re-spelled here so the two cannot drift.
+    from tests.test_import_graph import _find_cycles
+
+    cycles = _find_cycles(_graph())
     assert not cycles, f"import cycles: {cycles}"

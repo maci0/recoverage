@@ -551,6 +551,21 @@ class _ServeConfig(NamedTuple):
     max_connections: int
     client_timeout: int
 
+    def render(self) -> dict[str, str]:
+        """The one rendering of these settings, shared by the banner and config."""
+        return config.active_config(
+            port=self.port,
+            bind=self.bind,
+            allow_remote=self.allow_remote,
+            cors=self.cors,
+            cors_origin=self.cors_origins,
+            token=self.token,
+            snapshots=self.snapshots,
+            log_level=self.log_level,
+            max_connections=self.max_connections,
+            client_timeout=self.client_timeout,
+        )
+
 
 def _resolve_serve_config(
     *,
@@ -1715,18 +1730,7 @@ def serve(
     # Rendered ONCE and published to /api/health: the banner and the running
     # process's answer are the same values, so they cannot drift.  The token is
     # reported as set/unset, never by value.
-    active = config.active_config(
-        port=listen_port,
-        bind=bind,
-        allow_remote=allow_remote,
-        cors=cors,
-        cors_origin=resolved.cors_origins,
-        token=token,
-        snapshots=resolved.snapshots,
-        log_level=resolved.log_level,
-        max_connections=resolved.max_connections,
-        client_timeout=resolved.client_timeout,
-    )
+    active = resolved._replace(port=listen_port, bind=bind, allow_remote=allow_remote).render()
     _server.configure_startup(active)
     # Install the transport bounds the same values report, before the listener
     # binds: a cap validated and then not installed is a config the banner
@@ -2013,13 +2017,14 @@ def export(
         all_data = [_get_stats(snapshots, tid, json_output=json_output) for tid in targets]
 
     if output_format == ExportFormat.json:
+        # BrokenPipeError falls through to main(), which owns the
+        # `export | head` contract (devnull, then exit 1); only the other
+        # write errors are reported here.
         try:
             typer.echo(_dumps(all_data))
-        except BrokenPipeError:
-            # `recoverage export | head` is a documented use, and main() owns
-            # that contract (devnull, then exit 1).
-            raise
         except (OSError, UnicodeError) as exc:
+            if isinstance(exc, BrokenPipeError):
+                raise
             _export_write_failed(exc, "JSON", "while writing the document")
 
     elif output_format == ExportFormat.csv:
@@ -2045,13 +2050,12 @@ def export(
                     writer.writerow(csv_row(data["target"], sec_name, sec))
                     written += 1
             stream.flush()
-        except BrokenPipeError:
-            # `recoverage export | head` is a documented use, and main() owns
-            # that contract: it repoints stdout at devnull and reports the
-            # truncation with exit 1. Swallowing it here would export a
-            # complete file and exit 0.
-            raise
         except (OSError, UnicodeError) as exc:
+            # BrokenPipeError reaches main(), which repoints stdout at
+            # devnull and reports the truncation with exit 1; swallowing it
+            # here would export a complete file and exit 0.
+            if isinstance(exc, BrokenPipeError):
+                raise
             _export_write_failed(exc, "CSV", f"after {written} of {total} section rows")
         finally:
             # Detach on EVERY path, not only the successful one: the wrapper
@@ -2074,10 +2078,10 @@ def export(
                 for line in markdown_lines([data]):
                     typer.echo(line)
                 written += len(data["sections"])
-        except BrokenPipeError:
-            # main() owns `export | head`; see the CSV arm above.
-            raise
         except (OSError, UnicodeError) as exc:
+            # BrokenPipeError reaches main(); see the CSV arm above.
+            if isinstance(exc, BrokenPipeError):
+                raise
             _export_write_failed(exc, "Markdown", f"after {written} of {total} section rows")
 
 
@@ -2639,18 +2643,7 @@ def config_cmd(
     _use_utf8_stderr()
     as_json = _json_on(as_json)
     resolved = _resolve_serve_config()
-    settings = config.active_config(
-        port=resolved.port,
-        bind=resolved.bind,
-        allow_remote=resolved.allow_remote,
-        cors=resolved.cors,
-        cors_origin=resolved.cors_origins,
-        token=resolved.token,
-        snapshots=resolved.snapshots,
-        log_level=resolved.log_level,
-        max_connections=resolved.max_connections,
-        client_timeout=resolved.client_timeout,
-    )
+    settings = resolved.render()
     if as_json:
         typer.echo(_dumps(settings))
     else:

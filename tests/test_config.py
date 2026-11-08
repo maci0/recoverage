@@ -492,19 +492,7 @@ class TestUnknownVars:
         """
         from recoverage import cli
 
-        resolved = cli._resolve_serve_config()
-        rendered = config.active_config(
-            port=resolved.port,
-            bind=resolved.bind,
-            allow_remote=resolved.allow_remote,
-            cors=resolved.cors,
-            cors_origin=resolved.cors_origins,
-            token=resolved.token,
-            snapshots=resolved.snapshots,
-            log_level=resolved.log_level,
-            max_connections=resolved.max_connections,
-            client_timeout=resolved.client_timeout,
-        )
+        rendered = cli._resolve_serve_config().render()
         tool_knobs = {
             "RECOVERAGE_BACKUP_DIR",
             "RECOVERAGE_DEV_API",

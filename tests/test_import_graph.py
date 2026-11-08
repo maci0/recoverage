@@ -120,6 +120,20 @@ def _graph() -> dict[str, set[str]]:
     return {p.stem: _in_package_imports(p) for p in sorted(_SRC.glob("*.py"))}
 
 
+def _find_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
+    cycles: list[tuple[str, ...]] = []
+    for start in sorted(graph):
+        stack: list[tuple[str, tuple[str, ...]]] = [(start, (start,))]
+        while stack:
+            node, path = stack.pop()
+            for nxt in sorted(graph[node]):
+                if nxt in path:
+                    cycles.append((*path[path.index(nxt) :], nxt))
+                else:
+                    stack.append((nxt, (*path, nxt)))
+    return cycles
+
+
 def test_every_module_declares_its_level() -> None:
     """A module missing from _LEVELS is one nobody has placed in the graph."""
     on_disk = {p.stem for p in _SRC.glob("*.py")}
@@ -177,17 +191,7 @@ def test_route_modules_import_no_sibling_route(importer: str) -> None:
 
 
 def test_no_import_cycles() -> None:
-    graph = _graph()
-    cycles: list[tuple[str, ...]] = []
-    for start in sorted(graph):
-        stack: list[tuple[str, tuple[str, ...]]] = [(start, (start,))]
-        while stack:
-            node, path = stack.pop()
-            for nxt in sorted(graph[node]):
-                if nxt in path:
-                    cycles.append((*path[path.index(nxt) :], nxt))
-                else:
-                    stack.append((nxt, (*path, nxt)))
+    cycles = _find_cycles(_graph())
     assert not cycles, f"import cycles: {cycles}"
 
 
