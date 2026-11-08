@@ -15,7 +15,6 @@ surfaces instead of three.
 from __future__ import annotations
 
 import json
-import math
 import os
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -309,28 +308,6 @@ def _coverage_meets(covered: int, total: int, min_coverage: float) -> bool:
     return Decimal(covered) * 100 >= threshold * Decimal(total)
 
 
-def _pct_meets(pct: float, min_coverage: float) -> bool:
-    """True when the float *pct* meets *min_coverage*, without the float trap.
-
-    The fallback for callers that pass only the percentage, not the raw
-    counts.  A bare ``pct >= min_coverage`` fails on the exact boundary:
-    ``23/40*100`` is ``57.49999999999999`` in binary, so a section meeting
-    a 57.5 gate exactly reports ``coverage 57.50% < 57.50%``.  The counts
-    are unrecoverable from the float, but the error is bounded: a
-    percentage computed from byte counts well under 512 MiB sits at least
-    ~1e-7 below a boundary it truly misses, while the binary error is
-    ~1e-13 relative.  Rounding to 9 decimal places absorbs the error
-    without moving a genuine miss across the line.  A non-finite *pct*
-    meets nothing, matching the bare comparison it replaces.
-    """
-    if not math.isfinite(pct) or not math.isfinite(min_coverage):
-        return False
-    from decimal import Decimal
-
-    cleaned = round(pct, 9)
-    return Decimal(repr(cleaned)) >= Decimal(repr(min_coverage))
-
-
 def section_verdict(
     pct: float,
     untracked: bool,
@@ -339,8 +316,8 @@ def section_verdict(
     *,
     target: str,
     section: str,
-    covered: int | None = None,
-    total: int | None = None,
+    covered: int,
+    total: int,
 ) -> Verdict:
     """Classify one section against the gate.
 
@@ -378,11 +355,7 @@ def section_verdict(
     # the value is floored, so 99.9997% cannot be quoted as 100.00% beside a
     # FAIL verdict that just compared it against 100.00%.
     shown = floor_pct(pct, 100, 2)
-    meets = (
-        _coverage_meets(covered, total, min_coverage)
-        if covered is not None and total is not None
-        else _pct_meets(pct, min_coverage)
-    )
+    meets = _coverage_meets(covered, total, min_coverage)
     if not meets:
         return Verdict(
             target,

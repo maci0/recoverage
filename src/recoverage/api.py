@@ -3300,26 +3300,3 @@ def _regen_failed(started_at: float, reason: str, *args: object) -> None:
         extra=_metrics.regen_log_fields("failed", elapsed),
     )
     _metrics.REGEN.finish(False, elapsed * 1000.0)
-
-
-def _regen_rejected(started_at: float, reason: str, *args: object) -> None:
-    """Close out a run that was refused rather than failed.
-
-    The ``RegenBusyError`` arm answers 429, the same shape the in-process
-    lock gives, and running it through :func:`_regen_failed` filed it as a
-    pipeline error: a second process's ``recoverage regen`` (or a cron job
-    over the same tree) wrote a red ``Regen failed after 0.0s`` line every
-    time, which is noise on the one line that does mean the pipeline broke.
-    """
-    elapsed = clock.monotonic() - started_at
-    _log.info(
-        "Regen refused after %.1fs: " + reason,
-        elapsed,
-        *args,
-        extra=_metrics.regen_log_fields("rejected", elapsed),
-    )
-    # None, not False: the gauge closes and the elapsed time is recorded, but
-    # nothing was written and nothing broke, so `failures` stays the count of
-    # runs that ran and failed.
-    _metrics.REGEN.finish(None, elapsed * 1000.0)
-    _metrics.REGEN.reject()
