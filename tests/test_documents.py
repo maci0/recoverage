@@ -16,7 +16,7 @@ import time
 import tomllib
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from coverage_fixture import cell, coverage_dir, write_coverage
@@ -40,7 +40,7 @@ def _sections(size: int) -> dict[str, dict[str, Any]]:
 
 @pytest.fixture
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    directory = coverage_dir(tmp_path)
+    directory = cast(Path, coverage_dir(tmp_path))
     monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
     monkeypatch.setattr(documents, "_STATE", None)
     metrics.CACHES.reset()

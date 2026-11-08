@@ -65,7 +65,10 @@ def build_sample_db(project_dir: Path) -> Path:
     finally:
         with contextlib.suppress(ValueError):
             sys.path.remove(tests_dir)
-    return build_synthetic_coverage(project_dir / "db")
+    # The local import is what keeps this module importable without the
+    # suite's conftest; mypy reads it as Any because coverage_fixture is on
+    # no module search path, so the return is narrowed by cast.
+    return cast(Path, build_synthetic_coverage(project_dir / "db"))
 
 
 def free_port() -> int:

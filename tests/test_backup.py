@@ -29,7 +29,7 @@ import tarfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from coverage_fixture import build_synthetic_coverage, write_coverage
@@ -62,7 +62,7 @@ def db(tmp_path: Path) -> Path:
     what this module backs up, and the tests below say ``db`` when they mean
     the directory so a reader is not counting on the fixture's return value.
     """
-    return build_synthetic_coverage(tmp_path / "db").parent
+    return cast(Path, build_synthetic_coverage(tmp_path / "db")).parent
 
 
 @pytest.fixture
