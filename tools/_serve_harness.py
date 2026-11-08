@@ -83,7 +83,7 @@ def get(port: int, path: str) -> tuple[int, bytes]:
         conn.request("GET", path, headers={"Accept-Encoding": "identity"})
         resp = conn.getresponse()
         return resp.status, resp.read()
-    except (ConnectionRefusedError, OSError):
+    except ConnectionRefusedError, OSError:
         return 0, b""
     finally:
         conn.close()

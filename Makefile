@@ -541,7 +541,7 @@ license-inventory: ensure-rebrew
 
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web \
-	build check-bundle-clean browser-sbom python-sbom license-inventory smoke smoke-fail
+	build check-bundle-clean browser-sbom browser-sbom-spdx python-sbom license-inventory smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, build, smoke)'
 
 clean:

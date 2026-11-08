@@ -6177,9 +6177,7 @@ class TestTargetFileRoutesFuzz:
     _BINARY = b"game binary bytes"
     _SECRET = b"TOP-SECRET-OUTSIDE-TREE"
 
-    def _project(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[Path, Path]:
+    def _project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
         from recoverage import server, ui
 
         root = tmp_path / "project"
@@ -6237,9 +6235,9 @@ class TestTargetFileRoutesFuzz:
                     except OSError, ValueError:
                         resolved = None
                     if resolved is not None:
-                        assert resolved.is_relative_to(
-                            (root / "reversed" / "game").resolve()
-                        ), f"{path}: answered 200 for {decoded!r} resolving outside"
+                        assert resolved.is_relative_to((root / "reversed" / "game").resolve()), (
+                            f"{path}: answered 200 for {decoded!r} resolving outside"
+                        )
 
         _fuzz(
             FILES_SEEDS,
