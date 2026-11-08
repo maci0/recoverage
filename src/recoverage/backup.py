@@ -416,8 +416,8 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     return out
 
 
-def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
-    """Every paths value a document names under its metadata table, as stored.
+def _metadata_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, dict[str, str]]]:
+    """Every document's ``metadata.paths`` table, as stored.
 
     Parsed with the same TOML reader the documents are read with, because a
     document that does not parse cannot name a file this backup must carry
@@ -428,7 +428,7 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
     """
     import tomllib
 
-    refs: list[str] = []
+    out: list[tuple[str, dict[str, str]]] = []
     for name, data in documents:
         try:
             doc = tomllib.loads(data.decode("utf-8"))
@@ -443,9 +443,13 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
         for key, value in paths.items():
             if not isinstance(value, str):
                 raise BackupError(f"{name}: metadata.paths.{key} is {value!r}, not a path")
-            if value:
-                refs.append(value)
-    return refs
+        out.append((name, paths))
+    return out
+
+
+def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
+    """Every paths value a document names under its metadata table, as stored."""
+    return [value for _name, paths in _metadata_paths(documents) for value in paths.values() if value]
 
 
 def _source_root_refusal(documents: list[tuple[str, bytes]]) -> None:
@@ -455,19 +459,7 @@ def _source_root_refusal(documents: list[tuple[str, bytes]]) -> None:
     it; a backup that archives around it would restore the map and silently
     drop the source pane. The refusal names the exclusion, not "not present".
     """
-    import tomllib
-
-    for name, data in documents:
-        try:
-            doc = tomllib.loads(data.decode("utf-8"))
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise BackupError(f"cannot parse coverage document {name}: {exc}") from exc
-        metadata = doc.get("metadata", {})
-        if not isinstance(metadata, dict):
-            raise BackupError(f"{name}: metadata is not a table")
-        paths = metadata.get("paths", {})
-        if not isinstance(paths, dict):
-            raise BackupError(f"{name}: metadata paths is not a table")
+    for name, paths in _metadata_paths(documents):
         if "sourceRoot" in paths:
             raise BackupError(
                 "referenced path 'sourceRoot' names a source tree, which the flat "
