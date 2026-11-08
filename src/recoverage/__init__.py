@@ -13,7 +13,8 @@ Module map (dependencies point one way, left to right):
   deadline, keep-alive framing (imports config+metrics; stdlib only)
 - ``_paths``      — live project or explicit portable snapshot resolution (imports config)
 - ``documents``   — immutable live views or portable documents read per file;
-  portable TOML parses persist across restarts; ``backup`` archives explicit exports
+  portable TOML parses persist across restarts
+- ``backup``      — verified backup/restore of explicitly selected portable exports
 - ``regen``       — explicit read-only refresh of Rebrew's shared live project view
   (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,
@@ -36,7 +37,8 @@ Module map (dependencies point one way, left to right):
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports
   server+regen for config and stats helpers, and reports through ``reporting``)
 - ``ops``         — the ``recoverage.*`` ops the backend dispatches: one JSON
-  request on stdin, one reply on stdout (imports documents+reporting+_paths)
+  request on stdin, one reply on stdout (imports reporting+_paths; reaches
+  documents and server lazily inside operation bodies)
 - ``clispec``     — clispec 0.3 document for the CLI (no in-package imports)
 - ``__main__``    — ``python -m recoverage``; forwards argv to ``cli.main``
 

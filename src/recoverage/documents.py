@@ -106,8 +106,9 @@ _CACHE_MAX_SLOTS: Final = 64
 #: than a write in progress (a 10 MB write takes milliseconds).
 _STALE_TMP_SECONDS: Final = 3600
 
-#: ``(name, mtime_ns, size, ino)``: the inode catches a same-size rename-over
-#: inside one mtime tick, which mtime and size alone cannot see.
+#: ``(name, mtime_ns, size, ino, ctime_ns)``: the inode and ctime catch a
+#: same-size rename-over inside one mtime tick, which mtime and size alone
+#: cannot see.
 _StatKey = tuple[str, int, int, int, int]
 
 

@@ -1121,7 +1121,7 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
 def _newest_mtime_ns() -> int | None:
     """Newest mtime_ns across the coverage documents, or None when there are none.
 
-    The same directory scan :func:`_snapshot_db_mtime` folds, as a plain instant
+    The stat scan behind the rendered freshness stamp, as a plain instant
     instead of an opaque token: for the surfaces that RENDER the freshness time
     (``/api/health``, Potato Mode's footer stamp) rather than key a cache on it.
     """
