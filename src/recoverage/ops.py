@@ -725,9 +725,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         raise OpsError(f"{name} failed; the worker log has the cause") from None
 
 
-def dispatch_json(
-    config: WorkerConfig, name: str, request: Mapping[str, Any]
-) -> tuple[int, Any]:
+def dispatch_json(config: WorkerConfig, name: str, request: Mapping[str, Any]) -> tuple[int, Any]:
     """Answer one call from a dict: ``(200, reply)`` or ``(status, refusal)``.
 
     Convenience over :func:`dispatch` for in-process callers; the reply and
@@ -802,6 +800,8 @@ def call_command(
 TOKEN_ENV = "RECOVERAGE_OPS_TOKEN"  # noqa: S105  # a variable name, not a credential
 
 #: Shortest accepted bearer token, the length rebrew's server requires.
+PORT_ENV = "RECOVERAGE_OPS_PORT"
+HOST_ENV = "RECOVERAGE_OPS_HOST"
 MIN_TOKEN_BYTES = 32
 
 #: Calls answered at once; the next is refused 503 with Retry-After.  A map call peaks near 115 MiB.
@@ -814,8 +814,12 @@ MAX_CONCURRENCY = 64
 
 @app.command("serve")
 def serve_command(
-    port: int = typer.Option(..., "--port", help="TCP port; 0 picks a free one"),
-    host: str = typer.Option("127.0.0.1", "--host", help="Address to bind (loopback by default)"),
+    port: str | None = typer.Option(
+        None, "--port", envvar=PORT_ENV, help="TCP port; 0 picks a free one"
+    ),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", envvar=HOST_ENV, help="Address to bind (loopback by default)"
+    ),
     workspace: Path | None = typer.Option(
         None, "--workspace", envvar="RECOVERAGE_OPS_WORKSPACE", help=_WORKSPACE_HELP + " (required)"
     ),
@@ -847,10 +851,38 @@ def serve_command(
 
     from rebrew import ops as rebrew_ops
 
+    from recoverage import config as _config
+
     # Typer/click's INT coercion accepts Unicode digits and ``1_0`` spellings,
     # so parse the concurrency through the same ASCII floor the dashboard
     # settings use; the flag and env var are one setting.
     from recoverage.server import parse_ascii_int
+
+    # Misspelled RECOVERAGE_* names are a startup error everywhere else
+    # (``_check_env_or_exit``); ``ops serve`` must not silently accept them
+    # just because it never went through the dashboard's env check.
+    try:
+        _config.check_unknown_vars()
+    except _config.ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_ERROR) from None
+
+    if port is None:
+        typer.secho(
+            f"Error: serve needs --port (or {PORT_ENV})",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR)
+    try:
+        resolved_port = parse_ascii_int(port.strip())
+    except ValueError:
+        typer.secho(
+            f"Error: --port (or {PORT_ENV}) is not an integer",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR) from None
 
     if concurrency is None:
         resolved_concurrency = DEFAULT_CONCURRENCY
@@ -884,11 +916,13 @@ def serve_command(
     # (OverflowError/gaierror) instead of a startup error naming the flag.
     try:
         host = validate_bind(host, "--host")
-        if not 0 <= port <= 65535:
-            raise ConfigError(f"--port: {port} is not in the range 0-65535")
+        if not 0 <= resolved_port <= 65535:
+            raise ConfigError(f"--port: {resolved_port} is not in the range 0-65535")
     except ConfigError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_ERROR) from None
+
+    port = resolved_port
 
     raw_token = os.environ.get(TOKEN_ENV)
     try:

@@ -70,9 +70,11 @@ Answer the relumea backend's recoverage ops over stdin/stdout.
 answers the same ops over HTTP (see
 .BR RECOVERAGE_OPS_TOKEN ).
 .BI \-\-port " PORT"
-TCP port (default: required; 0 picks a free one).
+TCP port (default: required; 0 picks a free one; env:
+.BR RECOVERAGE_OPS_PORT ).
 .BI \-\-host " HOST"
-Address to bind (default: 127.0.0.1).
+Address to bind (default: 127.0.0.1; env:
+.BR RECOVERAGE_OPS_HOST ).
 .BI \-\-workspace " DIR"
 Required: every request
 .I project_dir
@@ -419,6 +421,18 @@ log nothing at all.
 Explicit portable/offline snapshot directory. Leave unset for live project reads;
 live services set their working directory inside the project. A file path is a
 configuration error. Backup and restore operate only on explicit portable exports.
+.TP
+.B RECOVERAGE_OPS_PORT
+Default for
+.B ops serve
+.BR \-\-port :
+the TCP port to bind; 0 picks a free one. The flag wins when both are set.
+.TP
+.B RECOVERAGE_OPS_HOST
+Default for
+.B ops serve
+.BR \-\-host :
+the address to bind (default: 127.0.0.1). The flag wins when both are set.
 .TP
 .B RECOVERAGE_OPS_WORKSPACE
 Default for
