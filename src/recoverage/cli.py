@@ -2559,6 +2559,49 @@ def verify(
     )
 
 
+@app.command("verify-backups")
+def verify_backups(
+    directory: str = typer.Argument(
+        ...,
+        metavar="DIRECTORY",
+        help="Backup directory holding stamped archives to verify in full",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the verified archive list as a JSON object"
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Verify every stamped archive in DIRECTORY, not only the newest.
+
+    The periodic re-proof a drill runs against the whole retention set:
+    check-backup reads back only the newest archive, so a corrupt
+    older archive -- the one a logical-corruption restore would reach
+    for -- stays invisible until that restore. This command exits 1 and
+    names the first archive that fails, and exits 0 only when every
+    stamped archive in the directory is one a restore could load. It
+    writes nothing and needs no RECOVERAGE_SNAPSHOTS selection.
+    """
+    from recoverage.backup import BackupError, verify_all_backups
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    as_json = _json_on(as_json)
+    _check_env_or_exit()
+    path = _expanduser_path(directory, as_json=as_json)
+    try:
+        archives = verify_all_backups(path)
+    except BackupError as exc:
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
+    if as_json:
+        typer.echo(_dumps({"directory": str(path), "verified": [p.name for p in archives]}))
+        return
+    _secho(
+        f"Verified {len(archives)} backup archive(s) in {path}.",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
 @app.command("check-backup")
 def check_backup(
     directory: str = typer.Argument(

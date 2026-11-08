@@ -108,7 +108,12 @@ like a stamped archive never counts as a backup. A schedule that
 runs less often than daily passes its own `--max-age-hours`. Between
 drills, run `recoverage verify /srv/backups/nightly.tar` to re-prove an archive
 older runs wrote or that was copied to another volume; it writes nothing and
-needs no `RECOVERAGE_SNAPSHOTS` selection.
+needs no `RECOVERAGE_SNAPSHOTS` selection. That check reads back only the
+newest archive, so a corrupt older archive — the one a logical-corruption
+restore reaches for — stays invisible until that restore. Re-prove the
+whole retention set with `recoverage verify-backups /srv/backups`, which
+verifies every stamped archive in the directory and exits 1 naming the
+first that fails.
 
 ## Restore drills
 

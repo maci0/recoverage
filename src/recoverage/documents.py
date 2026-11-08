@@ -229,6 +229,23 @@ def _unlink_quiet(path: Path, what: str) -> None:
         _log.debug("coverage cache: cannot remove %s %s: %s", what, path, exc.strerror or exc)
 
 
+def _fsync_dir(path: Path) -> None:
+    """fsync a directory so a rename inside it survives a power loss."""
+    if os.name == "nt":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
 def _prune(root: Path) -> None:
     """Keep the :data:`_CACHE_MAX_SLOTS` most recently used slots, drop stale temps.
 
@@ -302,7 +319,9 @@ def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
             fh.write(body)
             fh.flush()
             os.fsync(fh.fileno())
-        Path(tmp_name).replace(_slot(root, path))
+        slot = _slot(root, path)
+        Path(tmp_name).replace(slot)
+        _fsync_dir(root)
         tmp_name = None
         _prune(root)
     except OSError as exc:

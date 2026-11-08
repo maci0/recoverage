@@ -45,6 +45,7 @@ from recoverage.backup import (
     default_backup_dir,
     newest_archive_age_hours,
     restore_backup,
+    verify_all_backups,
     verify_backup,
     write_backup,
 )
@@ -846,6 +847,33 @@ class TestBackupFreshness:
         hand_made.write_bytes(b"placeholder")
         os.utime(hand_made, (1_900_000_000, 1_900_000_000))
         assert backup._newest_stamped_archive(out) == stamped
+
+    def test_verify_all_catches_a_corrupt_older_archive(self, db: Path, tmp_path: Path) -> None:
+        """check-backup verifies only the newest; a corrupt older archive is
+        the one a logical-corruption restore reaches for, so the whole
+        retention set must be provable."""
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20200101T000000.000000Z.tar")
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        archives = verify_all_backups(out)
+        assert len(archives) == 2
+        (out / "coverage-20200101T000000.000000Z.tar").write_bytes(b"not a tar")
+        with pytest.raises(BackupError, match="not a readable backup"):
+            verify_all_backups(out)
+        inner = backup._archive_stamp_instant("coverage-20260101T000000.000000Z.tar")
+        assert inner is not None
+
+    def test_verify_backups_cli_fails_on_a_corrupt_older_archive(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20200101T000000.000000Z.tar")
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        (out / "coverage-20200101T000000.000000Z.tar").write_bytes(b"not a tar")
+        result = runner.invoke(app, ["verify-backups", str(out)])
+        assert result.exit_code == 1, result.output
 
     def test_a_corrupt_newest_archive_is_not_fresh(
         self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

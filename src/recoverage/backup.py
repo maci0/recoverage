@@ -999,6 +999,36 @@ def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVE
             ) from exc
 
 
+def verify_all_backups(directory: Path) -> list[Path]:
+    """Verify every stamped archive in *directory*; return their paths.
+
+    The one-pass monitor :func:`check_backup_freshness` verifies only the
+    newest archive.  Retention keeps 30: a corrupt older archive — the
+    one a logical-corruption restore would reach for (``docs/RECOVERY.md``:
+    "restoring the oldest archive that predates it") — is invisible until
+    that restore, and the next backup's prune can delete the good
+    archives around it.  A drill or a scheduled re-proof calls this so
+    all 30 are read back, not only the newest.
+    """
+    if not directory.is_dir():
+        raise BackupError(f"no backup directory at {directory}; no backup has been taken there")
+    try:
+        candidates = sorted(
+            path
+            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+            if path.is_file()
+            and not path.is_symlink()
+            and _archive_stamp_instant(path.name) is not None
+        )
+    except OSError as exc:
+        raise BackupError(f"cannot list backups in {directory}: {exc}") from exc
+    if not candidates:
+        raise BackupError(f"no stamped backup in {directory}; no backup has been taken there")
+    for archive in candidates:
+        verify_backup(archive)
+    return candidates
+
+
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
     """Put every verified member of *archive* into *db_dir*; return the paths.
 

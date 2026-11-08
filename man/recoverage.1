@@ -182,6 +182,13 @@ restore is also refused: its
 files hold the only copy of the pre-restore documents, so the error names it
 for manual inspection rather than overwriting it.
 .TP
+.B verify-backups
+Verify every stamped archive in a backup directory, not only the newest.
+Exits 1 naming the first archive that fails, and 0 only when every
+stamped archive is one a restore could load. Writes nothing and needs no
+.BR RECOVERAGE_SNAPSHOTS .
+.B \-\-json
+.TP
 .B check-backup
 Refuse when a backup directory has no fresh stamped archive. Exits 1 when
 the directory does not exist, holds no stamped archive, or its newest
