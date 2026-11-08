@@ -33,6 +33,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reply on stdout, and a target named by its binary's SHA-256. `--workspace`
   or `RECOVERAGE_OPS_WORKSPACE` confines the request `project_dir`.
 
+### Breaking
+
+- `POST /api/targets/<target>/functions` batch lookup now answers 400 when the JSON body carries any top-level key other than `vas`; previously such keys were silently ignored. Callers sending extra fields must remove them.
+
 ### Changed
 
 - Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.

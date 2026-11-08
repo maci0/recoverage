@@ -32,6 +32,19 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
+## [Unreleased]
+
+### Batch function lookup rejects unknown top-level fields
+
+Before: `POST /api/targets/<target>/functions` silently ignored any
+top-level JSON key other than `vas`.
+
+After: any other top-level key is a 400 (`unknown fields: ...; expected
+only vas`).
+
+Do: remove extra fields from the request body. A well-formed
+`{"vas": [...]}` body is unchanged.
+
 ## [8.0.0]
 
 ### Live project coverage and optional offline exports
