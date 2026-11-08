@@ -2157,7 +2157,7 @@ def _find_dll_path(target: str) -> Path | None:
                 _log.warning(
                     "Refusing portable original DLL for target %s: not a plain relative path",
                     _log_safe(target),
-                    extra=request_log_fields(500, target=_log_safe(target)),
+                    extra=request_log_fields(404, target=_log_safe(target)),
                 )
                 return None
             # Same cross-platform normalization as backup._referenced_files:
@@ -2169,7 +2169,7 @@ def _find_dll_path(target: str) -> Path | None:
                     "Refusing portable original DLL %s for target %s: outside the project tree",
                     _log_safe(binary),
                     _log_safe(target),
-                    extra=request_log_fields(500, target=_log_safe(target)),
+                    extra=request_log_fields(404, target=_log_safe(target)),
                 )
                 return None
             root = _project_dir().resolve()
@@ -2181,7 +2181,7 @@ def _find_dll_path(target: str) -> Path | None:
                     _log_safe(binary),
                     _log_safe(target),
                     _log_safe(str(exc)),
-                    extra=request_log_fields(500, target=_log_safe(target)),
+                    extra=request_log_fields(404, target=_log_safe(target)),
                 )
                 return None
             if not portable_binary.is_relative_to(root):
@@ -2189,7 +2189,7 @@ def _find_dll_path(target: str) -> Path | None:
                     "Refusing portable original DLL %s for target %s: outside the project tree",
                     _log_safe(binary),
                     _log_safe(target),
-                    extra=request_log_fields(500, target=_log_safe(target)),
+                    extra=request_log_fields(404, target=_log_safe(target)),
                 )
                 return None
             return portable_binary
@@ -2227,7 +2227,7 @@ def _find_dll_path(target: str) -> Path | None:
             "Refusing [targets.%s].binary outside the project tree: %s",
             _log_safe(target),
             _log_safe(filename),
-            extra=request_log_fields(500, target=_log_safe(target)),
+            extra=request_log_fields(404, target=_log_safe(target)),
         )
         return None
     return candidate
@@ -4135,6 +4135,12 @@ def _require_auth() -> None:
         # slow-request threshold, so without this the attempts past a full
         # window left no trace at all.
         metrics.AUTH.note_throttled()
+        logged_peer = peer_label()
+        _log.warning(
+            "Auth throttle: refusing request from %s (429)",
+            logged_peer,
+            extra=request_log_fields(429, peer=logged_peer),
+        )
         # `retry_after` in the body as well as the header: the two 429s the
         # regen route sends and the 503 the SSE cap sends both put the wait in
         # the envelope, so a client reading the documented JSON contract gets
@@ -4201,7 +4207,11 @@ def _reject_broken_project_config() -> None:
     except WorkspaceNotFound:
         return
     except WorkspaceConfigError as exc:
-        _log.warning("recoverage: %s", exc)
+        _log.warning(
+            "recoverage: %s",
+            _log_safe(str(exc)),
+            extra=request_log_fields(503),
+        )
         # "error" is the human message and every other 503 spells it the same
         # way; the machine-readable key is carried by the status mapping.
         raise _json_err(

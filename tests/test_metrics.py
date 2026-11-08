@@ -452,7 +452,9 @@ class TestAuthCounters:
         assert block["failures"] == 1, block
         assert block["throttled"] == 0, block
 
-    def test_a_full_window_is_a_throttle_and_turns_the_probe_degraded(self) -> None:
+    def test_a_full_window_is_a_throttle_and_turns_the_probe_degraded(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """The attempts past a full window are the ones nothing else records.
 
         A peer that spent its window is answered 429, which is not a 5xx, lands
@@ -461,9 +463,19 @@ class TestAuthCounters:
         that a network-reachable server is being guessed at.
         """
         bad = {"Authorization": "Bearer wrong", "Accept": "application/json"}
-        for _ in range(server._AUTH_FAIL_MAX):
-            assert wsgi_get("/api/health", headers=bad)[0].startswith("401")
-        assert wsgi_get("/api/health", headers=bad)[0].startswith("429")
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            for _ in range(server._AUTH_FAIL_MAX):
+                assert wsgi_get("/api/health", headers=bad)[0].startswith("401")
+            caplog.clear()
+            assert wsgi_get("/api/health", headers=bad)[0].startswith("429")
+        # The throttle arm logs a WARNING naming the peer, so a throttled
+        # request is visible in the log and can be correlated via fields.
+        throttles = [r for r in caplog.records if "Auth throttle" in r.getMessage()]
+        assert len(throttles) == 1, [r.getMessage() for r in caplog.records]
+        assert throttles[0].levelno == logging.WARNING
+        fields = getattr(throttles[0], metrics.LOG_FIELDS_ATTR, {})
+        assert fields.get("status") == 429, fields
+        assert "peer" in fields, fields
         health = self._probe()
         block = health["auth"]
         assert block["throttled"] == 1, block
