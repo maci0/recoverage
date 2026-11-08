@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import threading
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
@@ -36,6 +37,15 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger("recoverage")
+
+#: Upper bound on a single DNS resolution in :func:`listen_family`.  The
+#: stdlib resolver has no timeout knob, so the call runs on a daemon thread
+#: and is abandoned past this limit: a resolver that hangs (a black-holing
+#: DNS server, a dead ``/etc/resolv.conf``) must not hold ``serve`` startup
+#: — or a request thread — for the OS resolver's own, unbounded wait.  5s is
+#: the sibling probe timeout (``cli._OPEN_PROBE_TIMEOUT_SECONDS``): a name
+#: that has not answered by then is not a bind address this process can use.
+_LISTEN_FAMILY_TIMEOUT_SECONDS = 5.0
 
 #: Concurrent connections the dashboard admits.  Generous next to what a real
 #: client needs — a browser tab holds one, a page loading assets and polling
@@ -114,12 +124,38 @@ def listen_family(host: str) -> socket.AddressFamily:
     picks the class carrying it.  A probe that bound AF_INET6 where the
     listener binds AF_INET reserved the port on the wrong interface, so
     ``--port 0`` published a number the server then failed to bind.
+
+    The resolver has no timeout, so the lookup itself is bounded: it runs on
+    a daemon thread and is abandoned after
+    :data:`_LISTEN_FAMILY_TIMEOUT_SECONDS`.  A name that does not answer by
+    then is treated as unresolvable (``AF_INET``, the historical default)
+    rather than holding startup for the OS resolver's own wait.
     """
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
+    result: list[tuple[socket.AddressFamily, Any, Any, Any, Any]] = []
+    errors: list[BaseException] = []
+
+    def _resolve() -> None:
+        try:
+            result.extend(socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+        except BaseException as exc:  # re-raised on the caller thread
+            errors.append(exc)
+
+    thread = threading.Thread(target=_resolve, daemon=True)
+    thread.start()
+    thread.join(timeout=_LISTEN_FAMILY_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        _log.warning(
+            "DNS resolution for bind host %r timed out after %.1fs; using AF_INET",
+            host,
+            _LISTEN_FAMILY_TIMEOUT_SECONDS,
+        )
         return socket.AF_INET
-    families = {info[0] for info in infos}
+    if errors:
+        exc = errors[0]
+        if isinstance(exc, socket.gaierror):
+            return socket.AF_INET
+        raise exc
+    families = {info[0] for info in result}
     if families == {socket.AF_INET6}:
         return socket.AF_INET6
     return socket.AF_INET

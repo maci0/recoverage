@@ -183,12 +183,13 @@ def _fsync_dir(path: Path) -> None:
         return
     try:
         fd = os.open(path, os.O_RDONLY)
-    except OSError:
+    except OSError as exc:
+        _log.warning("Cannot fsync directory %r for durability: %r", str(path), str(exc))
         return
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        _log.warning("Cannot fsync directory %r for durability: %r", str(path), str(exc))
     finally:
         os.close(fd)
 
