@@ -733,11 +733,10 @@ def serve_command(
     filestore: Path | None = typer.Option(
         None, "--filestore", envvar="RECOVERAGE_OPS_FILESTORE", help="Retained object store"
     ),
-    concurrency: int = typer.Option(
-        DEFAULT_CONCURRENCY,
+    concurrency: str | None = typer.Option(
+        None,
         "--concurrency",
         envvar="RECOVERAGE_OPS_CONCURRENCY",
-        min=1,
         help="Calls answered at once; the next is refused 503 with Retry-After",
     ),
     allowed_hosts: str = typer.Option(
@@ -759,7 +758,42 @@ def serve_command(
 
     from rebrew import ops as rebrew_ops
 
-    token = os.environ.get(TOKEN_ENV, "").strip()
+    # Typer/click's INT coercion accepts Unicode digits and ``1_0`` spellings,
+    # so parse the concurrency through the same ASCII floor the dashboard
+    # settings use; the flag and env var are one setting.
+    from recoverage.server import parse_ascii_int
+
+    if concurrency is None:
+        resolved_concurrency = DEFAULT_CONCURRENCY
+    else:
+        try:
+            resolved_concurrency = parse_ascii_int(concurrency.strip())
+        except ValueError:
+            typer.secho(
+                "Error: --concurrency (or RECOVERAGE_OPS_CONCURRENCY) is not an integer",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(EXIT_ERROR) from None
+        if resolved_concurrency < 1:
+            typer.secho(
+                "Error: --concurrency (or RECOVERAGE_OPS_CONCURRENCY) must be at least 1",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(EXIT_ERROR)
+
+    # A token that carries surrounding whitespace would never match a
+    # stripped bearer header, so refuse it at startup like the dashboard
+    # token rather than silently stripping it to a usable value.
+    from recoverage.config import ConfigError, validate_token
+
+    raw_token = os.environ.get(TOKEN_ENV)
+    try:
+        token = validate_token(raw_token, TOKEN_ENV) or ""
+    except ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_ERROR) from None
     # Length in the bytes the environment carried, not code points: an
     # environment value is decoded with surrogateescape, so a token holding
     # a non-UTF-8 byte carries U+DC80..U+DCFF, which a strict UTF-8 encode
@@ -801,7 +835,7 @@ def serve_command(
         (host, port),
         rebrew_ops.WorkerConfig(worker.filestore, worker.workspace),
         token,
-        concurrency,
+        resolved_concurrency,
         hosts,
     )
     typer.echo(f"serving recoverage ops on http://{host}:{server.server_port}")

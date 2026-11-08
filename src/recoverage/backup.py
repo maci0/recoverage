@@ -142,11 +142,19 @@ def backup_dir_from_env(coverage_dir: Path) -> Path:
     line carrying this name would otherwise be refused by every command as a
     misspelling — which is the one way an operator finds out that the schedule
     is wrong, at the hour it runs.
+
+    A set-but-blank value is a misconfiguration, not an unset one: unit
+    files and cron environments spell "not configured" as ``""``, and silently
+    falling back to the default would write the archive where the operator
+    does not look. Raise :class:`BackupError` so the backup command reports it
+    and exits non-zero instead.
     """
-    raw = os.environ.get("RECOVERAGE_BACKUP_DIR", "")
-    if raw.strip():
-        return Path(raw).expanduser()
-    return default_backup_dir(coverage_dir)
+    raw = os.environ.get("RECOVERAGE_BACKUP_DIR")
+    if raw is None:
+        return default_backup_dir(coverage_dir)
+    if not raw.strip():
+        raise BackupError("RECOVERAGE_BACKUP_DIR: set but empty (unset it, or give it a path)")
+    return Path(raw).expanduser()
 
 
 def _stamp() -> str:
@@ -446,13 +454,15 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
             "Run 'rebrew coverage export --output <directory>' first, then select that "
             "directory with RECOVERAGE_SNAPSHOTS."
         )
-    created = _created_stamp()
-    manifest = _manifest(members, created)
-    blob = _tar_bytes(members, manifest)
+    # Resolve the destination before writing anything, so a blank backup
+    # directory fails before the archive is built.
     if destination is None:
         destination = _default_archive_path(backup_dir_from_env(db_dir))
     elif destination.is_dir():
         destination = _default_archive_path(destination)
+    created = _created_stamp()
+    manifest = _manifest(members, created)
+    blob = _tar_bytes(members, manifest)
     _require_outside_coverage_dir(db_dir, destination)
     try:
         _atomic_write(destination, blob)

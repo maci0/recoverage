@@ -147,3 +147,27 @@ def test_serve_refuses_a_short_token_and_a_missing_workspace(tmp_path: Path) -> 
             check=False,
         )
         assert result.returncode == ops.EXIT_ERROR, result.stderr
+
+
+def test_serve_refuses_a_padded_token(tmp_path: Path) -> None:
+    for token in (" " + "t" * 40, "t" * 40 + " ", "t" * 20 + " " + "t" * 19):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "recoverage",
+                "ops",
+                "serve",
+                "--port",
+                "0",
+                "--workspace",
+                str(tmp_path),
+            ],
+            env={**__import__("os").environ, "RECOVERAGE_OPS_TOKEN": token},
+            capture_output=True,
+            text=True,
+            timeout=START_TIMEOUT,
+            check=False,
+        )
+        assert result.returncode == ops.EXIT_ERROR, result.stderr
+        assert "whitespace" in result.stderr, result.stderr

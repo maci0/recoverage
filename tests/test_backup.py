@@ -635,11 +635,20 @@ class TestBackupLocation:
         monkeypatch.setenv("RECOVERAGE_BACKUP_DIR", str(tmp_path / "elsewhere"))
         assert backup_dir_from_env(tmp_path / "db") == tmp_path / "elsewhere"
 
-    def test_a_blank_environment_falls_back(
+    def test_a_blank_environment_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A set-but-blank backup dir fails instead of silently using the default."""
         monkeypatch.setenv("RECOVERAGE_BACKUP_DIR", "   ")
-        assert backup_dir_from_env(tmp_path / "db") == default_backup_dir(tmp_path / "db")
+        with pytest.raises(BackupError, match="set but empty"):
+            backup_dir_from_env(tmp_path / "db")
+
+    def test_write_backup_refuses_a_blank_environment(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("RECOVERAGE_BACKUP_DIR", "")
+        with pytest.raises(BackupError, match="set but empty"):
+            write_backup(db)
 
 
 class TestBackupCli:
