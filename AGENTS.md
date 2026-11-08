@@ -77,7 +77,7 @@ recoverage/
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents, and the shared
 │   │                         #   document set `build_synthetic_coverage` writes
 │   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
-│   ├── test_api.py           # API validation, security, SQL injection tests
+│   ├── test_api.py           # API validation, security, injection-spelling tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_ops.py           # The backend op worker: gate/export replies, refusals, target
 │   │                         #   resolution, workspace confinement, project override

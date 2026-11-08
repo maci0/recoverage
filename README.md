@@ -58,9 +58,9 @@ block that covers it.
 ![Potato Mode, the retro pure-HTML table view](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
-Every view is a plain HTML table (no CSS, no JS) so it works on
-low-spec machines, restricted browsers, or anywhere you just want a quick
-glance without loading the full SPA.
+Every view is a plain HTML table with inline styles and no external
+stylesheet (no JS) so it works on low-spec machines, restricted browsers,
+or anywhere you just want a quick glance without loading the full SPA.
 
 ---
 
@@ -202,6 +202,11 @@ the process listing). Validation, signals and service examples are under
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
 | `RECOVERAGE_DEV_API` | `http://127.0.0.1:8001` | the running server the `make web-dev` Vite proxy forwards `/api`, `/files`, `/src`, `/original` and `/highlight.js` to; read by `web/vite.config.ts`, not by any subcommand (the same rule the two fuzz knobs follow: the name is accepted so exporting it cannot refuse a command, and it changes nothing `serve` does) |
+| `RECOVERAGE_OPS_WORKSPACE` | unset | workspace `recoverage ops serve`/`ops call` confines every request's `project_dir` to; read by `ops.py`, not by `serve` (see `docs/REFERENCE.md` for the ops) |
+| `RECOVERAGE_OPS_FILESTORE` | unset | retained object store `recoverage ops serve`/`ops call` stage files and binaries under; read by `ops.py`, not by `serve` |
+| `RECOVERAGE_OPS_TOKEN` | unset | bearer token `recoverage ops serve` requires on every request (at least 32 bytes); read by `ops.py`, not by `serve` |
+| `RECOVERAGE_OPS_CONCURRENCY` | `2` | calls `recoverage ops serve` answers at once; the next is refused 503 with `Retry-After`; read by `ops.py`, not by `serve` |
+| `RECOVERAGE_OPS_ALLOWED_HOSTS` | unset | comma-separated exact additional HTTP `Host` authorities `recoverage ops serve` accepts; read by `ops.py`, not by `serve` |
 
 `.env.example` carries the same surface in a copy-pasteable form, commented
 out, each variable with its stock value and a note on what it accepts. It is

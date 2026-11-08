@@ -3,7 +3,7 @@
 The API is the one place a stranger controls the bytes: every query parameter
 and the batch POST body are attacker-chosen, and each crosses a parser
 (``int(..., 0)``, ``json.loads``, rebrew's ``parse_va_candidates``) before it
-reaches SQLite.  These tests drive those parsers with mutated inputs and assert
+reaches the handler.  These tests drive those parsers with mutated inputs and assert
 the properties that must hold for *every* input, not just the ones the unit
 tests enumerate:
 
