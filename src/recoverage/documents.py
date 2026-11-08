@@ -134,6 +134,7 @@ _STATE: _State | None = None
 #: document once and the collector pause below has one owner.  The hit path
 #: never takes it.
 _LOAD_LOCK = threading.Lock()
+_WRITE_WARNED_LOCK = threading.Lock()
 
 #: Whether this process has already warned about a cache write failure.
 _WRITE_WARNED = False
@@ -305,8 +306,10 @@ def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
         tmp_name = None
         _prune(root)
     except OSError as exc:
-        if not _WRITE_WARNED:
+        with _WRITE_WARNED_LOCK:
+            already_warned = _WRITE_WARNED
             _WRITE_WARNED = True
+        if not already_warned:
             _log.warning(
                 "coverage cache: cannot write under %s (%s); documents will be "
                 "parsed on every start",
