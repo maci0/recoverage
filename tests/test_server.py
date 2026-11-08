@@ -2680,6 +2680,26 @@ class TestStaticAssetRevalidation:
         )
         assert "credentials:" not in _web("api.ts")
 
+    def test_index_preloads_both_font_faces(self) -> None:
+        """Both faces are on the path to usable, so both are preloaded.
+
+        Archivo paints the boot block; JetBrains Mono paints the first live
+        frame (the target picker renders "Loading targets…" in mono before
+        /api/targets answers, and the stats numbers and section tabs follow in
+        the same face), so a preload scan that starts only Archivo leaves
+        JetBrains Mono to be discovered when that frame runs. `crossorigin`
+        matches the @font-face fetch's mode; without it the font is fetched
+        twice."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        for href in ("/archivo.woff2", "/jetbrains-mono.woff2"):
+            assert (
+                f'<link rel="preload" href="{href}" as="font" type="font/woff2" '
+                f'crossorigin fetchpriority="high">' in html
+            ), href
+
 
 class TestHostnameOf:
     """_hostname_of is the parser behind BOTH the DNS-rebinding Host

@@ -13,13 +13,16 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/print.css" media="print" fetchpriority="low">
     <!-- Archivo is the face the boot block paints in (`--font-sans`), so it is
-         the one face preloaded: the first paint is in its own type rather than
-         a swap later. JetBrains Mono is the code face (`--font-mono`); no
-         mono text reaches the first frame, so it is deliberately NOT preloaded
-         -- it arrives via @font-face when a code pane renders, and preloading
-         it spent ~28 KB of the first window on a fallback swap. Both faces
-         carry `font-display: swap`, so a late arrival never blocks text. -->
+         preloaded: the first paint is in its own type rather than a swap
+         later. JetBrains Mono is the code face (`--font-mono`); the first
+         live frame already carries it -- the target picker renders
+         "Loading targets…" in mono before /api/targets answers, and the
+         stats numbers and section tabs follow in the same face -- so it is
+         preloaded too rather than discovered only when that frame runs. Both
+         faces carry `font-display: swap`, so a late arrival never blocks
+         text. -->
     <link rel="preload" href="/archivo.woff2" as="font" type="font/woff2" crossorigin fetchpriority="high">
+    <link rel="preload" href="/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin fetchpriority="high">
     <!-- The app cannot know the target id until /api/targets answers, so the
          coverage map is otherwise two serialized round trips after the shell
          lands. Preloading it as a fetch starts that request during the preload
