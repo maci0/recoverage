@@ -8,22 +8,31 @@ Preserve old exported history through ``rebrew coverage import-history`` before
 retiring exports. Portable parse caches and process memos are derived data.
 
 A backup also refuses a snapshot set whose documents reference files the
-archive does not carry. A portable export names its original binary and
-source root in ``metadata.paths`` (``originalDll``, ``sourceRoot``); those
-inputs live outside the ``coverage-*.toml`` glob, so the glob alone would
-archive a dashboard that renders the map but cannot serve disassembly or
-source, with no signal until the restore. ``_referenced_files`` collects
-every referenced path that resolves inside the snapshot directory, and
-``write_backup`` archives those files beside the documents (flat,
-name-sorted, deduplicated by name); ``restore_backup`` puts them back with
-the same all-or-nothing staging. A referenced file outside the snapshot
-directory, or a name collision between a document and a referenced file, is
-a refusal rather than a silent omission: the missing piece is named, so the
-operator copies the input into the export or backs the project up through
-its owners instead of discovering the gap at restore time. Files no document
-references are not archived — archiving the whole directory would also carry
-stray files an operator left there, which a restore would then write back as
-if they were part of the export.
+archive does not carry. A portable export names its original binary in
+``metadata.paths`` (``originalDll``); that input lives outside the
+``coverage-*.toml`` glob, so the glob alone would archive a dashboard that
+renders the map but cannot serve disassembly, with no signal until the
+restore. ``_referenced_files`` collects every referenced path that resolves
+inside the snapshot directory, and ``write_backup`` archives those files
+beside the documents (flat, name-sorted, deduplicated by name);
+``restore_backup`` puts them back with the same all-or-nothing staging. A
+referenced file outside the snapshot directory, or a name collision between
+a document and a referenced file, is a refusal rather than a silent omission:
+the missing piece is named, so the operator copies the input into the export
+or backs the project up through its owners instead of discovering the gap at
+restore time. Files no document references are not archived — archiving the
+whole directory would also carry stray files an operator left there, which a
+restore would then write back as if they were part of the export.
+
+``metadata.paths.sourceRoot`` is the one reference this module refuses
+outright rather than archives: it names a tree, not a file, and the archive
+format carries one flat member per name. Carrying the tree would need member
+names that are paths, which the restore's flat staging cannot hold without
+one member writing over another. So a document naming a ``sourceRoot`` is a
+backup refusal naming it, and the source tree is backed up through its
+owning project like every other input the archive excludes (see
+``docs/RECOVERY.md``); a restore of a portable archive never claims the
+source pane it did not carry.
 
 Four properties the format has, and why each is here:
 
@@ -407,8 +416,8 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     return out
 
 
-def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
-    """Every paths value a document names under its metadata table, as stored.
+def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, str]]:
+    """Every ``(key, value)`` pair a document names under its metadata paths.
 
     Parsed with the same TOML reader the documents are read with, because a
     document that does not parse cannot name a file this backup must carry
@@ -416,10 +425,12 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
     a malformed document that verifies as bytes would otherwise archive
     without the binary it needs. Non-string values are refused for the
     same reason - the reader that serves them expects a path spelling.
+    The key travels with the value because one of them (``sourceRoot``)
+    names a kind of input the flat archive refuses, whatever its value is.
     """
     import tomllib
 
-    refs: list[str] = []
+    refs: list[tuple[str, str]] = []
     for name, data in documents:
         try:
             doc = tomllib.loads(data.decode("utf-8"))
@@ -435,7 +446,7 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
             if not isinstance(value, str):
                 raise BackupError(f"{name}: metadata.paths.{key} is {value!r}, not a path")
             if value:
-                refs.append(value)
+                refs.append((key, value))
     return refs
 
 
@@ -450,9 +461,27 @@ def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[
     the same member name, or a referenced file whose name collides with a
     coverage document, is also a refusal - the tar names members once and
     the restore stages them flat, so a collision would silently keep one.
+
+    One value is refused by name before any of that: ``metadata.paths.
+    sourceRoot``. It names a directory tree, and the tar carries one flat
+    member per file name, so carrying the tree would need path-shaped
+    member names the restore cannot stage without collisions. Refusing it
+    here, rather than failing on ``is_file()`` with "not present", tells the
+    operator the source tree is excluded by design and belongs to the
+    project backup, instead of reading as a missing file they could copy in.
+    The check is on the paths table, not on the resolved tree, so even an
+    empty or absent ``sourceRoot`` refuses: a backup that archives around it
+    would restore the map and silently drop the source pane.
     """
+    for key, _ref in _referenced_paths(documents):
+        if key == "sourceRoot":
+            raise BackupError(
+                "referenced path 'sourceRoot' names a source tree, which the flat "
+                "archive cannot carry; back the source tree up through its owning "
+                "project instead of the portable snapshot"
+            )
     found: dict[str, Path] = {}
-    for ref in _referenced_paths(documents):
+    for _key, ref in _referenced_paths(documents):
         if "\x00" in ref:
             raise BackupError(f"referenced path {ref!r} carries a NUL byte")
         # A portable export is a cross-platform document: a Windows-written

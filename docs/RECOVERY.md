@@ -13,7 +13,8 @@ own version control and backups. `recoverage backup` never backs up that project
 | Data identities and verification evidence | Rebrew data metadata | Restore the canonical project store |
 | Binary, inventory, source and layout evidence | Project | Restore the matching project inputs |
 | Portable `coverage-<target>.toml` exports | Explicit snapshot directory | Verified `recoverage backup` / `restore` |
-| Referenced original binaries and source roots named in `metadata.paths` | Explicit snapshot directory (must be inside it) | Archived flat beside the documents; `backup` refuses a set whose referenced file is absent, escaping, or name-colliding, because a restore without it serves the map but not `/asm` or the source pane |
+| Referenced original binaries named in `metadata.paths` (`originalDll`) | Explicit snapshot directory (must be inside it) | Archived flat beside the documents; `backup` refuses a set whose referenced file is absent, escaping, or name-colliding, because a restore without it serves the map but not `/asm` |
+| Source trees named in `metadata.paths` (`sourceRoot`) | Owning project | **Excluded by design, and a backup refusal rather than an omission:** the archive format carries one flat member per name, so it cannot hold a tree. `backup` refuses a document naming `sourceRoot` (present or absent) rather than archiving around it and restoring a map with no source pane. Back the tree up through its project |
 | Parse caches and in-process memos | Recoverage | Rebuilt on demand |
 | Retained ops inputs: staged files, the selected binary, and any temp snapshot a call builds under the ops workspace | `RECOVERAGE_OPS_FILESTORE` / `RECOVERAGE_OPS_WORKSPACE` (`recoverage ops call`/`serve`) | Not covered by `recoverage backup`; the backend that staged them re-supplies them, so losing the store loses in-flight work, not coverage history |
 
@@ -131,12 +132,15 @@ copy after inspection. A successful `tar -tf` alone does not exercise validation
 ## Recovering without this tool
 
 Archives are POSIX tar files containing flat members — the `coverage-<target>.toml` documents,
-any referenced original binaries or source files the documents named, and `manifest.json`.
-Extract into an offline snapshot directory. The manifest records each member’s size and
+any referenced original binaries (`originalDll`) the documents named, and `manifest.json`.
+They never carry a source tree (`sourceRoot`): a document naming one is a backup refusal,
+so an archive that exists was taken from a set with nothing to exclude. Extract into an
+offline snapshot directory. The manifest records each member’s size and
 SHA256; verify those digests before serving restored data.
 
 ## What is deliberately not covered
 
-Recoverage backup excludes canonical project metadata, source, reference binaries,
+Recoverage backup excludes canonical project metadata, source (including any
+`metadata.paths.sourceRoot` tree), reference binaries outside the snapshot directory,
 configuration, build output, caches, and the ops filestore/workspace above.
 Back up those through their owning project or backend.

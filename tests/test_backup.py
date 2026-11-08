@@ -592,9 +592,7 @@ class TestRestoreBackup:
         write_backup(source, archive)
         destination = tmp_path / "destination"
         destination.mkdir()
-        (destination / "coverage-A.toml").write_bytes(
-            (source / "coverage-A.toml").read_bytes()
-        )
+        (destination / "coverage-A.toml").write_bytes((source / "coverage-A.toml").read_bytes())
         (destination / "coverage-B.toml").write_bytes(b"newer original B")
         real_replace = Path.replace
 
@@ -766,6 +764,46 @@ class TestReferencedFiles:
         write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "..\\game.exe"})
         with pytest.raises(BackupError, match="escapes the snapshot directory"):
             write_backup(db, tmp_path / "snap.tar")
+
+    def test_a_source_root_tree_is_refused_by_name_not_as_a_missing_file(
+        self, tmp_path: Path
+    ) -> None:
+        # sourceRoot names a tree, which the flat archive cannot carry. The
+        # refusal names the exclusion (back the tree up through its project)
+        # rather than "not present", which would read as a file to copy in.
+        db = tmp_path / "db"
+        (db / "src").mkdir(parents=True)
+        (db / "src" / "a.c").write_text("int x;\n")
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"sourceRoot": "src"})
+        with pytest.raises(BackupError, match="source tree"):
+            write_backup(db, tmp_path / "snap.tar")
+
+    def test_a_source_root_refuses_even_when_absent(self, tmp_path: Path) -> None:
+        # A backup that archives around an absent sourceRoot would restore
+        # the map and silently drop the source pane, so the key alone refuses.
+        db = tmp_path / "db"
+        db.mkdir()
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"sourceRoot": "src"})
+        with pytest.raises(BackupError, match="source tree"):
+            write_backup(db, tmp_path / "snap.tar")
+
+    def test_an_original_dll_alongside_a_source_root_still_refuses(self, tmp_path: Path) -> None:
+        # The binary is the one reference the archive carries; a document
+        # naming both still refuses on the tree, and writes no archive.
+        db = tmp_path / "db"
+        db.mkdir()
+        (db / "game.exe").write_bytes(b"binary-bytes")
+        write_coverage(
+            db,
+            "FAKEDLL",
+            {},
+            functions=[],
+            paths={"originalDll": "game.exe", "sourceRoot": "src"},
+        )
+        archive = tmp_path / "snap.tar"
+        with pytest.raises(BackupError, match="source tree"):
+            write_backup(db, archive)
+        assert not archive.exists()
 
 
 class TestBackupFreshness:
