@@ -154,8 +154,8 @@ def _clear_derived_caches_logged(where: str) -> None:
     try:
         _clear_derived_caches()
     except Exception:
-        _log.warning(
-            "Cache invalidation %s failed; derived data may be stale", where, exc_info=True
+        _log.exception(
+            "Cache invalidation %s failed; derived data may be stale", where,
         )
 
 
