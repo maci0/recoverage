@@ -1617,35 +1617,38 @@ def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
     not its cell bytes, because that is the denominator the producer used and
     the number the served key has always carried.
     """
-    stats = snap.function_stats
-    by_status = stats["by_status"]
-    text = snap.sections.get(".text")
-    text_size = text.size if text is not None else 0
-    # `Section.buckets` is the reader's own bytes-per-state over the .text
-    # cells, and `Section.covered_bytes` its total-minus-`none`; walking the
-    # cells here to arrive at the same two numbers was 1.5 ms of every /stats,
-    # /data and Potato render on a 40k-cell target.
-    text_buckets: Mapping[str, int] = text.buckets if text is not None else {}
-    covered = text.covered_bytes if text is not None else 0
-    matched = sum(count for status, count in by_status.items() if status in MATCHED_STATUSES)
-    summary: dict[str, Any] = {
-        "totalFunctions": stats["total"],
-        "matchedFunctions": matched,
-        "exactMatches": by_status.get("EXACT", 0),
-        "relocMatches": by_status.get("RELOC", 0),
-        "nearMatchCount": by_status.get("NEAR_MATCHING", 0),
-        "stubCount": by_status.get("STUB", 0),
-        "coveredBytes": covered,
-        "paddingBytes": text_buckets.get("padding", 0),
-        "dataBytes": text_buckets.get("data", 0),
-        "thunkBytes": text_buckets.get("thunk", 0),
-        "coveragePercent": coverage_pct(covered, text_size),
-        "textSize": text_size,
-    }
-    for name, section in snap.sections.items():
-        if name != ".text":
-            summary[name] = _section_summary(section)
-    return summary
+    def build() -> dict[str, Any]:
+        stats = snap.function_stats
+        by_status = stats["by_status"]
+        text = snap.sections.get(".text")
+        text_size = text.size if text is not None else 0
+        # `Section.buckets` is the reader's own bytes-per-state over the .text
+        # cells, and `Section.covered_bytes` its total-minus-`none`; walking the
+        # cells here to arrive at the same two numbers was 1.5 ms of every /stats,
+        # /data and Potato render on a 40k-cell target.
+        text_buckets: Mapping[str, int] = text.buckets if text is not None else {}
+        covered = text.covered_bytes if text is not None else 0
+        matched = sum(count for status, count in by_status.items() if status in MATCHED_STATUSES)
+        summary: dict[str, Any] = {
+            "totalFunctions": stats["total"],
+            "matchedFunctions": matched,
+            "exactMatches": by_status.get("EXACT", 0),
+            "relocMatches": by_status.get("RELOC", 0),
+            "nearMatchCount": by_status.get("NEAR_MATCHING", 0),
+            "stubCount": by_status.get("STUB", 0),
+            "coveredBytes": covered,
+            "paddingBytes": text_buckets.get("padding", 0),
+            "dataBytes": text_buckets.get("data", 0),
+            "thunkBytes": text_buckets.get("thunk", 0),
+            "coveragePercent": coverage_pct(covered, text_size),
+            "textSize": text_size,
+        }
+        for name, section in snap.sections.items():
+            if name != ".text":
+                summary[name] = _section_summary(section)
+        return summary
+
+    return _snapshot_index(snap, "summary", build)
 
 
 def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
@@ -1691,18 +1694,22 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
     # the same memoized set both function lists read (`function_rows`), so the
     # counts and the two surfaces that page them cannot disagree about which
     # rows are functions.
-    by_status: dict[str, int] = {}
-    for fn in function_rows(snap):
-        # "UNKNOWN" is the spelling the rest of the package uses for an
-        # absent status: rebrew's writer canonicalizes to it
-        # (`rebrew.coverage_toml`), its reader derives these counts with the
-        # same default, and `api._FUNCTION_STATUSES` — the vocabulary
-        # `?status=` filters on — has no lowercase "unknown" in it, so a
-        # lowercase key here would be a bucket the API cannot select.
-        key = fn.status or "UNKNOWN"
-        by_status[key] = by_status.get(key, 0) + 1
+    def by_status_build() -> dict[str, int]:
+        by_status: dict[str, int] = {}
+        for fn in function_rows(snap):
+            # "UNKNOWN" is the spelling the rest of the package uses for an
+            # absent status: rebrew's writer canonicalizes to it
+            # (`rebrew.coverage_toml`), its reader derives these counts with the
+            # same default, and `api._FUNCTION_STATUSES` — the vocabulary
+            # `?status=` filters on — has no lowercase "unknown" in it, so a
+            # lowercase key here would be a bucket the API cannot select.
+            key = fn.status or "UNKNOWN"
+            by_status[key] = by_status.get(key, 0) + 1
+        return by_status
 
-    return {"summary": _summary(snap), "sections": sections, "by_status": by_status}
+    by_status = _snapshot_index(snap, "functions_by_status", by_status_build)
+
+    return {"summary": _summary(snap), "sections": sections, "by_status": dict(by_status)}
 
 
 # ── Path helpers ───────────────────────────────────────────────────
@@ -3155,7 +3162,9 @@ _SNAPSHOT_INDEX_KINDS = frozenset(
         "folded_va_functions",
         "folded_va_globals",
         "function_rows",
+        "functions_by_status",
         "globals_by_va",
+        "summary",
         "verify_by_va",
     }
 )
@@ -3261,13 +3270,14 @@ def folded_va_columns(snap: CoverageSnapshot, rows: Sequence[Any]) -> Mapping[in
 
 def _folded_va_table(rows: Sequence[Any]) -> Mapping[int, tuple[str, str]]:
     """``id(row) -> (folded padded, folded bare)`` hex spellings of ``row.va``."""
-    return {
-        id(row): (
-            fold_text(hex_addr(int(getattr(row, "va", 0)))) or "",
-            fold_text(hex_addr(int(getattr(row, "va", 0)), 0)) or "",
+    out: dict[int, tuple[str, str]] = {}
+    for row in rows:
+        va = int(getattr(row, "va", 0))
+        out[id(row)] = (
+            fold_text(hex_addr(va)) or "",
+            fold_text(hex_addr(va, 0)) or "",
         )
-        for row in rows
-    }
+    return out
 
 
 def globals_by_va(snap: CoverageSnapshot) -> Mapping[int, Global]:
