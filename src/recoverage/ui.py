@@ -106,7 +106,7 @@ def _build_index_payload() -> bytes:
     """
     assets = _assets_dir()
     try:
-        html = (assets / "index.html").read_text(encoding="utf-8")
+        html = (assets / "index.html").read_text(encoding="utf-8", newline="")
     except OSError as exc:
         # The shell itself has no degraded form: without it there is no page to
         # render, so there is nothing to fall back TO.  Its two siblings below
@@ -124,7 +124,7 @@ def _build_index_payload() -> bytes:
             "source checkout."
         ) from exc
     try:
-        css = (assets / "style.css").read_text(encoding="utf-8")
+        css = (assets / "style.css").read_text(encoding="utf-8", newline="")
     except OSError as exc:
         # `%s: %s`, the arm above's own shape: the two degraded siblings answer
         # a page either way, so what this line has to carry is what the
@@ -144,7 +144,7 @@ def _build_index_payload() -> bytes:
         )
         css = ""
     try:
-        js = (assets / "app.js").read_text(encoding="utf-8")
+        js = (assets / "app.js").read_text(encoding="utf-8", newline="")
     except OSError as exc:
         # A shipped package asset is missing or unreadable — the SPA renders
         # but does nothing.  Log it so a broken install is diagnosable, with

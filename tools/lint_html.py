@@ -138,7 +138,9 @@ def lint_static_assets(scratch: Path) -> int:
         return rc
     canary = scratch / "style-canary.css"
     canary.write_text(
-        (ASSETS_DIR / "style.css").read_text(encoding="utf-8") + CSS_CANARY, encoding="utf-8"
+        (ASSETS_DIR / "style.css").read_text(encoding="utf-8") + CSS_CANARY,
+        encoding="utf-8",
+        newline="",
     )
     if run_vnu(["--css", "--filterpattern", TAILWIND_OUTPUT_FILTER], [canary]) == 0:
         print("vnu accepted a stylesheet with a planted error, so it validated nothing")
@@ -230,7 +232,7 @@ def main() -> int:
                     ("potato-no-data-unreadable.html", _no_data_page("SOME_TARGET", "<bad>")),
                 ):
                     page = project_dir / name
-                    page.write_text(document, encoding="utf-8")
+                    page.write_text(document, encoding="utf-8", newline="")
                     fallback_paths.append(page)
                 rc = run_vnu(["--also-check-css"], fallback_paths)
             if rc != 0:

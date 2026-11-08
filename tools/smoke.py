@@ -45,7 +45,7 @@ def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
         return 1
 
     if expect_failure:
-        db.write_text("corrupt!", encoding="utf-8")  # break the document
+        db.write_text("corrupt!", encoding="utf-8", newline="")  # break the document
 
     with running_server(project_dir) as (port, proc):
         if not wait_for(lambda: get(port, "/api/health")[0] == 200):
