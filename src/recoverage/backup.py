@@ -822,7 +822,8 @@ def newest_archive_age_hours(directory: Path) -> float | None:
         mtime = newest.stat().st_mtime_ns
     except OSError:
         return None
-    now_ns = int(clock.wall_time() * 1_000_000_000)
+    seconds, remainder = divmod(clock.wall_time(), 1.0)
+    now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
     return max(0.0, (now_ns - mtime) / 3_600_000_000_000)
 
 
