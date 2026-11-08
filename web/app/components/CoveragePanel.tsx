@@ -107,12 +107,13 @@ function statusInk(status: string): string {
 }
 
 /** A pane heading: the pane's icon beside its name. The icon is decorative;
- * the heading carries the name. */
+ * the heading carries the name. An `h4`: the panel head above it is an
+ * `h2`, so the pane titles sit one level below it (WCAG 1.3.1). */
 function PaneTitle({ icon, heading }: { icon: IconName; heading: string }): ComponentChildren {
   return (
     <div className="flex min-w-0 items-center gap-2 text-text-muted">
       <Icon name={icon} />
-      <h3 className="section-title-text m-0 text-data font-semibold text-text">{heading}</h3>
+      <h4 className="section-title-text m-0 text-data font-semibold text-text">{heading}</h4>
     </div>
   );
 }
@@ -232,7 +233,7 @@ function FunctionMeta({
           <Button
             variant="ghost"
             size="sm"
-            className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+            className="meta-value asm-link min-h-6 border-0 bg-transparent px-1 py-0.5 font-mono text-micro text-text hover:bg-transparent"
             aria-label={`Jump the map to ${hex(toVa(fn.va), 8)}`}
             onClick={() => onJumpToAddress(toVa(fn.va))}
           >
@@ -282,7 +283,7 @@ function FunctionMeta({
         <Button
           variant="ghost"
           size="sm"
-          className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+          className="meta-value asm-link min-h-6 border-0 bg-transparent px-1 py-0.5 font-mono text-micro text-text hover:bg-transparent"
           aria-label={`Jump the map to ${addressHex}`}
           onClick={() => onJumpToAddress(toVa(address))}
         >
@@ -445,7 +446,7 @@ function PanelMeta({
             <Button
               variant="ghost"
               size="sm"
-              className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+              className="meta-value asm-link min-h-6 border-0 bg-transparent px-1 py-0.5 font-mono text-micro text-text hover:bg-transparent"
               aria-label={`Jump the map to ${parent}`}
               onClick={() => onJumpToAddress(parentVa)}
             >

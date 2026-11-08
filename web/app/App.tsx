@@ -1176,7 +1176,7 @@ export function App() {
                 )}
                 {query !== "" && (
                   <Button
-                    className="absolute inset-y-0 end-0"
+                    className="absolute inset-y-0 end-0 min-h-8 min-w-8"
                     variant="ghost"
                     size="icon"
                     aria-label="Clear search"

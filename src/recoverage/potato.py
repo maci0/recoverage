@@ -1089,7 +1089,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if status_filter:
             <input type="hidden" name="status" value="{{status_filter}}">
           % end
-          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="24" value="{{search_query}}" placeholder="Function name or address" accesskey="{{search_accesskey}}"> <input type="submit" value="Search"></form>
+          <label for="search-input"><font size="2" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="24" value="{{search_query}}" placeholder="Function name or address" accesskey="{{search_accesskey}}"> <input type="submit" value="Search"></form>
         </td>
         <!-- Spacer cells, not &nbsp; text: <form> is a block box, so a leading
              text node in the same cell pushed the form onto its own line and
@@ -1104,7 +1104,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if status_filter:
             <input type="hidden" name="status" value="{{status_filter}}">
           % end
-            <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
+            <label for="target-select"><font size="2" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
             % for t in targets:
               <option value="{{t['id']}}" {{"selected" if t['id'] == target else ""}}>{{t['name']}}</option>
             % end
