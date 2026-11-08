@@ -634,6 +634,146 @@ class TestBatchBodyNesting:
                     assert isinstance(payload, list), f"{path}: depth {depth} answered {payload!r}"
 
 
+def _nested_object(depth: int) -> bytes:
+    """A body whose value nests by object depth, not bracket depth.
+
+    ``TestBatchBodyNesting`` nests lists inside ``{"vas": ...}``; the ops and
+    backup-manifest decoders meet object-shaped documents, and a hostile body
+    carries its depth as nested ``{"a": {"a": ...}}`` values.  A depth past
+    the C scanner's recursion limit (about 150k ``{"a":`` opens under the
+    1 MiB request cap) must refuse as not-JSON, never escape as RecursionError.
+    """
+    return b'{"a": ' * depth + b"1" + b"}" * depth
+
+
+# 1 is a valid (unknown-field) request; 150k is past the recursion limit
+# while still under MAX_REQUEST_BYTES, so the refusal comes from the decode
+# arm, not the size cap.
+_NESTED_OBJECT_TOKENS = tuple(_nested_object(d) for d in (1, 8, 1000, 150_000))
+
+
+class TestNestedObjectDepth:
+    """Object-depth nesting on the two JSON decoders the batch campaign
+    does not reach: ``ops.dispatch`` and ``backup._read_archive``."""
+
+    def test_dispatch_nested_object_never_raises(self, tmp_path: Path) -> None:
+        from recoverage.ops import dispatch
+
+        config = self._config_ops(tmp_path)
+
+        def check(data: bytes) -> None:
+            try:
+                status, body = dispatch(config, "recoverage.coverage_gate", data)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"dispatch raised {type(exc).__name__}: {exc} for len {len(data)}"
+                ) from exc
+            assert status in (200, 400, 413), f"status {status} for len {len(data)}"
+            _strict_json(body.decode("utf-8"))
+
+        _fuzz(
+            [_OPS_SEEDS[0], _nested_object(1)],
+            check,
+            iterations=30,
+            struct_tokens=_NESTED_OBJECT_TOKENS,
+            num_tokens=_NESTED_OBJECT_TOKENS,
+            label="TestNestedObjectDepth.test_dispatch_nested_object_never_raises",
+        )
+
+    def test_dispatch_every_depth_answers_a_refusal(self, tmp_path: Path) -> None:
+        from recoverage.ops import dispatch
+
+        config = self._config_ops(tmp_path)
+        for depth in (1, 1000, 100_000, 150_000):
+            body = _nested_object(depth)
+            status, reply = dispatch(config, "recoverage.coverage_gate", body)
+            payload = _strict_json(reply.decode("utf-8"))
+            if depth == 1:
+                assert status == 400, f"depth {depth}: {status} {reply[:120]!r}"
+                assert payload.get("error") == "invalid-request", payload
+            else:
+                assert status in (400, 413), f"depth {depth}: {status} {reply[:120]!r}"
+                assert payload.get("error") == "invalid-request", payload
+
+    def test_backup_manifest_nested_object_never_raises(self, tmp_path: Path) -> None:
+        import io
+        import tarfile
+
+        from recoverage import backup
+
+        data = b"seed coverage bytes"
+
+        # Purposely wrong digest: the C scanner must refuse the deep body
+        # before the digest arm is ever reached.
+        def manifest_at(depth: int) -> bytes:
+            return b'{"format": 1, "created": "x", "members": [' + _nested_object(depth) + b"]}"
+
+        def archive(manifest: bytes) -> bytes:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                for name, payload in [("coverage-A.toml", data), ("manifest.json", manifest)]:
+                    info = tarfile.TarInfo(name)
+                    info.size = len(payload)
+                    info.mode = 0o600
+                    info.mtime = 0
+                    tar.addfile(info, io.BytesIO(payload))
+            return buf.getvalue()
+
+        seeds = [archive(manifest_at(1)), archive(manifest_at(8))]
+
+        def check(raw: bytes) -> None:
+            path = tmp_path / "candidate.tar"
+            path.write_bytes(raw)
+            try:
+                backup.verify_backup(path)
+            except backup.BackupError:
+                return
+            except BaseException as exc:
+                raise AssertionError(
+                    f"verify_backup raised {type(exc).__name__}: {exc} for {raw[:40]!r}"
+                ) from exc
+            raise AssertionError(f"{raw[:40]!r}: a tampered manifest verified")
+
+        _fuzz(
+            seeds,
+            check,
+            iterations=30,
+            struct_tokens=tuple(archive(manifest_at(d)) for d in (1, 8, 1000, 150_000)),
+            num_tokens=(b"0", b"1", b"-1"),
+            label="TestNestedObjectDepth.test_backup_manifest_nested_object_never_raises",
+        )
+
+    def test_backup_manifest_every_depth_is_a_backup_error(self, tmp_path: Path) -> None:
+        import io
+        import tarfile
+
+        from recoverage import backup
+
+        def archive(manifest: bytes) -> bytes:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                for name, payload in [("coverage-A.toml", b"x"), ("manifest.json", manifest)]:
+                    info = tarfile.TarInfo(name)
+                    info.size = len(payload)
+                    info.mode = 0o600
+                    info.mtime = 0
+                    tar.addfile(info, io.BytesIO(payload))
+            return buf.getvalue()
+
+        for depth in (1, 1000, 150_000):
+            manifest = b'{"format": 1, "created": "x", "members": [' + _nested_object(depth) + b"]}"
+            path = tmp_path / "candidate.tar"
+            path.write_bytes(archive(manifest))
+            with pytest.raises(backup.BackupError):
+                backup.verify_backup(path)
+
+    @staticmethod
+    def _config_ops(tmp_path: Path) -> Any:
+        from recoverage.ops import WorkerConfig
+
+        return WorkerConfig(workspace=tmp_path)
+
+
 # The media types a batch POST can declare, and the malformed spellings a
 # client, a proxy or a hand-rolled curl produces.  ``application/json`` with
 # parameters is the only accepted form besides a missing header; everything

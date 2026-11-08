@@ -673,7 +673,7 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
         raise BackupError(f"{path} holds no {MANIFEST_NAME}; it is not a recoverage backup")
     try:
         manifest: Any = json.loads(manifest_raw)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise BackupError(f"{path}: {MANIFEST_NAME} is not readable JSON: {exc}") from exc
 
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT_VERSION:

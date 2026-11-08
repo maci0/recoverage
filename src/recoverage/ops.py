@@ -549,7 +549,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         )
     try:
         raw = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         raise _invalid("request is not JSON") from None
     request: Any = parse_request(op.request, raw)
     try:
