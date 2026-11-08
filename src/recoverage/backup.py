@@ -238,7 +238,8 @@ def _fsync_dir(path: Path) -> None:
     except OSError as exc:
         _log.warning("Cannot fsync directory %r for durability: %r", str(path), str(exc))
     finally:
-        os.close(fd)
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -853,7 +854,13 @@ def newest_archive_age_hours(directory: Path) -> float | None:
         return None
     try:
         mtime = newest.stat().st_mtime_ns
-    except OSError:
+    except OSError as exc:
+        _log.debug(
+            "Backup freshness: cannot stat %r: %s: %s",
+            str(newest),
+            type(exc).__name__,
+            str(exc),
+        )
         return None
     seconds, remainder = divmod(clock.wall_time(), 1.0)
     now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)

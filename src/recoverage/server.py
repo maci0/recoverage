@@ -494,7 +494,14 @@ def _existing_spelling(directory: Path, name: str) -> str:
     try:
         if (directory / name).exists():
             return name
-    except OSError:
+    except OSError as exc:
+        _log.debug(
+            "Filesystem spelling probe for %r under %r failed: %s: %s",
+            _log_safe(name),
+            _log_safe(str(directory)),
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
         return name
     other = unicodedata.normalize("NFD", name)
     if other == name:
@@ -505,7 +512,14 @@ def _existing_spelling(directory: Path, name: str) -> str:
         return name
     try:
         return other if (directory / other).exists() else name
-    except OSError:
+    except OSError as exc:
+        _log.debug(
+            "Filesystem spelling probe for %r under %r failed: %s: %s",
+            _log_safe(other),
+            _log_safe(str(directory)),
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
         return name
 
 
@@ -633,7 +647,13 @@ def _function_store_dir(project_dir: Path, target: str) -> Path | None:
     except ConfigError:
         try:
             cfg = load_config(project_dir)
-        except ConfigError:
+        except ConfigError as exc:
+            _log.debug(
+                "Function store for target %s unreadable: %s: %s",
+                _log_safe(target),
+                type(exc).__name__,
+                _log_safe(str(exc)),
+            )
             return None
     directory = Path(cfg.metadata_dir)
     if (directory / METADATA_FILENAME).is_file():
@@ -680,7 +700,14 @@ def _row_note_blocker(
 
     try:
         entry = get_entry(store, va, module)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug(
+            "Function metadata for %s %#x unreadable: %s: %s",
+            _log_safe(module),
+            va,
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
         return "", ""
     stored = entry.get("file")
     if not isinstance(stored, str) or not _stored_names_source(stored, source, store, project_dir):

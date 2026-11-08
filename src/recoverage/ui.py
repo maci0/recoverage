@@ -544,9 +544,15 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
         if candidate.stat().st_size < _REPO_MIN_COMPRESS_BYTES:
             return _uncompressed()
         raw = candidate.read_bytes()
-    except OSError:
+    except OSError as exc:
         # Vanished between the resolve above and the read: bottle's 404, which
         # is the answer the rest of the route already gives for a missing file.
+        _log.debug(
+            "Repo file %s unreadable: %s: %s",
+            _server._log_safe(str(candidate)),
+            type(exc).__name__,
+            _server._log_safe(str(exc)),
+        )
         return _uncompressed()
     etag = _repo_file_etag(candidate, raw, accept_encoding)
     if _if_none_match_matches(_header("If-None-Match", ""), etag):
@@ -715,8 +721,14 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
         # is the representation those clients are being served.
         try:
             identity_bytes = (_assets_dir() / filename).read_bytes()
-        except OSError:
+        except OSError as exc:
             # Missing/unreadable asset: let bottle produce the 404, don't 500.
+            _log.warning(
+                "Static asset %s unreadable: %s: %s",
+                _server._log_safe(filename),
+                type(exc).__name__,
+                _server._log_safe(str(exc)),
+            )
             return static_file(filename, root=str(_assets_dir()))
         etag = _asset_etag(filename, "identity", identity_bytes)
         if _if_none_match_matches(_header("If-None-Match", ""), etag):
@@ -741,8 +753,14 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
         path = _assets_dir() / filename
         try:
             raw = path.read_bytes()
-        except OSError:
+        except OSError as exc:
             # Missing/unreadable asset: let bottle produce the 404, don't 500.
+            _log.warning(
+                "Static asset %s unreadable: %s: %s",
+                _server._log_safe(filename),
+                type(exc).__name__,
+                _server._log_safe(str(exc)),
+            )
             return static_file(filename, root=str(_assets_dir()))
         body, encoding = compress_static_variants(raw, accept_encoding)
         # A racing thread may already have filled this key; keep whichever

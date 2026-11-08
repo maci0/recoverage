@@ -904,6 +904,11 @@ def serve_command(
         server.server_close()
         with server.idle:
             server.draining = True
-            server.idle.wait_for(lambda: server.active == 0, timeout=30)
+            drained = server.idle.wait_for(lambda: server.active == 0, timeout=30)
+            if not drained:
+                _log.warning(
+                    "Ops server shutdown: %d request(s) still active after 30s drain timeout",
+                    server.active,
+                )
         for _signum, _handler in _previous.items():
             signal.signal(_signum, _handler)
