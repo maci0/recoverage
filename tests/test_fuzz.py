@@ -105,6 +105,8 @@ from coverage_fixture import (
 )
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
 from typer.testing import CliRunner
+from typer.testing import Result
+from collections.abc import Sequence
 
 from recoverage import cli, config, devserver, potato, reporting
 from recoverage import server as srv
