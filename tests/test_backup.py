@@ -569,6 +569,36 @@ class TestRestoreBackup:
             restore_backup(archive, destination, force=True)
         assert not (destination / "coverage-A.toml").exists()
 
+    def test_rollback_keeps_an_unchanged_document_it_never_touched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unchanged member was never published, so rollback must not delete it."""
+        source = tmp_path / "source"
+        for target in ("A", "B"):
+            write_coverage(source, target, {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        destination.mkdir()
+        (destination / "coverage-A.toml").write_bytes(
+            (source / "coverage-A.toml").read_bytes()
+        )
+        (destination / "coverage-B.toml").write_bytes(b"newer original B")
+        real_replace = Path.replace
+
+        def fail_replace(path: Path, target: Path) -> Path:
+            if target == destination / "coverage-B.toml" and path.parent.name != "previous":
+                raise PermissionError("destination locked")
+            return real_replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(BackupError):
+            restore_backup(archive, destination, force=True)
+        assert (destination / "coverage-A.toml").read_bytes() == (
+            source / "coverage-A.toml"
+        ).read_bytes()
+        assert (destination / "coverage-B.toml").read_bytes() == b"newer original B"
+
     def test_a_document_that_has_moved_on_is_refused(self, db: Path, archive: Path) -> None:
         """The history and verify arrays the rollback would discard are gone for good."""
         document = next(db.glob("coverage-*.toml"))

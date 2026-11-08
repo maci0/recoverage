@@ -1047,6 +1047,7 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     except OSError as exc:
         raise BackupError(f"cannot stage restore in {db_dir}: {exc}") from exc
     written: list[Path] = []
+    published: list[Path] = []
     saved: list[Path] = []
     keep_staging = False
     previous = staging / "previous"
@@ -1064,11 +1065,12 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
                 destination.replace(previous / name)
                 saved.append(destination)
             (staging / name).replace(destination)
+            published.append(destination)
             written.append(destination)
         _fsync_dir(db_dir)
     except BaseException as exc:
         rollback_errors: list[str] = []
-        for destination in reversed(written):
+        for destination in reversed(published):
             if destination in saved:
                 continue
             try:
