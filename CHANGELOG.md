@@ -45,6 +45,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.
 - Dependency ranges now carry an upper bound (`bottle>=0.13,<1`, `rich>=15.0.0,<16`, `capstone>=5.0,<6`, and the like), so a future major of a runtime dependency is not selected silently.
+- The sdist normalizer now clears the per-member PAX mtime headers, so two builds of one commit under the same `SOURCE_DATE_EPOCH` produce byte-identical archives.
 - A backup destination inside the coverage directory is refused, and a repeat write to an existing archive path is refused rather than overwriting the earlier backup.
 
 ### Removed

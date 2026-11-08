@@ -62,6 +62,10 @@ def normalized(member: tarfile.TarInfo, epoch: int) -> tarfile.TarInfo:
     out.mode = DIR_MODE if member.isdir() else (EXEC_MODE if member.mode & 0o111 else FILE_MODE)
     out.uid = out.gid = 0
     out.uname = out.gname = ""
+    # tarfile's PAX_FORMAT headers carry the per-member mtime as a float
+    # string even when the ustar mtime is pinned, so a rebuild's bytes move
+    # under the same epoch.  Clear them the same way the header fields are.
+    out.pax_headers = {}
     return out
 
 
