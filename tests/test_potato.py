@@ -4876,7 +4876,11 @@ class TestRenderedPageNamesAndStates:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         html = self._render(tmp_path, monkeypatch, "&view=functions")
-        assert html.count('<th scope="col">') >= 5
+        assert html.count('<th scope="col"') >= 5
+        # The active column (default va) names its direction: without
+        # aria-sort a screen-reader user cannot tell which header ordered
+        # the rows (WCAG 1.3.1).
+        assert html.count('aria-sort="ascending"') == 1
 
     def test_only_the_tables_that_carry_data_keep_the_table_role(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -2951,6 +2951,20 @@ def _order_key(field: str) -> Callable[[Function], Any]:
     return lambda fn: (column(fn), fn.va)
 
 
+def _sort_header(key: str, label: str, base: str, active: str) -> str:
+    """One sortable column header, with ``aria-sort`` on the active column.
+
+    ``aria-sort`` belongs on the ``<th>`` (WCAG 1.3.1): the link alone cannot
+    say which column ordered the rows, so a screen-reader user reading the
+    table had no programmatic way to know.
+    """
+    aria_sort = ' aria-sort="ascending"' if key == active else ""
+    return (
+        f'<th scope="col"{aria_sort}><a href="{base}&sort={key}">'
+        f'<font color="{MUTED_COLOR}">{label}</font></a></th>'
+    )
+
+
 def _render_function_list(
     coverage: CoverageSnapshot,
     target: str,
@@ -3074,11 +3088,18 @@ def _render_function_list(
             f'<tr bgcolor="{PANEL_COLOR}">'
             # scope="col" is what tells a screen reader that these header cells
             # head the column below them rather than the row they sit in.
-            f'<th scope="col"><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
-            f'<th scope="col"><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
-            f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th></tr>'
+            # aria-sort names the active column (WCAG 1.3.1): without it a
+            # screen-reader user cannot tell which header ordered the rows.
+            + "".join(
+                [
+                    _sort_header("name", "Name", base, order_by),
+                    _sort_header("va", "VA", base, order_by),
+                    _sort_header("size", "Size", base, order_by),
+                    _sort_header("status", "Status", base, order_by),
+                    f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th>',
+                ]
+            )
+            + "</tr>"
         ),
     ]
 

@@ -91,6 +91,10 @@
 
   a {
     color: var(--color-text);
+    /* Underline by default (WCAG 1.4.1): a link shares the text color, so
+       without it the link is indistinguishable from surrounding text except
+       by hue. Controls styled as buttons opt out with `no-underline`. */
+    text-decoration: underline;
     text-decoration-color: var(--color-border-strong);
     text-underline-offset: 2px;
   }
