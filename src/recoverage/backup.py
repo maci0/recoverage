@@ -630,7 +630,9 @@ def _verify_archive(path: Path) -> tuple[BackupInfo, dict[str, bytes]]:
         if not isinstance(entry, dict):
             raise BackupError(f"{path}: manifest member {entry!r} is not an object")
         name = entry.get("name")
-        data = members.get(name) if isinstance(name, str) else None
+        if not isinstance(name, str):
+            raise BackupError(f"{path}: manifest member name {name!r} is not text")
+        data = members.get(name)
         if data is None:
             raise BackupError(f"{path}: manifest names {name}, which the archive does not hold")
         if "size" not in entry or "sha256" not in entry:

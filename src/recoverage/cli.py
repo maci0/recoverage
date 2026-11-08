@@ -2059,7 +2059,7 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
             # 0..100 range check as a clean usage error.
             whole_int = parse_ascii_int(whole)
             frac_int = parse_ascii_int(frac) if frac else 0
-            scale = 10**len(frac) if frac else 1
+            scale = 10 ** len(frac) if frac else 1
             parsed = whole_int + frac_int / scale if frac else float(whole_int)
             if sign == "-":
                 parsed = -parsed

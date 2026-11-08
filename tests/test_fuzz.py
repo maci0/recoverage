@@ -5790,7 +5790,7 @@ class TestBackupArchiveBytes:
                 info = backup.verify_backup(path)
             except backup.BackupError:
                 return
-            manifest, members = backup._read_archive(path)
+            _manifest, members = backup._read_archive(path)
             assert info.members, f"{raw[:40]!r}: verified with no members"
             for name, size, sha256 in info.members:
                 assert members[name] is not None and len(members[name]) == size
