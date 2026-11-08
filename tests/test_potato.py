@@ -565,6 +565,24 @@ def test_wrap_text_never_opens_a_line_on_a_combining_mark():
     assert _wrap_text("x" * 39 + "\u00e9tail", 40) == "\n".join(["x" * 39 + "\u00e9", "tail"])
 
 
+def test_wrap_text_never_opens_a_line_on_a_zwj_or_emoji_modifier():
+    """A wrap never lands before a ZWJ or an emoji modifier either.
+
+    U+200D ZWJ has combining class zero, so it was not a combining mark to
+    the rejoin and a family emoji wrapped with the joiner opening the next
+    line, joining nothing.  An emoji modifier (U+1F3FB, Sk) is the same
+    class-zero miss: it re-colours the preceding emoji, so a line opening on
+    it re-colours the wrong glyph.  Spelled with escapes throughout.
+    """
+    zwj = "\u200d"
+    family = "\U0001f468" + zwj + "\U0001f469" + zwj + "\U0001f467"
+    wrapped = _wrap_text("xx" + family, 3)
+    assert not any(line.startswith(zwj) for line in wrapped.split("\n"))
+    skin_tone = "\U0001f3fb"
+    wrapped = _wrap_text("abc\U0001f44d" + skin_tone + "def", 4)
+    assert not any(line.startswith(skin_tone) for line in wrapped.split("\n"))
+
+
 def test_format_hex_dump():
     dump = _format_hex_dump(b"\x48\x65\x6c\x6c\x6f\x00\xff\x01", base_offset=0x1000)
     assert "00001000" in dump

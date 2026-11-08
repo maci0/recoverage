@@ -786,14 +786,37 @@ def _wrap_text(text: str, width: int) -> str:
 
 
 def _rejoin_combining(wrapped: list[str]) -> list[str]:
-    """*wrapped* with every piece that opens on a combining mark closed back up."""
+    """*wrapped* with every piece that opens on a combining mark closed back up.
+
+    ``unicodedata.combining`` is the combining class, which is zero for the
+    marks a real grapheme carries besides accents: a ZWJ (U+200D, Cf), a
+    variation selector's neighbours, an emoji modifier (U+1F3FB, Sk) and a
+    regional-indicator flag's second half all have class zero, so a piece
+    opening on one was left on its own line — a ZWJ that started a line joins
+    nothing, an emoji modifier that started one re-colours the wrong glyph.
+    A piece is rejoined when its first character is a combining mark, a
+    format character, or a modifier symbol; the last covers skin tones, the
+    middle covers ZWJ/ZWNJ, and a regional indicator is left alone because a
+    flag is two So code points with no mark between them.
+    """
     out: list[str] = []
     for piece in wrapped:
-        if out and piece and unicodedata.combining(piece[0]):
+        if out and piece and _is_continuation(piece[0]):
             out[-1] += piece
         else:
             out.append(piece)
     return out
+
+
+def _is_continuation(char: str) -> bool:
+    """Whether *char* continues the grapheme the previous line ended."""
+    if unicodedata.combining(char):
+        return True
+    category = unicodedata.category(char)
+    if category in ("Cf", "Mn", "Me", "Mc"):
+        return True
+    # Emoji modifiers (skin tones) are Sk; they recolour the preceding emoji.
+    return category == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff"
 
 
 def _esc(text: object) -> str:

@@ -614,7 +614,7 @@ export function CoveragePanel({
                 text={panes.asm}
                 onOpen={openModal}
                 onAddressClick={(address) => {
-                  onJumpToAddress(Number.parseInt(address, 16));
+                  onJumpToAddress(toVa(address));
                 }}
               />
             ) : (
