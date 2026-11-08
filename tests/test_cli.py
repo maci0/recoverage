@@ -910,6 +910,46 @@ class TestCheckCommand:
         payload = json.loads(result.output)
         assert payload["passed"] is True
 
+    def test_check_gate_exact_boundary_does_not_fail_on_float_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """23 of 100 bytes is 23% in decimal, but ``23/100*100`` is
+        22.999999999999996 in binary: a bare ``pct >= min_coverage`` fails a
+        gate the section meets exactly, quoting ``coverage 23.00% < 23.00%``.
+        The verdict must cross-multiply in integers (or clean the float), so
+        the exact boundary PASSes and one byte short of it FAILs.
+        """
+        # `_write_sections` floors the section size at 100, so the ratio is
+        # 23/100; the exact-boundary case is 23.0% against a 23 gate, which
+        # `23/100*100 == 22.999999999999996` in binary fails on a bare `>=`.
+        boundary = _coverage_dir(tmp_path, "boundary")
+        _write_sections(
+            boundary,
+            [".text"],
+            [(".text", 0, 23, "exact"), (".text", 23, 100, "none")],
+        )
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(boundary))
+        result = runner.invoke(app, ["check", "--min-coverage", "23", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["passed"] is True
+        assert payload["results"][0]["status"] == "PASS"
+        assert payload["results"][0]["coverage_pct"] == 23.0
+
+        short = _coverage_dir(tmp_path, "short")
+        _write_sections(
+            short,
+            [".text"],
+            [(".text", 0, 22, "exact"), (".text", 22, 100, "none")],
+        )
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(short))
+        result = runner.invoke(app, ["check", "--min-coverage", "23", "--json"])
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        assert payload["passed"] is False
+        assert payload["results"][0]["status"] == "FAIL"
+        assert payload["results"][0]["coverage_pct"] == 22.0
+
     def test_check_out_of_range_json_emits_error_object(self) -> None:
         """--json with an out-of-range threshold must still emit a parseable
         JSON error (not the human-readable stderr path) before exiting 2."""

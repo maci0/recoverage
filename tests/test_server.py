@@ -4362,6 +4362,62 @@ class TestSpaNumericBoundaries:
         assert "similarityPct(" in panel
         assert "similarity * 100" not in panel
 
+    def test_similarity_pct_is_executed_not_pattern_matched(self) -> None:
+        """Run the shipped `similarityPct`, and pin its boundary table.
+
+        The source assertions above hold while the guard text is present; they
+        say nothing about what the function returns. A guard inverted
+        (`typeof fraction === "number"`), a `percent1` that rounded instead
+        of flooring (99.99% -> "100.0%"), or a locale formatter that dropped
+        the bidi isolation would all pass them and render a wrong figure.
+        The table below is the execution oracle: in-range fractions floor at
+        1dp, non-numbers and non-finite values are null. The known
+        divergence from Potato is pinned in the second half: the SPA has no
+        0..1 range guard, so an out-of-range stored fraction renders a
+        scaled percentage here while `potato._similarity_pct` returns None
+        for it — both surfaces agree on every in-range value and on every
+        non-number, and disagree only where the document spelled a fraction
+        that is not one.
+        """
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        driver = (
+            "import { similarityPct } from "
+            + json.dumps((WEB_APP / "lib" / "format.ts").resolve().as_uri())
+            + ";\n"
+            "const cases = [[0.873,'87.3%'],[0.9999,'99.9%'],[0.99999,'99.9%'],"
+            "[1,'100.0%'],[0,'0.0%'],[NaN,null],[Infinity,null],[-Infinity,null],"
+            "['0.5',null],[true,null],[null,null],[undefined,null]];\n"
+            "for (const [v, want] of cases) {\n"
+            "  const got = similarityPct(v);\n"
+            "  const label = got === null ? null : got.replace(/[\\u2068\\u2069]/g,'');\n"
+            "  if (label !== want) { console.error('FAIL', String(v), label, want);"
+            " process.exit(1); }\n"
+            "}\n"
+            "console.log(JSON.stringify({outOfRange:"
+            " [similarityPct(-0.1), similarityPct(1.1), similarityPct(5)]}));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "sim.ts"
+            script.write_text(driver, encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"similarityPct harness failed: {proc.stdout} {proc.stderr}"
+        # Out-of-range fractions are scaled, not refused (no 0..1 guard here).
+        out_of_range = json.loads(proc.stdout)["outOfRange"]
+        for value, rendered in zip((-0.1, 1.1, 5), out_of_range, strict=True):
+            assert rendered is not None and f"{value * 100:.1f}%" in rendered, (
+                f"similarityPct({value}) = {rendered!r}: the divergence from "
+                "potato._similarity_pct (None for out-of-range) moved"
+            )
+
     def test_the_search_row_the_box_names_cannot_be_off_the_list(self) -> None:
         """`aria-activedescendant` and Enter both name the row the arrows walked to.
 
