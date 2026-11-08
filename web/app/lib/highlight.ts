@@ -67,16 +67,24 @@ async function loadScript(): Promise<Highlighter> {
   script.src = HIGHLIGHT_SRC;
   script.async = true;
   const loaded = new Promise<void>((resolve) => {
-    script.addEventListener("load", () => {
-      resolve();
-    });
+    script.addEventListener(
+      "load",
+      () => {
+        resolve();
+      },
+      { once: true },
+    );
   });
   // `error` fires for a 404, a blocked request and a parse failure alike;
   // either way nothing waits on this promise for ever.
   const failed = new Promise<void>((_resolve, reject) => {
-    script.addEventListener("error", () => {
-      reject(loadFailure("unreachable"));
-    });
+    script.addEventListener(
+      "error",
+      () => {
+        reject(loadFailure("unreachable"));
+      },
+      { once: true },
+    );
   });
   head().append(script);
   await Promise.race([loaded, failed]);
