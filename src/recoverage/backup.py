@@ -768,9 +768,9 @@ def _is_coverage(name: str) -> bool:
     this is the same rule ``documents._stat_key`` applies to the directory and
     one glob cannot describe a member one way and read it another.
     """
-    from fnmatch import fnmatch
+    from fnmatch import fnmatchcase
 
-    return fnmatch(name, COVERAGE_GLOB)
+    return fnmatchcase(name, COVERAGE_GLOB)
 
 
 def _verify_archive(path: Path) -> tuple[BackupInfo, dict[str, bytes]]:
