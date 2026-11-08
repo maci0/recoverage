@@ -255,6 +255,28 @@ class GateOutcome:
         }
 
 
+def _coverage_meets(covered: int, total: int, min_coverage: float) -> bool:
+    """True when *covered* of *total* meets *min_coverage* percent, exactly.
+
+    Float division first loses the verdict on the exact boundary: 23 of 40
+    is 57.5% in decimal, but ``23/40*100`` is 57.49999999999999 in binary and
+    ``pct < 57.5`` fails a gate the section meets exactly.  Cross-multiply in
+    integers instead: meet is ``covered*100 >= min_coverage*total``, with
+    ``min_coverage`` read as the decimal string it spells (``repr`` of the
+    parsed float round-trips the CLI's 2dp text) so the comparison is exact.
+    A total of 0 has no ratio and meets nothing.
+    """
+    if total <= 0:
+        return False
+    # Exact rational comparison: min_coverage is a percentage (float from CLI/ops).
+    # Use Decimal(repr(min_coverage)) to recover the intended decimal text;
+    # covered/total are ints, so Decimal keeps the cross-multiplication exact.
+    from decimal import Decimal
+
+    threshold = Decimal(repr(min_coverage))
+    return Decimal(covered) * 100 >= threshold * Decimal(total)
+
+
 def section_verdict(
     pct: float,
     untracked: bool,
@@ -263,6 +285,8 @@ def section_verdict(
     *,
     target: str,
     section: str,
+    covered: int | None = None,
+    total: int | None = None,
 ) -> Verdict:
     """Classify one section against the gate.
 
@@ -300,7 +324,12 @@ def section_verdict(
     # the value is floored, so 99.9997% cannot be quoted as 100.00% beside a
     # FAIL verdict that just compared it against 100.00%.
     shown = floor_pct(pct, 100, 2)
-    if pct < min_coverage:
+    meets = (
+        _coverage_meets(covered, total, min_coverage)
+        if covered is not None and total is not None
+        else pct >= min_coverage
+    )
+    if not meets:
         return Verdict(
             target,
             section,
@@ -365,6 +394,8 @@ def gate(
                 min_coverage,
                 target=target,
                 section=sec_name,
+                covered=int(covered),
+                total=int(total_bytes),
             )
             if verdict.status == "FAIL":
                 failed = True
