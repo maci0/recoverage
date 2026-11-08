@@ -2382,6 +2382,13 @@ def accepted_encodings(accept_encoding: str) -> frozenset[str]:
                     q = float(param[2:])
                 except ValueError:
                     q = 0.0
+                # float() also parses "nan"/"inf", neither of which is a
+                # qvalue: nan slips past every comparison (min(1.0, nan) is
+                # 1.0, so the token reads as fully acceptable) and inf
+                # outranks every real exclusion beside it.  A q that is
+                # not a finite number in 0..1 is not acceptable at all.
+                if not math.isfinite(q) or not 0.0 <= q <= 1.0:
+                    q = 0.0
         candidates[name] = min(candidates.get(name, 1.0), q)
     return frozenset(name for name in SUPPORTED_ENCODINGS if candidates.get(name, 0.0) > 0)
 

@@ -2352,9 +2352,18 @@ def _cell_span(cell: dict[str, Any]) -> int:
     it is already a width no surface draws and is clamped there rather than
     wrapped into a page nobody can receive.
 
-    Absent (``span`` omitted) reads as 1, the reader's own default.
+    Absent (``span`` omitted) reads as 1, the reader's own default.  So does
+    anything that is not an int: rebrew reads the column with
+    ``_int(row.get("span"), 1)``, and this reader takes the same default
+    rather than ``int(...)`` of whatever arrived — a string, a float, None or
+    a bool would otherwise read as a width rebrew never gave the cell
+    (``"1_0"`` as 10, ``3.7`` truncated), and a non-finite float would raise
+    out of the walk instead of drawing one column.
     """
-    return min(_MAX_GRID_COLUMNS, max(1, int(cell.get("span", 1))))
+    span = cell.get("span", 1)
+    if isinstance(span, bool) or not isinstance(span, int):
+        return 1
+    return min(_MAX_GRID_COLUMNS, max(1, span))
 
 
 def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[str, Any]]:

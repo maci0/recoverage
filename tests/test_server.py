@@ -224,6 +224,21 @@ class TestBestEncoding:
     def test_duplicate_encodings(self) -> None:
         assert _best_encoding("gzip, gzip, gzip") == "gzip"
 
+    def test_non_finite_qvalue_is_not_acceptable(self) -> None:
+        """A q-value that is not a finite number in 0..1 refuses the token.
+
+        ``float("nan")`` parses, and ``min(1.0, nan)`` is 1.0, so a header
+        spelling ``gzip;q=nan`` used to select gzip: the one parse that
+        produces a value no comparison can order let the token through the
+        ``> 0`` gate.  ``inf`` is the same class: ``q=inf`` is not a qvalue
+        any client sends, and it outranks every real exclusion beside it.
+        """
+        assert _best_encoding("gzip;q=nan") == ""
+        assert _best_encoding("gzip;q=inf") == ""
+        assert _best_encoding("gzip;q=-inf") == ""
+        assert _best_encoding("zstd;q=nan, gzip") == "gzip"
+        assert _best_encoding("gzip;q=nan, br") == "br"
+
     @pytest.mark.parametrize(
         "header,expected",
         [

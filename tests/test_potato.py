@@ -2342,6 +2342,16 @@ class TestMergeCellsInvariant:
         assert _cell_span({"span": 0}) == 1
         assert _cell_span({"span": 7}) == 7
         assert _cell_span({}) == 1
+        # A span that is not an int is one column, the reader's own default:
+        # rebrew reads the column with _int(row.get("span"), 1), so a string,
+        # a float, None or a bool all become 1 there.  int(...) here read the
+        # same document differently: inf raised OverflowError out of the grid
+        # walk (an uncaught 500 on /potato), "1_0" read as 10 and "٣" as 3,
+        # and 3.7 truncated where rebrew defaulted it.
+        for span in ("3", "abc", "1_0", "٣", "", 3.7, 3.0, None, True, False):
+            assert _cell_span({"span": span}) == 1, span
+        assert _cell_span({"span": float("inf")}) == 1
+        assert _cell_span({"span": float("nan")}) == 1
 
         cells = [
             {"state": "exact", "span": 4, "functions": ["a"]},
