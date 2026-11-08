@@ -98,6 +98,11 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
         "read_only",
     ),
     _command(
+        "check-backup",
+        "Refuse when a backup directory has no fresh stamped archive.",
+        "read_only",
+    ),
+    _command(
         "open",
         "Open the running dashboard in a browser.",
         "non_idempotent",

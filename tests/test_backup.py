@@ -41,7 +41,9 @@ from recoverage.backup import (
     MANIFEST_NAME,
     BackupError,
     backup_dir_from_env,
+    check_backup_freshness,
     default_backup_dir,
+    newest_archive_age_hours,
     restore_backup,
     verify_backup,
     write_backup,
@@ -586,28 +588,33 @@ class TestRestoreBackup:
                 info = tarfile.TarInfo(member.name)
                 info.size = len(data)
                 sink.addfile(info, io.BytesIO(data))
-        with pytest.raises(BackupError, match="not a coverage document"):
+        with pytest.raises(BackupError, match="not a safe flat member name"):
             restore_backup(evil, db)
         assert not (db.parent / "escaped.toml").exists()
 
-    def test_a_member_not_named_as_a_document_is_refused(
+    def test_a_manifest_member_absent_from_the_archive_is_refused(
         self, db: Path, archive: Path, tmp_path: Path
     ) -> None:
-        """The glob that reads the directory is the same one that reads a member."""
+        """A manifest entry naming bytes the archive does not hold is a refusal."""
         other = tmp_path / "other.tar"
+        payload = b"notes payload"
         with tarfile.open(archive) as source, tarfile.open(other, "w") as sink:
             for member in source.getmembers():
                 data = source.extractfile(member).read()  # type: ignore[union-attr]
                 if member.name == MANIFEST_NAME:
                     manifest = json.loads(data)
                     manifest["members"].append(
-                        {"name": "notes.txt", "size": len(data), "sha256": backup._digest(data)}
+                        {
+                            "name": "notes.txt",
+                            "size": len(payload),
+                            "sha256": backup._digest(payload),
+                        }
                     )
                     data = json.dumps(manifest).encode("utf-8")
                 info = tarfile.TarInfo(member.name)
                 info.size = len(data)
                 sink.addfile(info, io.BytesIO(data))
-        with pytest.raises(BackupError, match="not a coverage document"):
+        with pytest.raises(BackupError, match="is not a regular file"):
             restore_backup(other, db)
 
     def test_the_restored_bytes_are_a_document_the_server_reads(
@@ -622,6 +629,84 @@ class TestRestoreBackup:
             restore_backup(archive, db)
         restore_backup(archive, db, force=True)
         assert load_all_coverage_from(db)
+
+
+class TestReferencedFiles:
+    """A portable export's referenced inputs travel with its backup."""
+
+    def _write_with_binary(self, tmp_path, binary_name="game.exe"):
+        db = tmp_path / "db"
+        db.mkdir()
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": binary_name})
+        (db / binary_name).write_bytes(b"binary-bytes")
+        return db
+
+    def test_referenced_binary_is_archived_and_restored(self, tmp_path):
+        db = self._write_with_binary(tmp_path)
+        archive = tmp_path / "snap.tar"
+        info = write_backup(db, archive)
+        names = [name for name, _s, _d in info.members]
+        assert "game.exe" in names
+        (db / "game.exe").unlink()
+        document = next(db.glob("coverage-*.toml"))
+        document.write_bytes(b"stale")
+        written = restore_backup(archive, db, force=True)
+        names_written = [w.name for w in written]
+        assert "game.exe" in names_written
+        assert (db / "game.exe").read_bytes() == b"binary-bytes"
+
+    def test_missing_referenced_binary_is_a_refusal(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "game.exe"})
+        with pytest.raises(BackupError, match="not present"):
+            write_backup(db, tmp_path / "snap.tar")
+
+    def test_referenced_path_escaping_the_snapshot_is_a_refusal(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "../game.exe"})
+        with pytest.raises(BackupError, match="escapes the snapshot directory"):
+            write_backup(db, tmp_path / "snap.tar")
+
+
+class TestBackupFreshness:
+    """A backup schedule that stops running must fail a monitor, not vanish."""
+
+    def test_no_directory_is_a_refusal(self, tmp_path):
+        with pytest.raises(BackupError, match="no backup directory"):
+            check_backup_freshness(tmp_path / "missing")
+
+    def test_empty_directory_is_a_refusal(self, tmp_path):
+        (tmp_path / "empty").mkdir()
+        with pytest.raises(BackupError, match="no stamped backup"):
+            check_backup_freshness(tmp_path / "empty")
+
+    def test_fresh_archive_passes_and_reports_its_age(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+        build_synthetic_coverage(db)
+        out = tmp_path / "backups"
+        out.mkdir()
+        write_backup(db, out / "coverage-20260101T000000.000000Z.tar")
+        age = newest_archive_age_hours(out)
+        assert age is not None and age >= 0
+        check_backup_freshness(out)
+
+    def test_overdue_archive_is_a_refusal(self, tmp_path, monkeypatch):
+        out = tmp_path / "backups"
+        out.mkdir()
+        archive = out / "coverage-20260101T000000.000000Z.tar"
+        archive.write_bytes(b"placeholder")
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_000_000_000.0)
+        # Push mtime far into the past relative to the patched clock.
+        import os
+
+        past = 1_000_000_000.0 - 100 * 3600
+        os.utime(archive, (past, past))
+        with pytest.raises(BackupError, match="overdue"):
+            check_backup_freshness(out)
 
 
 class TestBackupLocation:

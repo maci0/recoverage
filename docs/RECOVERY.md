@@ -13,6 +13,7 @@ own version control and backups. `recoverage backup` never backs up that project
 | Data identities and verification evidence | Rebrew data metadata | Restore the canonical project store |
 | Binary, inventory, source and layout evidence | Project | Restore the matching project inputs |
 | Portable `coverage-<target>.toml` exports | Explicit snapshot directory | Verified `recoverage backup` / `restore` |
+| Referenced original binaries and source roots named in `metadata.paths` | Explicit snapshot directory (must be inside it) | Archived flat beside the documents; `backup` refuses a set whose referenced file is absent, escaping, or name-colliding, because a restore without it serves the map but not `/asm` or the source pane |
 | Parse caches and in-process memos | Recoverage | Rebuilt on demand |
 
 Before retiring older exports, run
@@ -50,9 +51,18 @@ mode because only Rebrew can derive a fresh export from the original inputs.
 
 ## RPO and RTO
 
-The backup schedule and retention determine the recovery point. Measure restore
-time against a copy to establish the recovery time; neither is bounded by the
-software. A portable archive cannot recover project inputs it never contained.
+RPO is the backup cadence: with the nightly schedule below, a portable export
+can be up to 24 hours old at restore time, plus whatever ``metadata.paths``
+inputs were copied into the snapshot between runs. The schedule is the only
+bound — there is no point-in-time recovery inside this package, so logical
+corruption (bad code writing bad data for hours) is recovered by restoring
+the oldest archive that predates it, not by replaying transactions. RTO is
+measured, not assumed: run the drill against a copy of the production-sized
+snapshot, record the elapsed time, and budget that figure plus the time to
+copy the archive from its volume. A portable archive cannot recover project
+inputs it never contained — canonical metadata, source, configuration and
+unreferenced binaries are outside it by design (see below), and a backup
+refuses to claim otherwise.
 
 ## Backup schedule
 
@@ -69,7 +79,19 @@ Keep the backup volume separate from the snapshot directory: a destination insid
 the coverage directory is refused, because an archive there shares its failure
 domain with the data it protects (one directory deletion removes both). Alert on
 the job itself — a missing log line or a non-zero exit is a missed backup, and an
-empty coverage directory exits 1 rather than writing an empty archive. Between
+empty coverage directory exits 1 rather than writing an empty archive. The job
+exiting 0 only while it runs means a job that stops running fails nothing, so
+monitor the backup directory too:
+
+```cron
+CRON_TZ=UTC
+30 4 * * * recoverage check-backup /srv/backups
+```
+
+`check-backup` exits 1 when the backup directory does not exist, holds no
+stamped archive, or its newest archive is older than `--max-age-hours`
+(default 25, one missed nightly run plus an hour of slack). A schedule that
+runs less often than daily passes its own `--max-age-hours`. Between
 drills, run `recoverage verify /srv/backups/nightly.tar` to re-prove an archive
 older runs wrote or that was copied to another volume; it writes nothing and
 needs no `RECOVERAGE_SNAPSHOTS` selection.
@@ -89,9 +111,10 @@ copy after inspection. A successful `tar -tf` alone does not exercise validation
 
 ## Recovering without this tool
 
-Archives are POSIX tar files containing flat `coverage-<target>.toml` members and
-`manifest.json`. Extract into an offline snapshot directory. The manifest records
-each member’s size and SHA256; verify those digests before serving restored data.
+Archives are POSIX tar files containing flat members — the `coverage-<target>.toml` documents,
+any referenced original binaries or source files the documents named, and `manifest.json`.
+Extract into an offline snapshot directory. The manifest records each member’s size and
+SHA256; verify those digests before serving restored data.
 
 ## What is deliberately not covered
 

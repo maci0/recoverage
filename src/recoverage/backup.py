@@ -7,6 +7,24 @@ only their exported facts and evidence, not the original source/binary inputs.
 Preserve old exported history through ``rebrew coverage import-history`` before
 retiring exports. Portable parse caches and process memos are derived data.
 
+A backup also refuses a snapshot set whose documents reference files the
+archive does not carry. A portable export names its original binary and
+source root in ``metadata.paths`` (``originalDll``, ``sourceRoot``); those
+inputs live outside the ``coverage-*.toml`` glob, so the glob alone would
+archive a dashboard that renders the map but cannot serve disassembly or
+source, with no signal until the restore. ``_referenced_files`` collects
+every referenced path that resolves inside the snapshot directory, and
+``write_backup`` archives those files beside the documents (flat,
+name-sorted, deduplicated by name); ``restore_backup`` puts them back with
+the same all-or-nothing staging. A referenced file outside the snapshot
+directory, or a name collision between a document and a referenced file, is
+a refusal rather than a silent omission: the missing piece is named, so the
+operator copies the input into the export or backs the project up through
+its owners instead of discovering the gap at restore time. Files no document
+references are not archived — archiving the whole directory would also carry
+stray files an operator left there, which a restore would then write back as
+if they were part of the export.
+
 Four properties the format has, and why each is here:
 
 * **Verified on write and on read.**  ``manifest.json`` carries the sha256 of
@@ -83,6 +101,15 @@ _ARCHIVE_SUFFIX: Final = ".tar"
 #: until the backup (and then the dashboard) fails.  30 keeps a month of
 #: daily backups; older archives are deleted after a successful new one.
 _RETENTION_COUNT: Final = 30
+
+#: The tightest cadence a backup schedule may declare before it must name an
+#: archive older than this as overdue. Independent of the coverage-staleness
+#: bound in recoverage.config (which judges the data): a dashboard can serve
+#: fresh documents while every backup job has silently stopped, and the only
+#: signal is the newest archive's age. 25 hours is one missed nightly run
+#: plus an hour of scheduling slack; a schedule that runs less often than
+#: daily names its own threshold instead of inheriting this one.
+BACKUP_OVERDUE_HOURS: Final = 25
 
 #: Most bytes one member of an archive may hold, and most bytes an archive may
 #: hold in total.  A verify (and a restore, which verifies first) holds every
@@ -332,6 +359,90 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     return out
 
 
+def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
+    """Every paths value a document names under its metadata table, as stored.
+
+    Parsed with the same TOML reader the documents are read with, because a
+    document that does not parse cannot name a file this backup must carry
+    and is refused here rather than silently treated as referencing nothing:
+    a malformed document that verifies as bytes would otherwise archive
+    without the binary it needs. Non-string values are refused for the
+    same reason - the reader that serves them expects a path spelling.
+    """
+    import tomllib
+
+    refs: list[str] = []
+    for name, data in documents:
+        try:
+            doc = tomllib.loads(data.decode("utf-8"))
+        except (UnicodeError, ValueError) as exc:
+            raise BackupError(f"cannot parse coverage document {name}: {exc}") from exc
+        metadata = doc.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise BackupError(f"{name}: metadata is not a table")
+        paths = metadata.get("paths", {})
+        if not isinstance(paths, dict):
+            raise BackupError(f"{name}: metadata paths is not a table")
+        for key, value in paths.items():
+            if not isinstance(value, str):
+                raise BackupError(f"{name}: metadata.paths.{key} is {value!r}, not a path")
+            if value:
+                refs.append(value)
+    return refs
+
+
+def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    """Referenced files inside the snapshot directory, as flat name/bytes pairs.
+
+    A referenced path is resolved against db_dir the way the portable
+    reader resolves it (leading slash stripped, then contained under the
+    snapshot directory). What resolves outside, does not exist, is a
+    directory or a symlink is a refusal naming the value: the archive must
+    not claim to carry what it does not. Two referenced files that spell
+    the same member name, or a referenced file whose name collides with a
+    coverage document, is also a refusal - the tar names members once and
+    the restore stages them flat, so a collision would silently keep one.
+    """
+    found: dict[str, Path] = {}
+    for ref in _referenced_paths(documents):
+        if "\x00" in ref:
+            raise BackupError(f"referenced path {ref!r} carries a NUL byte")
+        relative = Path(ref.removeprefix("/"))
+        if ".." in relative.parts or relative.is_absolute():
+            raise BackupError(
+                f"referenced path {ref!r} escapes the snapshot directory {db_dir}; "
+                "copy it into the export or back the project up through its owners"
+            )
+        candidate = db_dir / relative
+        if candidate.is_symlink():
+            raise BackupError(f"referenced file {candidate} is a symlink; refusing to follow it")
+        if not candidate.is_file():
+            raise BackupError(
+                f"referenced file {candidate} (from {ref!r}) is not present in the "
+                f"snapshot directory {db_dir}; the archive would restore without it"
+            )
+        if candidate.name in found:
+            raise BackupError(
+                f"referenced files {found[candidate.name]} and {candidate} share one name; "
+                "the archive names members once and cannot carry both"
+            )
+        found[candidate.name] = candidate
+    document_names = {name for name, _data in documents}
+    for name in found:
+        if name in document_names:
+            raise BackupError(
+                f"referenced file {name!r} collides with a coverage document of the same name"
+            )
+    out: list[tuple[str, bytes]] = []
+    for name in sorted(found):
+        path = found[name]
+        try:
+            out.append((name, path.read_bytes()))
+        except OSError as exc:
+            raise BackupError(f"cannot read referenced file {path}: {exc}") from exc
+    return out
+
+
 def _tar_bytes(members: list[tuple[str, bytes]], manifest: dict[str, Any]) -> bytes:
     """The archive bytes: every member then the manifest, in that fixed order.
 
@@ -447,8 +558,9 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     the default is beside it: an archive inside the tree it archives shares
     its failure domain.
     """
-    members = _members(db_dir)
-    if not members:
+    documents = _members(db_dir)
+    members = documents + _referenced_files(db_dir, documents)
+    if not documents:
         raise BackupError(
             f"no {COVERAGE_GLOB} document in {db_dir}; nothing to back up. "
             "Run 'rebrew coverage export --output <directory>' first, then select that "
@@ -589,9 +701,9 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
                 not isinstance(name, str)
                 or Path(name).name != name
                 or PureWindowsPath(name).name != name
-                or not _is_coverage(name)
+                or name == MANIFEST_NAME
             ):
-                raise BackupError(f"{path}: member name {name!r} is not a coverage document")
+                raise BackupError(f"{path}: member name {name!r} is not a safe flat member name")
             data = members.get(name)
             if data is None:
                 raise BackupError(f"{path}: member {name} is not a regular file")
@@ -646,7 +758,7 @@ def _verify_archive(path: Path) -> tuple[BackupInfo, dict[str, bytes]]:
                 f"{path}: {name} does not match its manifest digest "
                 f"({digest[:12]}…, manifest {str(entry['sha256'])[:12]}…); the backup is corrupt"
             )
-        described.append((name, len(data), digest))
+        described.append((str(name), len(data), digest))
     info = BackupInfo(
         path=path,
         created=str(manifest.get("created", "")),
@@ -679,6 +791,59 @@ def verify_archive_command(archive: Path) -> BackupInfo:
     get the proof.
     """
     return verify_backup(archive)
+
+
+def newest_archive_age_hours(directory: Path) -> float | None:
+    """Age in hours of the newest stamped archive in *directory*, or None.
+
+    None when the directory holds no stamped archive (or cannot be listed):
+    no backup has ever run there, which is the loudest missing-backup signal
+    and the one a scheduled-job monitor must not confuse with a fresh one.
+    Only names this module writes are considered, so an operator's other
+    files never count as a backup. Read through the clock seam so a test
+    drives the overdue crossing from a patched clock.
+    """
+    try:
+        candidates = [
+            path
+            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+            if path.is_file()
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    newest = max(
+        candidates,
+        key=lambda path: path.stat().st_mtime_ns if path.exists() else 0,
+    )
+    try:
+        mtime = newest.stat().st_mtime_ns
+    except OSError:
+        return None
+    now_ns = int(clock.wall_time() * 1_000_000_000)
+    return max(0.0, (now_ns - mtime) / 3_600_000_000_000)
+
+
+def check_backup_freshness(directory: Path, *, max_age_hours: float = BACKUP_OVERDUE_HOURS) -> None:
+    """Raise BackupError when *directory* holds no fresh stamped archive.
+
+    The silent-failure arm a scheduled backup needs: a job that stops
+    running still exits nothing, so the directory records it as the newest
+    archive ageing past the cadence. A missing directory or an empty one
+    is the same refusal, naming the directory so a cron alert says where
+    the backup was expected rather than that a file was absent.
+    """
+    if not directory.is_dir():
+        raise BackupError(f"no backup directory at {directory}; no backup has been taken there")
+    age = newest_archive_age_hours(directory)
+    if age is None:
+        raise BackupError(f"no stamped backup in {directory}; no backup has been taken there")
+    if age > max_age_hours:
+        raise BackupError(
+            f"newest backup in {directory} is {age:.1f}h old, past the "
+            f"{max_age_hours}h overdue bound; the backup schedule may have stopped"
+        )
 
 
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:

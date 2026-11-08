@@ -2409,6 +2409,55 @@ def verify(
     )
 
 
+@app.command("check-backup")
+def check_backup(
+    directory: str = typer.Argument(
+        ...,
+        metavar="DIRECTORY",
+        help="Backup directory holding stamped archives (default: the backup directory)",
+    ),
+    max_age_hours: float = typer.Option(
+        25.0,
+        "--max-age-hours",
+        metavar="HOURS",
+        help="Hours the newest archive may be old before this is a failure (default: 25)",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the freshness result as a JSON object"
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Refuse when DIRECTORY has no fresh stamped backup.
+
+    The monitor a scheduled backup job needs: the job itself exits 0 when it
+    runs, so a job that stops running fails nothing. This command exits 1
+    when the newest stamped archive in DIRECTORY is older than
+    --max-age-hours, when the directory holds none, or when it does not
+    exist, naming the directory and the age so a cron alert says where the
+    backup was expected. It reads only the directory listing and mtimes;
+    it writes nothing and needs no RECOVERAGE_SNAPSHOTS selection.
+    """
+    from recoverage.backup import BackupError, check_backup_freshness
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    as_json = _json_on(as_json)
+    _check_env_or_exit()
+    path = Path(directory).expanduser()
+    try:
+        check_backup_freshness(path, max_age_hours=max_age_hours)
+    except BackupError as exc:
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
+    if as_json:
+        typer.echo(_dumps({"directory": str(path), "fresh": True}))
+        return
+    _secho(
+        f"Backup fresh: {path} holds a stamped archive within {max_age_hours:g}h.",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
 @app.command("open")
 def open_cmd(
     port: str | None = typer.Option(
