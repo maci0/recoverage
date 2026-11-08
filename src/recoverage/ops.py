@@ -337,19 +337,25 @@ def _verified_section_bytes(section: Any, trusted: Any) -> int:
             ranges[-1][1] = max(ranges[-1][1], end)
         else:
             ranges.append([start, end])
-    count = 0
-    index = 0
+    covered: list[list[int]] = []
     for cell in sorted(section.cells, key=lambda item: item.start):
         if cell.state != "exact":
             continue
         lo, hi = section.va + cell.start, section.va + cell.end
-        while index < len(ranges) and ranges[index][1] <= lo:
-            index += 1
-        cursor = index
-        while cursor < len(ranges) and ranges[cursor][0] < hi:
-            count += max(0, min(hi, ranges[cursor][1]) - max(lo, ranges[cursor][0]))
+        if hi <= lo:
+            continue
+        cursor = 0
+        while cursor < len(ranges) and ranges[cursor][1] <= lo:
             cursor += 1
-    return count
+        while cursor < len(ranges) and ranges[cursor][0] < hi:
+            start = max(lo, ranges[cursor][0])
+            end = min(hi, ranges[cursor][1])
+            if covered and start <= covered[-1][1]:
+                covered[-1][1] = max(covered[-1][1], end)
+            else:
+                covered.append([start, end])
+            cursor += 1
+    return sum(end - start for start, end in covered)
 
 
 def _snapshot_stats(snap: Any, trusted: Any = None) -> dict[str, Any]:

@@ -73,6 +73,11 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
         "read_only",
     ),
     _command(
+        "ops serve",
+        "Serve the dispatched ops over HTTP: POST /<op> with a bearer token.",
+        "read_only",
+    ),
+    _command(
         "regen",
         "Refresh the live project view without writing coverage files.",
         "non_idempotent",
