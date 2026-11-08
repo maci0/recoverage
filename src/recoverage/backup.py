@@ -759,6 +759,32 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     if not isinstance(entries, list) or not entries:
         raise BackupError(f"{path}: manifest names no members")
 
+    # An archive's manifest is the COMPLETE member list, not a subset:
+    # a tar member the manifest never names is bytes no digest covers,
+    # and a restore that silently ignores it proves less than it claims.
+    # Refuse rather than verify a subset and restore around the rest.
+    manifest_names = {entry.get("name") for entry in entries if isinstance(entry, dict)}
+    unlisted = sorted(
+        name for name in members if name != MANIFEST_NAME and name not in manifest_names
+    )
+    if unlisted:
+        raise BackupError(
+            f"{path}: member(s) not in {MANIFEST_NAME}: {', '.join(unlisted)}; "
+            "the archive is not a recoverage backup as written"
+        )
+    # A manifest with no coverage document restores to an empty
+    # dashboard; a referenced binary alone is not coverage.
+    if not any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("name"), str)
+        and _is_coverage(entry["name"])
+        for entry in entries
+    ):
+        raise BackupError(
+            f"{path}: manifest names no {COVERAGE_GLOB} document; "
+            "a backup with no coverage document restores to an empty dashboard"
+        )
+
     documents: dict[str, bytes] = {}
     try:
         for entry in entries:
