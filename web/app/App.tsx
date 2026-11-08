@@ -1436,7 +1436,7 @@ function MapArea({
     const one = unreadable.length === 1;
     return (
       <div
-        className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
+        className="flex flex-col items-start gap-3 border-t-2 border-st-fail px-1 py-6 text-data text-text-muted"
         role="alert"
       >
         <p className="m-0 text-intro font-semibold text-text">
@@ -1454,7 +1454,7 @@ function MapArea({
   }
   if (noTargets) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
+      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">No coverage available</p>
         <p className="m-0 max-w-prose">
           Check the project configuration and target binaries, or the selected offline
@@ -1472,7 +1472,7 @@ function MapArea({
   if (targetUnreadable !== null && (sectionEmpty || active === null)) {
     return (
       <div
-        className="flex flex-col items-center gap-3 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
+        className="flex flex-col items-start gap-3 border-t-2 border-st-fail px-1 py-6 text-data text-text-muted"
         role="alert"
       >
         <p className="m-0 text-intro font-semibold text-text">
@@ -1487,7 +1487,7 @@ function MapArea({
   }
   if (sectionEmpty) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
+      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">
           No coverage data for <span className="font-mono">{target}</span>
         </p>
@@ -1505,7 +1505,7 @@ function MapArea({
     if (loadError !== null) {
       return (
         <div
-          className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail"
+          className="flex flex-col items-start gap-3 rounded-control border border-border bg-fail-soft p-4 text-data text-st-fail"
           role="alert"
         >
           <p className="m-0">Coverage data unavailable: {loadError}</p>
@@ -1523,7 +1523,7 @@ function MapArea({
     }
     return (
       <div
-        className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail"
+        className="flex flex-col items-start gap-3 rounded-control border border-border bg-fail-soft p-4 text-data text-st-fail"
         aria-busy="true"
       >
         <p className="m-0">
@@ -1634,10 +1634,7 @@ function pending(text: string): ComponentChildren {
   // this is the one place a section change lands with nothing else to say
   // (WCAG 4.1.3). `aria-busy` marks the map as replacing itself instead.
   return (
-    <div
-      className="rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
-      aria-busy="true"
-    >
+    <div className="border-t-2 border-border-strong px-1 py-6 text-data text-text-muted" aria-busy="true">
       {text}
     </div>
   );

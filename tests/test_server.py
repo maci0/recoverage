@@ -5908,6 +5908,29 @@ class TestSpaLayoutAndFeedback:
             "a new load keeps the error of the one it replaced"
         )
 
+    def test_map_states_are_readouts_not_the_same_centered_card(self) -> None:
+        """Nothing-here, something-broke and loading read differently.
+
+        Every non-map state used to be the same centered `rounded-card`
+        `px-6 py-12` box, the stock empty-state card: a missing document
+        and a loading line looked identical, and the left-aligned
+        failure list sat inside a centered box. Empty states are a
+        left-aligned readout under a hairline rule, unreadable
+        documents carry the failure rule, and only an actual load
+        failure keeps the fail-soft card.
+        """
+        app = _web("App.tsx")
+        assert "py-12" not in app, "a map state still stamps the centered empty-state card"
+        assert "text-center" not in app.split("function MapArea", 1)[1].split(
+            "function UnreadableList", 1
+        )[0], "a map state is still centered"
+        empty = app.split("No coverage available", 1)[0].rsplit("<div", 1)[1]
+        assert "border-t-2 border-border-strong" in empty, empty
+        broken = app.split("The coverage document could not be read", 1)[0].rsplit("<div", 1)[1]
+        assert "border-t-2 border-st-fail" in broken, broken
+        pending = app.split("function pending", 1)[1]
+        assert "rounded-card" not in pending, pending
+
 
 class TestSpaTargetScopedState:
     """Nothing a target's payloads put in state outlives that target.
