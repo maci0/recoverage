@@ -314,6 +314,34 @@ recoverage verify /srv/backups/nightly.tar
 recoverage verify /srv/backups/nightly.tar --json
 ```
 
+### `recoverage verify-backups`
+
+Verify every stamped archive in a backup directory, not only the newest.
+`check-backup` reads back only the newest archive, so a corrupt older
+archive — the one a logical-corruption restore would reach for — stays
+invisible until that restore. Exits 1 naming the first archive that fails;
+exits 0 only when every stamped archive in the directory is one a restore
+could load. Writes nothing and needs no `RECOVERAGE_SNAPSHOTS`.
+
+```bash
+recoverage verify-backups /srv/backups
+recoverage verify-backups /srv/backups --json
+```
+
+### `recoverage check-backup`
+
+Refuse when a backup directory has no fresh stamped backup. Exits 1 when
+the newest stamped archive is older than `--max-age-hours` (default 25),
+when the directory holds none, or when it does not exist, naming the
+directory and the age so a cron alert says where the backup was expected.
+Reads only the directory listing and mtimes; writes nothing and needs no
+`RECOVERAGE_SNAPSHOTS`.
+
+```bash
+recoverage check-backup /srv/backups
+recoverage check-backup /srv/backups --max-age-hours 25 --json
+```
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).
@@ -390,8 +418,8 @@ cells; verified coverage counts only authenticated exact-match bytes. Retained
 map and exports label `coverage_metric` as `identified` and expose
 `verified_bytes` and `verified_pct` separately from the unchanged identified
 fields. The verified gate requires retained evidence and
-a positive threshold fails when verified bytes are zero. Requests without snapshot fields retain the legacy
-live-project behavior.
+a positive threshold fails when verified bytes are zero. Requests without
+snapshot fields read the live project through `project_dir` as before.
 
 `recoverage ops serve --port N --workspace DIR [--filestore DIR]` answers the same
 ops over HTTP: `POST /<op>` with `Content-Type: application/json` and
