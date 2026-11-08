@@ -42,6 +42,10 @@ const NAV_NOTICE_MS = 4000;
  * A target-wide term can match thousands of names, and the list is there to be
  * scanned, not to be a second index: past the cap it narrows the term. */
 const SEARCH_RESULT_LIMIT = 20;
+/** A notice being hovered or focused keeps its expiry paused: four seconds is
+ * time to glance at a toast, not to read a miss and reach for dismiss.
+ * The expiry restarts when the reader leaves. */
+const NOTICE_PAUSE_MS = 20_000;
 
 /** The id the list's row N carries, which is what the search box's
  * `aria-activedescendant` names. One derivation, so the field and the list
@@ -236,6 +240,25 @@ export function App() {
     cancelFlashTimer();
     setNotice(null);
   }, [cancelFlashTimer]);
+
+  const armFlashTimer = useCallback(
+    (delay: number): void => {
+      cancelFlashTimer();
+      if (notice === null) {
+        return;
+      }
+      noticeTimer.current = window.setTimeout(() => setNotice(null), delay);
+    },
+    [cancelFlashTimer, notice],
+  );
+  // On leave the expiry restarts as a full window: when the pause began is
+  // not tracked, and a partial window would fire under the next glance.
+  const onNoticeLeave = useCallback((): void => {
+    armFlashTimer(NAV_NOTICE_MS);
+  }, [armFlashTimer]);
+  const onNoticeEnter = useCallback((): void => {
+    armFlashTimer(NOTICE_PAUSE_MS);
+  }, [armFlashTimer]);
 
   // The pending expiry is cancelled on unmount. It is the one timer here with
   // no other stop path: `flash` clears its predecessor, but the last one
@@ -1306,6 +1329,10 @@ export function App() {
             }
             role="status"
             aria-live="polite"
+            onMouseEnter={notice === null ? undefined : onNoticeEnter}
+            onMouseLeave={notice === null ? undefined : onNoticeLeave}
+            onFocus={notice === null ? undefined : onNoticeEnter}
+            onBlur={notice === null ? undefined : onNoticeLeave}
           >
             <span className="min-w-0">{notice ?? ""}</span>
             {notice !== null && (
@@ -1539,7 +1566,12 @@ function MapArea({
         </p>
         <p className="m-0 max-w-prose">
           Check this target’s configuration, binary and inventory, or its selected offline snapshot.
+          If a build just finished writing this target, this view may be a
+          step behind it: retry the read rather than reloading the page.
         </p>
+        <Button size="sm" onClick={onRetry}>
+          Retry
+        </Button>
       </div>
     );
   }
