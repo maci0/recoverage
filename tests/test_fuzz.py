@@ -128,6 +128,7 @@ from recoverage.server import (
 # encoding no client library here can decode.
 _SUPPORTED_ENCODINGS = frozenset({"", "zstd", "br", "gzip"})
 
+
 # Campaign size.  Small enough that `make test` grows by seconds, large enough
 # that every seed is mutated dozens of times.  RECOVERAGE_FUZZ_SEED and
 # RECOVERAGE_FUZZ_ITERATIONS widen a local campaign without a code change.
@@ -135,8 +136,31 @@ _SUPPORTED_ENCODINGS = frozenset({"", "zstd", "br", "gzip"})
 # RUN_SEED is the ONE knob for this whole module and it determines the entire
 # run: every campaign's mutation stream is DERIVED from it by name (see
 # campaign_seed below), so a run replays from this one value alone.
-RUN_SEED = int(os.environ.get("RECOVERAGE_FUZZ_SEED", "20260927"), 10)
-FUZZ_ITERATIONS = int(os.environ.get("RECOVERAGE_FUZZ_ITERATIONS", "400"))
+def _parse_fuzz_env(name: str, raw: str) -> int:
+    """*raw* as a fuzz-knob integer, or a clear error naming *name*.
+
+    ``int(raw, 10)`` alone on a malformed value (``abc``, ``1_0``, an
+    Arabic-Indic digit) raises a bare ValueError deep in import, with nothing
+    tying it to the knob the operator set.  ``config.parse_ascii_int`` already
+    holds every RECOVERAGE_* integer to ASCII digits; the two fuzz knobs get
+    the same floor through it, and a refusal states the required form.
+    """
+    try:
+        return config.parse_ascii_int(raw.strip())
+    except ValueError:
+        raise ValueError(f"{name}: {raw!r} is not an integer") from None
+
+
+def _fuzz_int_env(name: str, default: int) -> int:
+    """The value of *name*, or *default* when it is not set."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return _parse_fuzz_env(name, raw)
+
+
+RUN_SEED = _fuzz_int_env("RECOVERAGE_FUZZ_SEED", 20260927)
+FUZZ_ITERATIONS = _fuzz_int_env("RECOVERAGE_FUZZ_ITERATIONS", 400)
 
 
 def campaign_seed(label: str) -> int:
@@ -6342,6 +6366,23 @@ class TestCampaignSeeds:
         # The digest is of the run seed AND the name, so a different name gives
         # a different stream under the same run seed.
         assert seed != campaign_seed("TestDataQuery.test_query_never_crashes")
+
+    def test_a_non_integer_fuzz_knob_names_the_variable(self) -> None:
+        """A malformed knob fails on its name, not on a bare int() traceback.
+
+        ``int(raw, 10)`` accepts ``1_0`` and any Unicode Nd digit, so a knob
+        spelled with Arabic-Indic digits widened the run to a round count
+        nobody asked for while ``abc`` crashed import.  ``_parse_fuzz_env``
+        goes through the same ASCII floor every RECOVERAGE_* integer gets,
+        and its refusal names the variable.
+        """
+        for name, raw in (
+            ("RECOVERAGE_FUZZ_SEED", "abc"),
+            ("RECOVERAGE_FUZZ_ITERATIONS", "1_0"),
+            ("RECOVERAGE_FUZZ_ITERATIONS", "٤٠٩٦"),
+        ):
+            with pytest.raises(ValueError, match=name):
+                _parse_fuzz_env(name, raw)
 
     def test_the_reported_failure_seed_is_the_campaign_stream(self) -> None:
         """What a failure prints is the seed THAT campaign drew from.
