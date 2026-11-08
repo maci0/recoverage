@@ -416,8 +416,8 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     return out
 
 
-def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, str]]:
-    """Every ``(key, value)`` pair a document names under its metadata paths.
+def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[str]:
+    """Every paths value a document names under its metadata table, as stored.
 
     Parsed with the same TOML reader the documents are read with, because a
     document that does not parse cannot name a file this backup must carry
@@ -425,12 +425,10 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, str
     a malformed document that verifies as bytes would otherwise archive
     without the binary it needs. Non-string values are refused for the
     same reason - the reader that serves them expects a path spelling.
-    The key travels with the value because one of them (``sourceRoot``)
-    names a kind of input the flat archive refuses, whatever its value is.
     """
     import tomllib
 
-    refs: list[tuple[str, str]] = []
+    refs: list[str] = []
     for name, data in documents:
         try:
             doc = tomllib.loads(data.decode("utf-8"))
@@ -446,8 +444,36 @@ def _referenced_paths(documents: list[tuple[str, bytes]]) -> list[tuple[str, str
             if not isinstance(value, str):
                 raise BackupError(f"{name}: metadata.paths.{key} is {value!r}, not a path")
             if value:
-                refs.append((key, value))
+                refs.append(value)
     return refs
+
+
+def _source_root_refusal(documents: list[tuple[str, bytes]]) -> None:
+    """Refuse a document naming sourceRoot by key, even when absent/empty.
+
+    sourceRoot names a tree, not a file, and the flat archive cannot carry
+    it; a backup that archives around it would restore the map and silently
+    drop the source pane. The refusal names the exclusion, not "not present".
+    """
+    import tomllib
+
+    for name, data in documents:
+        try:
+            doc = tomllib.loads(data.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError) as exc:
+            raise BackupError(f"cannot parse coverage document {name}: {exc}") from exc
+        metadata = doc.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise BackupError(f"{name}: metadata is not a table")
+        paths = metadata.get("paths", {})
+        if not isinstance(paths, dict):
+            raise BackupError(f"{name}: metadata paths is not a table")
+        if "sourceRoot" in paths:
+            raise BackupError(
+                "referenced path 'sourceRoot' names a source tree, which the flat "
+                "archive cannot carry; back the source tree up through its owning "
+                "project instead of the portable snapshot"
+            )
 
 
 def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
@@ -473,15 +499,9 @@ def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[
     empty or absent ``sourceRoot`` refuses: a backup that archives around it
     would restore the map and silently drop the source pane.
     """
-    for key, _ref in _referenced_paths(documents):
-        if key == "sourceRoot":
-            raise BackupError(
-                "referenced path 'sourceRoot' names a source tree, which the flat "
-                "archive cannot carry; back the source tree up through its owning "
-                "project instead of the portable snapshot"
-            )
+    _source_root_refusal(documents)
     found: dict[str, Path] = {}
-    for _key, ref in _referenced_paths(documents):
+    for ref in _referenced_paths(documents):
         if "\x00" in ref:
             raise BackupError(f"referenced path {ref!r} carries a NUL byte")
         # A portable export is a cross-platform document: a Windows-written
