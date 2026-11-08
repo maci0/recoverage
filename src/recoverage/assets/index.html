@@ -12,18 +12,24 @@
     <meta name="description" content="Per-byte coverage map of a binary-matching decompilation project, from rebrew's coverage documents.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/print.css" media="print">
-    <!-- The two faces the injected stylesheet names. Preloaded so the first
-         paint of the dashboard is in its own type rather than a swap later. -->
-    <link rel="preload" href="/archivo.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
+    <!-- Archivo is the face the boot block paints in (`--font-sans`), so it is
+         the one face preloaded: the first paint is in its own type rather than
+         a swap later. JetBrains Mono is the code face (`--font-mono`); no
+         mono text reaches the first frame, so it is deliberately NOT preloaded
+         -- it arrives via @font-face when a code pane renders, and preloading
+         it spent ~28 KB of the first window on a fallback swap. Both faces
+         carry `font-display: swap`, so a late arrival never blocks text. -->
+    <link rel="preload" href="/archivo.woff2" as="font" type="font/woff2" crossorigin fetchpriority="high">
     <!-- The app cannot know the target id until /api/targets answers, so the
          coverage map is otherwise two serialized round trips after the shell
          lands. Preloading it as a fetch starts that request during the preload
          scan instead; the plain same-origin fetch() then reuses the preloaded
          response rather than issuing a second one. `crossorigin` is required:
          without it the preload is a no-cors request, its credentials mode
-         differs from fetch()'s, and Chrome discards it and fetches twice. -->
-    <link rel="preload" href="/api/targets" as="fetch" crossorigin>
+         differs from fetch()'s, and Chrome discards it and fetches twice.
+         `fetchpriority=high` puts it ahead of the font and the print sheet,
+         which paint nothing the map waits on. -->
+    <link rel="preload" href="/api/targets" as="fetch" crossorigin fetchpriority="high">
     <!-- The first paint. The app mounts only after this document's own inline
          bundle has been parsed and run, and the dashboard it draws is
          serialized behind /api/targets and /data, so an empty #root paints a

@@ -2540,7 +2540,7 @@ class TestStaticAssetRevalidation:
 
         _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
         html = decode_body(body, headers).decode("utf-8")
-        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin>' in html
+        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin fetchpriority="high">' in html
         assert "credentials:" not in _web("api.ts")
 
 
