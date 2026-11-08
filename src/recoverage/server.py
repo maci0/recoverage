@@ -54,7 +54,7 @@ lazy from rebrew.workspace import (
 
 from recoverage import clock, config, metrics
 from recoverage.config import _ASCII_DIGITS, RecoError, parse_ascii_int
-from recoverage.reporting import coverage_pct
+from recoverage.reporting import coverage_pct, truncate_text
 lazy from recoverage._paths import config_fingerprint, coverage_source
 lazy from recoverage.documents import COVERAGE_GLOB, load_all, snapshot_set, versions
 
@@ -820,51 +820,6 @@ def strip_ascii_whitespace(value: str) -> str:
     the Unicode spaces a symbol name can carry.
     """
     return value.strip(_ASCII_SPACE)
-
-
-def truncate_text(value: str, limit: int) -> str:
-    """*value* cut at *limit* code points, without splitting a grapheme cluster.
-
-    ``value[:limit]`` counts code points, so a cap of 400 lands between the
-    two Regional Indicators of a flag: a lone Regional Indicator renders as
-    a letter, not a flag.  A trailing ZWJ joins nothing and is dropped with
-    it.  A combining mark at the cut is not an orphan — its base is before
-    it — so it stays.  One place, so a cap cannot be spelled two ways.
-    """
-    if len(value) <= limit:
-        return value
-    cut = value[:limit]
-    # Extend past continuation code points the cut landed before its base:
-    # combining marks (Mn/Me/Mc + combining class) and emoji skin-tone
-    # modifiers are part of the preceding grapheme, and a trailing ZWJ
-    # joins the glyph after it, so a ZWJ emoji sequence cut at the base
-    # must carry the whole sequence.  Mirrors ``ops._bounded`` without
-    # pulling that module's DETAIL cap.  Reuse unicodedata lazily via the
-    # module import already at top of file.
-    idx = len(cut)
-    while idx < len(value):
-        char = value[idx]
-        if (
-            unicodedata.combining(char)
-            or unicodedata.category(char) in ("Cf", "Mn", "Me", "Mc")
-            or (unicodedata.category(char) == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff")
-            or (idx > 0 and value[idx - 1] == "\u200d")
-        ):
-            idx += 1
-            continue
-        break
-    if idx > len(cut):
-        cut = value[:idx]
-    cut = cut.removesuffix("\u200d")
-    trailing_ri = 0
-    for char in reversed(cut):
-        if 0x1F1E6 <= ord(char) <= 0x1F1FF:
-            trailing_ri += 1
-        else:
-            break
-    if trailing_ri % 2 == 1:
-        cut = cut[:-1]
-    return cut
 
 
 #: Longest ``?search=`` either surface accepts.  A longer term is compared

@@ -74,7 +74,6 @@ from recoverage.server import (
     set_auth_cookie,
     strip_ascii_whitespace,
     target_key,
-    truncate_text,
     unreadable_documents,
     verify_by_va,
     verify_payload,
@@ -83,7 +82,7 @@ lazy from recoverage import __version__
 lazy from recoverage._paths import coverage_source
 lazy from recoverage.config import parse_ascii_int
 lazy from recoverage.disasm import disassembly_available, get_disassembly
-lazy from recoverage.reporting import coverage_pct, pct_1dp
+lazy from recoverage.reporting import coverage_pct, pct_1dp, truncate_text
 
 _log = logging.getLogger("recoverage")
 

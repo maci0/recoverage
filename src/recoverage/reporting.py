@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -85,6 +86,44 @@ _MD_PIPE = "\\|"
 #: table renders ragged.
 _MD_HEADER = "| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |"
 _MD_SEPARATOR = "|---------|-----:|------:|------:|------:|-----:|-----:|---------:|"
+
+
+def truncate_text(value: str, limit: int) -> str:
+    """*value* cut at *limit* code points, without splitting a grapheme cluster.
+
+    ``value[:limit]`` counts code points, so a cap of 400 lands between the
+    two Regional Indicators of a flag: a lone Regional Indicator renders as
+    a letter, not a flag.  A trailing ZWJ joins nothing and is dropped with
+    it.  A combining mark at the cut is not an orphan — its base is before
+    it — so it stays.  One place, so a cap cannot be spelled two ways.
+    """
+    if len(value) <= limit:
+        return value
+    cut = value[:limit]
+    idx = len(cut)
+    while idx < len(value):
+        char = value[idx]
+        if (
+            unicodedata.combining(char)
+            or unicodedata.category(char) in ("Cf", "Mn", "Me", "Mc")
+            or (unicodedata.category(char) == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff")
+            or (idx > 0 and value[idx - 1] == "\u200d")
+        ):
+            idx += 1
+            continue
+        break
+    if idx > len(cut):
+        cut = value[:idx]
+    cut = cut.removesuffix("\u200d")
+    trailing_ri = 0
+    for char in reversed(cut):
+        if 0x1F1E6 <= ord(char) <= 0x1F1FF:
+            trailing_ri += 1
+        else:
+            break
+    if trailing_ri % 2 == 1:
+        cut = cut[:-1]
+    return cut
 
 
 def coverage_pct(covered: int, total: int) -> float:

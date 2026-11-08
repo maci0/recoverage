@@ -135,7 +135,7 @@ def _bounded(text: str) -> str:
     that continuation, the cheaper trade than a severed mark re-colouring or
     re-accenting nothing.
     """
-    from recoverage.server import truncate_text
+    from recoverage.reporting import truncate_text
 
     return truncate_text(" ".join(text.split()), DETAIL_MAX_CHARS)
 
