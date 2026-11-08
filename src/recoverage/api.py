@@ -206,10 +206,14 @@ _REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
 # answered with that run's own state instead of a refusal.
 #
 # Key -> monotonic start.  Bounded by the same count cap as the completed
-# ledger and past the same retention window, so it cannot grow without limit: a
-# marker abandoned by a run that died with the process expires on its own and
-# the key is free again.  That expiry can never let two pipelines run, because
-# _REGEN_LOCK (not this dict) is what serializes the runs.
+# ledger, so it cannot grow without limit.  It is NOT pruned by age: a regen
+# runs for minutes and may run past _REGEN_KEY_TTL_SECONDS, and pruning a
+# still-running key by age would answer its retry 429, sending the client
+# to mint a new key and pay for a second pipeline.  The marker is cleared
+# by the handler's finally when the run ends, so a live run's key never
+# expires from under it; a marker abandoned by a dead process is reclaimed
+# when the lock is free (see _regen_in_progress).  That reclaim can never
+# let two pipelines run, because _REGEN_LOCK (not this dict) serializes runs.
 _REGEN_ACTIVE_KEYS: dict[str, float] = {}
 
 
@@ -221,10 +225,18 @@ def _prune_expired(ledger: dict[str, float], now: float) -> None:
 
 
 def _regen_in_progress(key: str) -> bool:
-    """True when *key* is the run happening right now."""
+    """True when *key* is the run happening right now.
+
+    A marker is reclaimed by age only when no run holds the lock: the
+    handler clears it in its finally, so a surviving marker past the
+    retention window names a run that died with the process, and the key
+    must be free again.  While the lock is held the marker names a live
+    run however old it is, and must not expire from under it.
+    """
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_expired(_REGEN_ACTIVE_KEYS, now)
+        if not _REGEN_LOCK.locked():
+            _prune_expired(_REGEN_ACTIVE_KEYS, now)
         return key in _REGEN_ACTIVE_KEYS
 
 
@@ -232,7 +244,6 @@ def _record_active_key(key: str) -> None:
     """Remember that *key*'s regen is running; cleared when the run ends."""
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_expired(_REGEN_ACTIVE_KEYS, now)
         _REGEN_ACTIVE_KEYS.pop(key, None)
         _server._evict_oldest(_REGEN_ACTIVE_KEYS, _REGEN_LEDGER_MAX_ENTRIES)
         _REGEN_ACTIVE_KEYS[key] = now

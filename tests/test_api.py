@@ -1931,6 +1931,38 @@ class TestRegenIdempotencyKey:
         status, _, _ = self._post("click-1")
         assert status.startswith("500")
 
+    def test_a_long_run_does_not_lose_its_in_flight_key_to_age(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry of a still-running regen is told so however long it runs.
+
+        A regen runs for minutes and may run past the completed-ledger
+        retention window; pruning the in-flight marker by age would answer
+        that retry 429, which the client reads as a failed regenerate and
+        answers by minting a new key and paying for a second pipeline.
+        """
+        import recoverage.api as api
+
+        runs, started, release = self._blocking_regen(monkeypatch)
+        first: list[Any] = []
+        worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
+        worker.start()
+        assert started.wait(timeout=10), "first regen never reached run_regen"
+
+        real_now = api.clock.monotonic()
+        monkeypatch.setattr(
+            api.clock, "monotonic", lambda: real_now + api._REGEN_KEY_TTL_SECONDS + 1
+        )
+        assert api._regen_in_progress("click-1")
+        status, headers, _ = self._post("click-1")
+        assert status.startswith("202")
+        assert headers.get("Idempotent-Replay") == "in-progress"
+
+        release.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert len(runs) == 1
+
     def test_the_in_flight_markers_are_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Markers past the retention window expire on their own.
 
