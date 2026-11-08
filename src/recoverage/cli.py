@@ -1290,7 +1290,16 @@ def open_browser(url: str) -> bool:
         return _open_and_reap(url, ["cmd", "/c", "start", "", url])
     if os.name == "posix":
         return _open_and_reap(url, ["xdg-open", url])
-    return webbrowser.open(url)
+    try:
+        return webbrowser.open(url)
+    except Exception as exc:  # browser drivers raise driver errors, not a bool
+        _log.warning(
+            "webbrowser.open(%s) raised %s: %s; no browser was launched",
+            url,
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
 
 # ── Commands ───────────────────────────────────────────────────────

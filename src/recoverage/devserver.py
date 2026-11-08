@@ -153,6 +153,12 @@ def listen_family(host: str) -> socket.AddressFamily:
     if errors:
         exc = errors[0]
         if isinstance(exc, socket.gaierror):
+            _log.warning(
+                "DNS resolution for bind host %r failed (%s: %s); using AF_INET",
+                host,
+                type(exc).__name__,
+                exc,
+            )
             return socket.AF_INET
         raise exc
     families = {info[0] for info in result}
