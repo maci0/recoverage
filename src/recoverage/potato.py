@@ -3520,7 +3520,10 @@ def _similarity_pct(fraction: Any) -> str | None:
     ``"100.0%"``, beside a function that is not an exact match, is precisely the
     false completion ``pct_1dp`` and ``coverage_pct`` exist to keep off the
     page.  The SPA already floored, so the two surfaces disagreed about the
-    same number on the same function.
+    same number on the same function.  Potato Mode serves a fixed English
+    page, so the percent sign follows the figure without a locale-aware
+    decimal separator; the machine-readable value is the stored fraction
+    itself, re-rendered by the reader's own tools in their locale.
 
     None for a non-finite value: a coverage document is untrusted input, and
     ``pct_1dp`` reaches ``math.floor`` (which raises on NaN), while a bare

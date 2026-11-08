@@ -93,7 +93,13 @@ _log = logging.getLogger("recoverage")
 
 
 def _counted(count: int, one: str, other: str) -> str:
-    """*count* with the noun it takes: "1 document", "2 documents"."""
+    """*count* with the noun it takes: "1 document", "2 documents".
+
+    The CLI is English-only, so the two-form ``one``/``other`` split is
+    enough here; a translated surface needs CLDR categories (Polish, Russian,
+    Arabic have more than two), which the SPA gets from ``Intl.PluralRules``
+    rather than a second hand-written copy of the rules.
+    """
     return f"{count:,} {one if count == 1 else other}"
 
 

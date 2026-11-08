@@ -181,7 +181,7 @@ export function searchResultRows(
     // 3.63 ms, bun, 21 runs).
     rows.push({ name, symbol: entry.symbol ?? null, va, section: null });
   }
-  rows.sort((left, right) => left.va - right.va || left.name.localeCompare(right.name));
+  rows.sort((left, right) => left.va - right.va || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
   const shown = rows.length > limit ? rows.slice(0, limit) : rows;
   for (const row of shown) {
     row.section = sectionOf(row.va);
