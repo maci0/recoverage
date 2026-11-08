@@ -367,11 +367,18 @@ def _repo_file_forbidden(reason: str, filepath: str) -> HTTPResponse:
 
 
 def _target_file_snapshot(target: str) -> CoverageSnapshot:
-    """Resolve a known target and report unreadable coverage without serving a fallback."""
+    """Resolve a known target and report unreadable coverage without serving a fallback.
+
+    The 404 headline is the static ``Not found`` label the API family
+    uses: one spelling of "that row is not there", with the target the
+    caller asked for in ``detail`` rather than in the label.
+    """
     try:
         known = _server.resolve_targets()
         if not any(_server.target_key(row["id"]) == _server.target_key(target) for row in known):
-            raise _server._json_err(404, {"error": "Not found", "detail": "unknown target"})
+            raise _server._json_err(
+                404, {"error": "Not found", "detail": f"unknown target {target!r}"}
+            )
         return _server.coverage_for(target)
     except CoverageTomlError as exc:
         raise _server._db_unavailable_err(exc) from None
@@ -398,7 +405,13 @@ def serve_target_binary(target: str) -> bytes | HTTPResponse:
     _target_file_snapshot(target)
     candidate = _server._find_dll_path(target)
     if candidate is None:
-        return _server._json_err(404, {"error": "Not found", "detail": "target binary unavailable"})
+        return _server._json_err(
+            404,
+            {
+                "error": "Not found",
+                "detail": f"target {target!r} has no available binary ([targets.{target}].binary)",
+            },
+        )
     return _serve_repo_file(candidate.name, candidate, candidate.parent)
 
 

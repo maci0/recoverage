@@ -2688,8 +2688,13 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
 
     va_str = query_param("va")
     size_str = query_param("size")
-    section = query_param("section", _DEFAULT_ASM_SECTION)
-    fmt = query_param("format", "text").strip().lower() or "text"
+    # ASCII trim only: a section name is a document value, so a Unicode
+    # space at its edge is part of the name (see /data's ?section=).
+    section = _server.strip_ascii_whitespace(query_param("section", _DEFAULT_ASM_SECTION))
+    # Whitespace and case fold before the match, as the accepted list is
+    # spelled: "?format= json " is the json representation, not a 400.
+    fmt_raw = query_param("format", "text")
+    fmt = _server.strip_ascii_whitespace(fmt_raw).lower() or "text"
     # An unrecognised ?format= used to fall through to the text
     # representation silently, so a client's typo (?format=JSOM, ?format=json5)
     # answered 200 with a body shape it cannot parse.  Reject the unknown
@@ -2862,7 +2867,9 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     """Return raw bytes from the original binary for a given section range."""
     target = path_param(target)
     section = path_param(section)
-    raw_offset = query_param("offset", "0")
+    # An absent ?offset= is the documented default 0; a blank one (the
+    # spelling every other defaulted parameter accepts) is 0 as well.
+    raw_offset = query_param("offset", "0") or "0"
     try:
         req_offset = _parse_byte_count(raw_offset)
         if req_offset < 0:
