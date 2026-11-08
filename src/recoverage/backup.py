@@ -912,8 +912,11 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
             for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
             if path.is_file() and not path.is_symlink()
         ]
-    except OSError:
-        return None
+    except OSError as exc:
+        _log.warning(
+            "Cannot list backup directory %r for newest archive: %r", str(directory), str(exc)
+        )
+        raise BackupError(f"cannot list backup directory {directory}: {exc}") from exc
     stamped = [
         (instant, path)
         for path in candidates
@@ -927,9 +930,12 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
 def newest_archive_age_hours(directory: Path) -> float | None:
     """Age in hours of the newest stamped archive in *directory*, or None.
 
-    None when the directory holds no stamped archive (or cannot be listed):
-    no backup has ever run there, which is the loudest missing-backup signal
-    and the one a scheduled-job monitor must not confuse with a fresh one.
+    None when the directory holds no stamped archive: no backup has ever
+    run there, which is the loudest missing-backup signal and the one a
+    scheduled-job monitor must not confuse with a fresh one.  An unreadable
+    directory raises :class:`BackupError` via :func:`_newest_stamped_archive`
+    rather than reading as "no backup taken", so a permission loss cannot
+    masquerade as an empty directory.
     Only names this module writes are considered, so an operator's other
     files never count as a backup. Read through the clock seam so a test
     drives the overdue crossing from a patched clock.
