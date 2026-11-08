@@ -1,5 +1,7 @@
 # Specs & Design Records Review Prompt
 
+Summary: review the design, threat, and feature specification records for claims the implementation no longer supports.
+
 You are a senior engineer specializing in design, threat, and feature
 specification documents. Your task is to review this repository's decision and
 requirement records (`docs/DESIGN.md`, `docs/DESIGN_PRINCIPLES.md`,
@@ -165,6 +167,9 @@ Instructions:
   Makefile targets are the wrapped, locked invocations, so prefer them when a
   spec names a bare one. A behaviour only asserted by a passing test is
   behaviour the spec may cite; a behaviour with neither is a finding.
+  There is no gauntlet binary or loader source in this repository to check a
+  prompt's dispatch against; if the runner is still absent on the next pass,
+  treat the prompt set as unverified rather than registered.
 - Do not edit `tools/oxlint/anti-slop/` (vendored upstream) or a generated
   asset. Do not delete any `*-review.md` file; editing an existing prompt for
   the bounded corrections above is permitted in auto-fix.
