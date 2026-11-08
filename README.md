@@ -181,7 +181,7 @@ An installed copy also answers `man recoverage`.
 
 `recoverage serve` reads its settings from flags or from `RECOVERAGE_*`
 variables; a flag on the command line always wins. Every flag except
-`--no-open` and `--regen` has a variable, so a service can be configured
+`--no-open`, `--regen` and `--no-color` has a variable, so a service can be configured
 without putting anything in its argv (and, for the token, without exposing it in
 the process listing). Validation, signals and service examples are under
 *Environment* in the [reference](https://github.com/maci0/recoverage/blob/main/docs/REFERENCE.md).
