@@ -611,21 +611,21 @@ simpler and strictly wider.
 ## Dependencies
 
 Required (`[project].dependencies`; `uv.lock` pins the resolved set):
-- `bottle>=0.13` (web server)
-- `brotli>=1.1` (Brotli compression)
-- `rcssmin>=1.1` (CSS minification)
+- `bottle>=0.13,<1` (web server)
+- `brotli>=1.1,<2` (Brotli compression)
+- `rcssmin>=1.1,<2` (CSS minification)
 - Rebrew 6.8.0 (public GitHub wheel URL and SHA-256 in the manifest): shared
   live accounting, format-3 function metadata, source provenance and portable exports
-- `rich>=15.0.0` (terminal tables)
-- `typer>=0.27.2` (CLI framework)
-- `zstandard>=0.22` (Zstandard compression)
+- `rich>=15.0.0,<16` (terminal tables)
+- `typer>=0.27.2,<1` (CLI framework)
+- `zstandard>=0.22,<1` (Zstandard compression)
 
 Optional extras:
-- `capstone>=5.0` (disassembly)
-- `pygments>=2.21.0` (Potato Mode syntax highlighting)
-- `playwright` (browser tests: `playwright>=1.62`, `pytest-playwright>=0.9.0`; `tests/test_playwright.py` is excluded from the default `addopts`)
+- `capstone>=5.0,<6` (disassembly)
+- `pygments>=2.21.0,<3` (Potato Mode syntax highlighting)
+- `playwright` (browser tests: `playwright>=1.62,<2`, `pytest-playwright>=0.9.0,<1`; `tests/test_playwright.py` is excluded from the default `addopts`)
 
-Dev extra (`.[dev]`, what CI installs): `mypy>=1.14`, `pytest>=9.1.1`, `ruff>=0.16.7`.
+Dev extra (`.[dev]`, what CI installs): `mypy>=1.14,<3`, `pytest>=9.1.1,<10`, `ruff>=0.16.7,<1`.
 
 `src/recoverage/py.typed` is the PEP 561 marker and ships in both artifacts
 through `[tool.setuptools.package-data]`, so the annotations the mypy gate

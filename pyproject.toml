@@ -40,16 +40,16 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
 ]
 dependencies = [
-    "bottle>=0.13",
-    "brotli>=1.1",
-    "click>=8.0",
-    "rcssmin>=1.1",
+    "bottle>=0.13,<1",
+    "brotli>=1.1,<2",
+    "click>=8.0,<9",
+    "rcssmin>=1.1,<2",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
     "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.23.1/rebrew-6.23.1-py3-none-any.whl#sha256=e18029e6d30c20b24cf736df27a185289825414ae00b0d89d107c33892bd9ced",
-    "rich>=15.0.0",
-    "typer>=0.27.2",
-    "zstandard>=0.22",
+    "rich>=15.0.0,<16",
+    "typer>=0.27.2,<1",
+    "zstandard>=0.22,<1",
 ]
 
 [project.urls]
@@ -60,20 +60,20 @@ Issues = "https://github.com/maci0/recoverage/issues"
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.14",
-    "packaging>=26.3",
-    "pytest>=9.1.1",
-    "ruff>=0.16.7",
+    "mypy>=1.14,<3",
+    "packaging>=26.3,<27",
+    "pytest>=9.1.1,<10",
+    "ruff>=0.16.7,<1",
 ]
 capstone = [
-    "capstone>=5.0",
+    "capstone>=5.0,<6",
 ]
 playwright = [
-    "playwright>=1.62",
-    "pytest-playwright>=0.9.0",
+    "playwright>=1.62,<2",
+    "pytest-playwright>=0.9.0,<1",
 ]
 pygments = [
-    "pygments>=2.21.0",
+    "pygments>=2.21.0,<3",
 ]
 
 [project.scripts]
