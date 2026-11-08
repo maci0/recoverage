@@ -225,27 +225,32 @@ def warm_index_cache() -> None:
     """
     global CACHED_INDEX_PAYLOAD
     try:
-        payload = _build_index_payload()
-        # One key per non-empty subset of the supported encodings, plus "" for
-        # the identity response, so a cold first hit from any client is a
-        # lookup rather than three full compressions.
-        keys = [""]
-        for mask in range(1, 1 << len(SUPPORTED_ENCODINGS)):
-            subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
-            keys.append(", ".join(subset))
-        # Every key picks the smallest of the same three bodies, so the shell is
-        # compressed three times for every key rather than once per key, and
-        # brotli at BROTLI_STATIC_QUALITY — the most expensive compression in
-        # the package, and the one every warm-up used to run four times over —
-        # runs once.
-        bodies = compress_static_bodies(payload)
-        variants: dict[str, _Variant] = {}
-        for key in keys:
-            body, encoding = select_static_variant(bodies, key, payload)
-            variants[key] = _Variant(body, encoding, _index_etag(payload, encoding))
+        # The whole build runs under INDEX_LOCK, not just its publication:
+        # a herd of cold callers used to build (and compress) the entire
+        # shell repeatedly, and the early-return check above the build could
+        # not see the winner's payload until its compression finished.
         with INDEX_LOCK:
-            if CACHED_INDEX_PAYLOAD is None:
-                CACHED_INDEX_PAYLOAD = payload
+            if CACHED_INDEX_PAYLOAD is not None and CACHED_INDEX_COMPRESSED:
+                return
+            payload = _build_index_payload()
+            # One key per non-empty subset of the supported encodings, plus "" for
+            # the identity response, so a cold first hit from any client is a
+            # lookup rather than three full compressions.
+            keys = [""]
+            for mask in range(1, 1 << len(SUPPORTED_ENCODINGS)):
+                subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
+                keys.append(", ".join(subset))
+            # Every key picks the smallest of the same three bodies, so the shell is
+            # compressed three times for every key rather than once per key, and
+            # brotli at BROTLI_STATIC_QUALITY — the most expensive compression in
+            # the package, and the one every warm-up used to run four times over —
+            # runs once.
+            bodies = compress_static_bodies(payload)
+            variants: dict[str, _Variant] = {}
+            for key in keys:
+                body, encoding = select_static_variant(bodies, key, payload)
+                variants[key] = _Variant(body, encoding, _index_etag(payload, encoding))
+            CACHED_INDEX_PAYLOAD = payload
             for key, variant in variants.items():
                 CACHED_INDEX_COMPRESSED.setdefault(key, variant)
     except Exception:
@@ -280,6 +285,9 @@ def handle_index() -> bytes:
     accept_encoding = _header("Accept-Encoding", "")
     key = static_variant_key(accept_encoding)
 
+    # The lock covers the build itself, not just its publication: two cold
+    # callers used to build (and compress) the whole shell twice, and the
+    # loser's compressed variant was filed under the winner's payload.
     with INDEX_LOCK:
         cached = CACHED_INDEX_COMPRESSED.get(key)
         if CACHED_INDEX_PAYLOAD is not None and cached is not None:
@@ -287,16 +295,13 @@ def handle_index() -> bytes:
         # Build the payload only on a true cold miss; otherwise compress the
         # cached payload for this (previously unseen) key.
         payload_local = CACHED_INDEX_PAYLOAD
-    if payload_local is None:
-        payload_local = _build_index_payload()
-    body, encoding = compress_static_variants(payload_local, accept_encoding)
-    etag = _index_etag(payload_local, encoding)
-    with INDEX_LOCK:
-        if CACHED_INDEX_PAYLOAD is None:
+        if payload_local is None:
+            payload_local = _build_index_payload()
             CACHED_INDEX_PAYLOAD = payload_local
+        body, encoding = compress_static_variants(payload_local, accept_encoding)
+        etag = _index_etag(payload_local, encoding)
         CACHED_INDEX_COMPRESSED.setdefault(key, _Variant(body, encoding, etag))
         variant = CACHED_INDEX_COMPRESSED[key]
-
     return _finalized_shell(variant)
 
 

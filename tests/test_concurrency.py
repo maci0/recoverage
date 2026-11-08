@@ -849,3 +849,55 @@ class TestSseCapRefusalLockScope:
         assert len(api._SSE_CLIENTS) == api._SSE_MAX_CLIENTS
         with api._SSE_CLIENTS_LOCK:
             api._SSE_CLIENTS.clear()
+
+
+class TestCoverageSourceValidation:
+    """One stamp, one validation, however many threads ask at once."""
+
+    def test_a_stamp_is_validated_once(self, tmp_path: Any, monkeypatch: Any) -> None:
+        from recoverage import _paths
+
+        root = tmp_path
+        (root / "rebrew-project.toml").write_text("[project]\nname = x\n", encoding="utf-8")
+        monkeypatch.setattr(_paths, "find_root", lambda: root)
+        monkeypatch.setattr(_paths, "_VALIDATED", None)
+        import recoverage.config as _config
+
+        monkeypatch.setattr(_config, "snapshot_override", lambda: None)
+        validations = 0
+        lock = threading.Lock()
+
+        def counting_read_config(_root: Any) -> None:
+            nonlocal validations
+            with lock:
+                validations += 1
+
+        monkeypatch.setattr(_paths, "read_config", counting_read_config)
+
+        _in_parallel(lambda i: _paths.coverage_source())
+        assert validations == 1
+        assert _paths._VALIDATED is not None
+
+
+class TestIndexShellBuild:
+    """The cold-cache build of the SPA shell under INDEX_LOCK."""
+
+    def test_a_cold_herd_builds_the_shell_once(self, monkeypatch: Any) -> None:
+        import recoverage.ui as ui
+
+        builds = 0
+        lock = threading.Lock()
+
+        def counting_build() -> bytes:
+            nonlocal builds
+            with lock:
+                builds += 1
+            return b"<html>shell</html>"
+
+        monkeypatch.setattr(ui, "_build_index_payload", counting_build)
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+
+        _in_parallel(lambda i: ui.warm_index_cache())
+        assert builds == 1
+        assert ui.CACHED_INDEX_PAYLOAD == b"<html>shell</html>"

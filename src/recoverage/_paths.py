@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import threading
 lazy from collections.abc import Iterator
 lazy from pathlib import Path
 
@@ -55,6 +56,10 @@ def config_fingerprint(root: Path) -> tuple[int, int, int, int] | None:
 
 
 _VALIDATED: tuple[Path, int, int, int, int] | None = None
+#: Guards _VALIDATED: coverage_source() runs on every request thread, so a
+#: check-then-act over the global without it validated one config once per
+#: concurrent caller.
+_VALIDATED_LOCK = threading.Lock()
 
 
 def coverage_source() -> Path:
@@ -74,6 +79,8 @@ def coverage_source() -> Path:
     stamp = (root / CONFIG_NAME).stat()
     key = (root, stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size, stamp.st_ino)
     if key != _VALIDATED:
-        read_config(root)
-        _VALIDATED = key
+        with _VALIDATED_LOCK:
+            if key != _VALIDATED:
+                read_config(root)
+                _VALIDATED = key
     return root
