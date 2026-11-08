@@ -874,7 +874,10 @@ class TestCoverageSourceValidation:
 
         monkeypatch.setattr(_paths, "read_config", counting_read_config)
 
-        _in_parallel(lambda i: _paths.coverage_source())
+        def _call_source(_index: int) -> None:
+            _paths.coverage_source()
+
+        _in_parallel(_call_source)
         assert validations == 1
         assert _paths._VALIDATED is not None
 

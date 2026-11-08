@@ -634,14 +634,14 @@ class TestRestoreBackup:
 class TestReferencedFiles:
     """A portable export's referenced inputs travel with its backup."""
 
-    def _write_with_binary(self, tmp_path, binary_name="game.exe"):
+    def _write_with_binary(self, tmp_path: Path, binary_name: str = "game.exe") -> Path:
         db = tmp_path / "db"
         db.mkdir()
         write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": binary_name})
         (db / binary_name).write_bytes(b"binary-bytes")
         return db
 
-    def test_referenced_binary_is_archived_and_restored(self, tmp_path):
+    def test_referenced_binary_is_archived_and_restored(self, tmp_path: Path) -> None:
         db = self._write_with_binary(tmp_path)
         archive = tmp_path / "snap.tar"
         info = write_backup(db, archive)
@@ -655,14 +655,14 @@ class TestReferencedFiles:
         assert "game.exe" in names_written
         assert (db / "game.exe").read_bytes() == b"binary-bytes"
 
-    def test_missing_referenced_binary_is_a_refusal(self, tmp_path):
+    def test_missing_referenced_binary_is_a_refusal(self, tmp_path: Path) -> None:
         db = tmp_path / "db"
         db.mkdir()
         write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "game.exe"})
         with pytest.raises(BackupError, match="not present"):
             write_backup(db, tmp_path / "snap.tar")
 
-    def test_referenced_path_escaping_the_snapshot_is_a_refusal(self, tmp_path):
+    def test_referenced_path_escaping_the_snapshot_is_a_refusal(self, tmp_path: Path) -> None:
         db = tmp_path / "db"
         db.mkdir()
 
@@ -694,16 +694,16 @@ class TestReferencedFiles:
 class TestBackupFreshness:
     """A backup schedule that stops running must fail a monitor, not vanish."""
 
-    def test_no_directory_is_a_refusal(self, tmp_path):
+    def test_no_directory_is_a_refusal(self, tmp_path: Path) -> None:
         with pytest.raises(BackupError, match="no backup directory"):
             check_backup_freshness(tmp_path / "missing")
 
-    def test_empty_directory_is_a_refusal(self, tmp_path):
+    def test_empty_directory_is_a_refusal(self, tmp_path: Path) -> None:
         (tmp_path / "empty").mkdir()
         with pytest.raises(BackupError, match="no stamped backup"):
             check_backup_freshness(tmp_path / "empty")
 
-    def test_fresh_archive_passes_and_reports_its_age(self, tmp_path):
+    def test_fresh_archive_passes_and_reports_its_age(self, tmp_path: Path) -> None:
         db = tmp_path / "db"
         db.mkdir()
         build_synthetic_coverage(db)
@@ -714,22 +714,22 @@ class TestBackupFreshness:
         assert age is not None and age >= 0
         check_backup_freshness(out)
 
-    def test_overdue_archive_is_a_refusal(self, tmp_path, monkeypatch):
+    def test_overdue_archive_is_a_refusal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         out = tmp_path / "backups"
         out.mkdir()
         archive = out / "coverage-20260101T000000.000000Z.tar"
         archive.write_bytes(b"placeholder")
         monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_000_000_000.0)
         # Push mtime far into the past relative to the patched clock.
-        import os
-
         past = 1_000_000_000.0 - 100 * 3600
         os.utime(archive, (past, past))
         with pytest.raises(BackupError, match="overdue"):
             check_backup_freshness(out)
 
     @pytest.mark.parametrize("bound", [float("inf"), float("nan"), -1.0])
-    def test_a_non_finite_or_negative_bound_is_refused(self, tmp_path, bound):
+    def test_a_non_finite_or_negative_bound_is_refused(self, tmp_path: Path, bound: float) -> None:
         """inf/nan compare False against every age, so an unguarded bound
         reads a stale backup as fresh; a negative bound fails even a fresh
         one. The bound is refused, not compared."""

@@ -6207,7 +6207,7 @@ class TestTargetFileRoutesFuzz:
     def test_source_and_binary_never_serve_outside_the_tree(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        root, outside = self._project(tmp_path, monkeypatch)
+        root, _outside = self._project(tmp_path, monkeypatch)
         from recoverage import server
 
         server.clear_target_cache()
@@ -6216,7 +6216,7 @@ class TestTargetFileRoutesFuzz:
             quoted = data.decode("latin-1").replace(" ", "%20")
             quoted = quoted.replace("\x00", "%00")
             path = f"/files/game/source/{quoted}"
-            status, headers, body = wsgi_request("GET", path)
+            status, _headers, body = wsgi_request("GET", path)
             code = int(status.split()[0])
             # /files is not /api/*: the success body is raw file bytes, so an
             # error is identified by status, not by parsing JSON.
@@ -6254,7 +6254,7 @@ class TestTargetFileRoutesFuzz:
             target = data.decode("latin-1").replace(" ", "%20").replace("\x00", "%00")
             for suffix in ("/source/main.c", "/binary"):
                 path = f"/files/{target}{suffix}"
-                status, headers, body = wsgi_request("GET", path)
+                status, _headers, body = wsgi_request("GET", path)
                 code = int(status.split()[0])
                 assert code in (200, 403, 404, 503), f"{path}: {status}"
                 assert self._SECRET not in body, f"{path}: served outside bytes"
