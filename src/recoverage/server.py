@@ -3159,12 +3159,16 @@ def _snapshot_index[IndexT](
 ) -> IndexT:
     """The memo for *kind* over *snap*, building it on the first call."""
     key = (id(snap), kind)
+    # One lock hold for the hit path: the get and the _touch it publishes
+    # both mutate the store's shape, so splitting them let two threads'
+    # touches interleave and drop an entry a concurrent reader just read.
+    # The lock is uncontended on the hot path (a dict get under a mutex),
+    # so the second acquisition bought no isolation.
     with _SNAPSHOT_INDEX_LOCK:
         hit = _SNAPSHOT_INDEX.get(key)
-    if hit is not None:
-        with _SNAPSHOT_INDEX_LOCK:
+        if hit is not None:
             _touch(_SNAPSHOT_INDEX, key)
-        return cast(IndexT, hit[1])
+            return cast(IndexT, hit[1])
     index = build()
     # Two requests can miss together and each fold every row. The first build
     # to store wins; the second's index is dropped, so the memo holds one
@@ -3202,11 +3206,16 @@ def folded_row_columns(
     """
 
     def build(source: Sequence[Any]) -> Mapping[int, tuple[str, str, str]]:
+        # fold_text(None) is None and fold_text("") is "" — the `or ""` kept
+        # here is not dead, it is what maps a NULL column to the empty string
+        # no non-empty term matches (the COALESCE answer). Passing the
+        # attribute through None first keeps that for a row that lacks the
+        # attribute entirely.
         return {
             id(row): (
-                fold_text(getattr(row, "name", "")) or "",
-                fold_text(getattr(row, "symbol", "")) or "",
-                fold_text(getattr(row, "vaStart", "")) or "",
+                fold_text(getattr(row, "name", None)) or "",
+                fold_text(getattr(row, "symbol", None)) or "",
+                fold_text(getattr(row, "vaStart", None)) or "",
             )
             for row in source
         }
@@ -3415,7 +3424,11 @@ def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
     Caller holds the cache's own lock.
     """
     if len(cache) >= max_size:
-        for old_key in list(cache)[: len(cache) - max_size + 1]:
+        # islice keeps the drop O(overflow) instead of O(len(cache)):
+        # list(cache) copied every key of a large cache (50k+ entries on
+        # the snapshot indexes) to pop one.  Materializing only the keys
+        # to drop also keeps the iteration off a mutating dict.
+        for old_key in list(itertools.islice(cache, len(cache) - max_size + 1)):
             cache.pop(old_key, None)
 
 
