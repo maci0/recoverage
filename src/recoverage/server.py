@@ -2057,7 +2057,10 @@ def _find_dll_path(target: str) -> Path | None:
                     extra=request_log_fields(500, target=_log_safe(target)),
                 )
                 return None
-            relative = Path(binary.removeprefix("/"))
+            # Same cross-platform normalization as backup._referenced_files:
+            # a Windows-written portable ref spells "\\", a filename
+            # character on POSIX, so fold it to "/" before Path parses it.
+            relative = Path(binary.replace("\\", "/").removeprefix("/"))
             if not is_plain_relative(relative):
                 _log.warning(
                     "Refusing portable original DLL %s for target %s: outside the project tree",

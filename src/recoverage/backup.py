@@ -408,7 +408,11 @@ def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[
     for ref in _referenced_paths(documents):
         if "\x00" in ref:
             raise BackupError(f"referenced path {ref!r} carries a NUL byte")
-        relative = Path(ref.removeprefix("/"))
+        # A portable export is a cross-platform document: a Windows-written
+        # one spells separators as "\\", which is a filename character on
+        # POSIX, so normalize before the host Path parses it (the same
+        # replace _contained_source_path and _stored_names_source apply).
+        relative = Path(ref.replace("\\", "/").removeprefix("/"))
         if ".." in relative.parts or relative.is_absolute():
             raise BackupError(
                 f"referenced path {ref!r} escapes the snapshot directory {db_dir}; "

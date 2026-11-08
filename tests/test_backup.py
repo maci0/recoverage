@@ -670,6 +670,26 @@ class TestReferencedFiles:
         with pytest.raises(BackupError, match="escapes the snapshot directory"):
             write_backup(db, tmp_path / "snap.tar")
 
+    def test_backslash_ref_from_a_windows_written_export_is_archived(self, tmp_path):
+        # Portable exports are cross-platform documents: a Windows writer
+        # spells separators as "\\", which POSIX Path would read as one
+        # flat filename. Backup must fold it to "/" like the source-root
+        # reader does, or it refuses a binary that is present.
+        db = tmp_path / "db"
+        (db / "binaries").mkdir(parents=True)
+        (db / "binaries" / "game.exe").write_bytes(b"binary-bytes")
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "binaries\\game.exe"})
+        archive = tmp_path / "snap.tar"
+        info = write_backup(db, archive)
+        assert "game.exe" in [name for name, _s, _d in info.members]
+
+    def test_backslash_traversal_ref_is_an_escape_refusal(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+        write_coverage(db, "FAKEDLL", {}, functions=[], paths={"originalDll": "..\\game.exe"})
+        with pytest.raises(BackupError, match="escapes the snapshot directory"):
+            write_backup(db, tmp_path / "snap.tar")
+
 
 class TestBackupFreshness:
     """A backup schedule that stops running must fail a monitor, not vanish."""

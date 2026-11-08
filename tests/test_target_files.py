@@ -156,6 +156,17 @@ class TestTargetFileRoutes:
         status, _, body = wsgi_get("/files/game/binary")
         assert status.startswith("200") and body == b"game binary"
 
+    def test_backslash_portable_binary_ref_resolves_on_posix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A Windows-written portable ref spells a backslash; on POSIX that
+        # is a filename character, so the lookup must fold it to "/" first.
+        root = _project(tmp_path, monkeypatch)
+        (root / "rebrew-project.toml").unlink()
+        write_coverage(root / "exports", "game", {}, paths={"originalDll": "binaries\\game.exe"})
+        status, _, body = wsgi_get("/files/game/binary")
+        assert status.startswith("200") and body == b"game binary"
+
     @pytest.mark.parametrize("configured", [False, True])
     def test_portable_byte_slices_use_the_downloaded_binary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
