@@ -82,7 +82,7 @@ from collections.abc import Callable
 from http.cookies import SimpleCookie
 from itertools import pairwise
 from pathlib import Path, PurePath
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -6702,4 +6702,132 @@ class TestCSPForPath:
             struct_tokens=_CSP_PATH_TOKENS,
             num_tokens=_CSP_PATH_TOKENS,
             label="TestCSPForPath.test_the_policy_decision_follows_the_literal_prefix",
+        )
+
+
+class TestBackupStampParsing:
+    """`backup._archive_stamp_instant` / `_prune_old_archives` over hostile names.
+
+    The archive name is the backup index: `_newest_stamped_archive`,
+    `newest_archive_age_hours`, `check_backup_freshness`, `verify_all_backups`
+    and `_prune_old_archives` all decide from it.  A name that is not a stamp
+    this module wrote must read as "no stamped archive", never as a stamped
+    one, and a directory full of them must never lose an operator file to the
+    retention prune.  The seeds are real stamped names; the grammar tokens
+    are the near-misses byte mutation rarely spells (Unicode digits, which
+    `str.isdigit` accepts, a doubled separator, an impossible calendar).
+    """
+
+    _STAMP_SEEDS: ClassVar[list[bytes]] = [
+        b"coverage-20260101T000000.000000Z.tar",
+        b"coverage-20260101T000000.000000Z-2.tar",
+        b"coverage-20260101T000000.000000Z-999.tar",
+        b"coverage-19700101T000000.000000Z.tar",
+        b"coverage-99991231T235959.999999Z.tar",
+        b"coverage-foo.tar",
+        b"coverage-20261301T000000.000000Z.tar",
+        b"coverage-20260230T000000.000000Z.tar",
+        b"coverage-20260101T240000.000000Z.tar",
+        b"other-20260101T000000.000000Z.tar",
+        b"coverage-20260101T000000.000000Z.zip",
+        b"",
+        b"\x00",
+    ]
+
+    _STAMP_TOKENS: ClassVar[tuple[bytes, ...]] = (
+        b"coverage-",
+        b".tar",
+        b"20260101T000000.000000Z",
+        b"-2",
+        b"-999",
+        b"coverage-!handmade.tar",
+        b"coverage-aaa.tar",
+        b"coverage-20261301T000000.000000Z.tar",
+        "\u0661".encode(),
+        "\u00b2".encode(),
+        "\uff12".encode(),
+        b"\x00",
+        b"\n",
+        b"%00",
+        b"../../etc/passwd.tar",
+        b"coverage-20260101T000000.000000Z-.tar",
+        b"coverage-20260101T000000.000000Z-0.tar",
+    )
+
+    def test_a_name_that_is_not_a_stamp_reads_as_none(self) -> None:
+        from recoverage import backup
+
+        def check(data: bytes) -> None:
+            name = data.decode("utf-8", "surrogateescape")
+            try:
+                instant = backup._archive_stamp_instant(name)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_archive_stamp_instant raised {type(exc).__name__}: {exc} for {name!r}"
+                ) from exc
+            if instant is None:
+                return
+            assert instant.tzinfo is not None, f"{name!r}: naive instant {instant!r}"
+            restamped = f"coverage-{backup._stamp(instant.timestamp())}.tar"
+            assert backup._archive_stamp_instant(restamped) == instant, (
+                f"{name!r}: instant {instant!r} does not round-trip through {restamped!r}"
+            )
+            suffixed = f"coverage-{backup._stamp(instant.timestamp())}-2.tar"
+            assert backup._archive_stamp_instant(suffixed) == instant
+
+        _fuzz(
+            self._STAMP_SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=self._STAMP_TOKENS,
+            num_tokens=self._STAMP_TOKENS,
+            label="TestBackupStampParsing.test_a_name_that_is_not_a_stamp_reads_as_none",
+        )
+
+    def test_retention_prune_never_deletes_a_non_stamped_file(self, tmp_path: Path) -> None:
+        from recoverage import backup
+
+        def check(data: bytes) -> None:
+            directory = tmp_path / "backups"
+            import shutil
+
+            if directory.exists():
+                shutil.rmtree(directory)
+            directory.mkdir(parents=True)
+            for i in range(31):
+                (directory / f"coverage-20260101T000000.{i:06d}Z.tar").write_bytes(b"x")
+            name = data.decode("utf-8", "surrogateescape")
+            if not name or "/" in name or "\\" in name or "\x00" in name:
+                return
+            if not (name.startswith("coverage-") and name.endswith(".tar")):
+                return
+            hand = directory / name
+            if hand.name != name or hand.exists():
+                return
+            hand.write_bytes(b"OPERATOR")
+            backup._prune_old_archives(directory)
+            if backup._archive_stamp_instant(name) is None:
+                assert hand.exists(), (
+                    f"{name!r}: _prune_old_archives deleted a non-stamped operator file"
+                )
+            stamped = [
+                p
+                for p in directory.glob("coverage-*.tar")
+                if backup._archive_stamp_instant(p.name) is not None
+            ]
+            assert len(stamped) <= backup._RETENTION_COUNT, (
+                f"{len(stamped)} stamped archives remain, over the retention cap"
+            )
+
+        _fuzz(
+            [
+                b"coverage-!handmade.tar",
+                b"coverage-aaa.tar",
+                b"coverage-20260101T000000.000000Z.tar",
+            ],
+            check,
+            iterations=30,
+            struct_tokens=self._STAMP_TOKENS,
+            num_tokens=self._STAMP_TOKENS,
+            label="TestBackupStampParsing.test_retention_prune_never_deletes_a_non_stamped_file",
         )

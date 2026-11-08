@@ -578,7 +578,7 @@ def _prune_old_archives(archive_dir: Path) -> None:
         candidates = sorted(
             p
             for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-            if p.is_file() and not p.is_symlink()
+            if p.is_file() and not p.is_symlink() and _archive_stamp_instant(p.name) is not None
         )
     except OSError as exc:
         _log.warning(
@@ -906,8 +906,21 @@ def _archive_stamp_instant(name: str) -> datetime | None:
     inner = name[len(_ARCHIVE_PREFIX) : -len(_ARCHIVE_SUFFIX)]
     if "-" in inner:
         inner, _, _suffix = inner.rpartition("-")
-        if not _suffix.isdigit():
+        if not _suffix.isascii() or not _suffix.isdigit():
             return None
+    # ``_stamp`` always writes a fixed-width stamp (``%f`` is six digits), and
+    # ``strptime``'s ``%f`` accepts one to six, right-padding a short fraction
+    # (``.99999`` reads as 999990 microseconds).  A shorter fraction is a name
+    # this module never wrote, so refuse it rather than count an operator's
+    # hand-made archive as the backup index.
+    if len(inner) != 23 or inner[8] != "T" or inner[15] != "." or inner[22] != "Z":
+        return None
+    if not inner[:8].isascii() or not inner[:8].isdigit():
+        return None
+    if not inner[9:15].isascii() or not inner[9:15].isdigit():
+        return None
+    if not inner[16:22].isascii() or not inner[16:22].isdigit():
+        return None
     try:
         return datetime.strptime(inner, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
     except ValueError:
@@ -975,9 +988,7 @@ def newest_archive_age_hours(directory: Path) -> float | None:
     seconds, remainder = divmod(clock.wall_time(), 1.0)
     now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
     delta = instant - _EPOCH
-    instant_ns = (
-        (delta.days * 86400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1000
-    )
+    instant_ns = (delta.days * 86400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1000
     return max(0.0, (now_ns - instant_ns) / 3_600_000_000_000)
 
 
