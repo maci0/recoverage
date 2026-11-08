@@ -2679,10 +2679,13 @@ def _coverage_map(
         # link, and building the markup twice is how the alt text and the
         # title drift apart between the two.
         inset = _CELL_INSET if outlined else 0
+        # aria-label on the anchor overrides the img's alt as the accessible
+        # name (WCAG 2.4.4); alt is decorative so the cell description is
+        # announced once, not twice.
         img = (
-            f'<a href="{link}" title="{escaped_title}">'
+            f'<a href="{link}" title="{escaped_title}" aria-label="{escaped_title}">'
             f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
-            f'border="0" alt="{escaped_title}"></a>'
+            f'border="0" alt=""></a>'
         )
         if outlined:
             return (

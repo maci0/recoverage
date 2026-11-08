@@ -6202,19 +6202,20 @@ class TestSpaNamedControls:
     name that says what it does, not what it is drawn as."""
 
     def test_a_disassembly_address_names_its_own_action(self) -> None:
-        """The address links are real anchors, so they are in the Tab order and
-        in the screen reader's link list, where a bare hex number said nothing
+        """The address controls are real buttons, so they are in the Tab order and
+        in the screen reader's button list, where a bare hex number said nothing
         about what activating it did. The visible text is unchanged, so the
         name cannot drift from the address shown (WCAG 2.4.4)."""
         hl = _web("lib/highlight.ts")
         assert 'aria-label="Jump to address $<address>"' in hl
         assert 'class="asm-link"' in hl
+        assert "<button" in hl
 
     def test_the_disassembly_link_still_carries_its_own_text(self) -> None:
         """The name is added; the address it names is still on screen, so the
-        link does not read as a label with nothing behind it."""
+        control does not read as a label with nothing behind it."""
         hl = _web("lib/highlight.ts")
-        assert ">$<address></a>" in hl
+        assert ">$<address></button>" in hl
 
 
 class TestClockSeam:

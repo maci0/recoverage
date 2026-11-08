@@ -133,7 +133,7 @@ export function highlightCode(
     // of rows of "0x00401000". The name says the action and names the target
     // it jumps to; the visible text stays the address, so nothing on screen
     // changes and the name never drifts from what is shown.
-    '<a href="#" class="asm-link" data-addr="$<address>" title="Jump to $<address>" aria-label="Jump to address $<address>">$<address></a>',
+    '<button type="button" class="asm-link" data-addr="$<address>" aria-label="Jump to address $<address>">$<address></button>',
   );
 }
 

@@ -224,17 +224,15 @@ function FunctionMeta({
     return (
       <dl className={META_GRID}>
         <MetaItem label="VA">
-          <a
-            className="meta-value asm-link"
-            href="#"
-            title={`Jump the map to ${hex(toVa(fn.va), 8)}`}
-            onClick={(event) => {
-              event.preventDefault();
-              onJumpToAddress(toVa(fn.va));
-            }}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+            aria-label={`Jump the map to ${hex(toVa(fn.va), 8)}`}
+            onClick={() => onJumpToAddress(toVa(fn.va))}
           >
             {hex(toVa(fn.va), 8)}
-          </a>
+          </Button>
         </MetaItem>
         <MetaItem label="Type">
           {storageLabel}
@@ -276,17 +274,15 @@ function FunctionMeta({
   return (
     <dl className={META_GRID}>
       <MetaItem label="VA">
-        <a
-          className="meta-value asm-link"
-          href="#"
-          title={`Jump the map to ${addressHex}`}
-          onClick={(event) => {
-            event.preventDefault();
-            onJumpToAddress(toVa(address));
-          }}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+          aria-label={`Jump the map to ${addressHex}`}
+          onClick={() => onJumpToAddress(toVa(address))}
         >
           {addressHex}
-        </a>
+        </Button>
       </MetaItem>
       <MetaItem label="Size">{byteCount(fn.size ?? 0)}</MetaItem>
       <MetaItem label="Offset">{hex(fn.fileOffset ?? 0, 1)}</MetaItem>
@@ -441,16 +437,15 @@ function PanelMeta({
           {parentVa === null ? (
             <span className="meta-value">{parent}</span>
           ) : (
-            <a
-              className="meta-value asm-link"
-              href="#"
-              onClick={(event) => {
-                event.preventDefault();
-                onJumpToAddress(parentVa);
-              }}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="meta-value asm-link h-auto min-h-0 border-0 bg-transparent p-0 font-mono text-micro text-text hover:bg-transparent"
+              aria-label={`Jump the map to ${parent}`}
+              onClick={() => onJumpToAddress(parentVa)}
             >
               {parent}
-            </a>
+            </Button>
           )}
         </MetaItem>
       )}
