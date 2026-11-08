@@ -2967,12 +2967,33 @@ def _plain(value: Any) -> Any:
     if isinstance(value, str):
         return "".join("\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value)
     if isinstance(value, Mapping):
-        return {_plain(key): _plain(item) for key, item in value.items()}
+        return {_plain_key(key): _plain(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [_plain(item) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
+
+
+def _plain_key(key: Any) -> Any:
+    """A dict *key* as a hashable plain value.
+
+    ``_plain`` thaws tuples into lists, which is unhashable, so a tuple key
+    would make the rebuilt dict raise ``TypeError``.  JSON object keys are
+    strings, so a non-string key takes its plain string spelling; a string
+    key keeps the surrogate sanitizer above.
+    """
+    if isinstance(key, str):
+        return _plain(key)
+    if isinstance(key, (int, float)) and not isinstance(key, bool):
+        # A non-finite float key has no JSON spelling either; ``json.dumps``
+        # would write it as a string key, so keep the same shape.
+        if isinstance(key, float) and not math.isfinite(key):
+            return repr(key)
+        return key
+    if key is None or isinstance(key, bool):
+        return key
+    return repr(_plain(key))
 
 
 def _measure(value: Any) -> int | float | None:

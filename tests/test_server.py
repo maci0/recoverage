@@ -1374,6 +1374,20 @@ class TestCoverageVersionGate:
         assert srv._plain("a\ud800b\udfff") == "a\ufffdb\ufffd"
         assert srv._plain({"k\udcff": "v\udcff"}) == {"k\ufffd": "v\ufffd"}
 
+    def test_plain_keeps_dict_keys_hashable(self) -> None:
+        """A tuple key must stay a valid dict key, not become a list.
+
+        ``_plain`` thaws containers for JSON, but a tuple key turned into a
+        list is unhashable and raised ``TypeError: cannot use 'list' as a dict
+        key`` when the dict was rebuilt, taking the payload down.  A tuple
+        key's string form is what ``json.dumps`` would have failed on too, so
+        the key is rendered as its plain string spelling.
+        """
+        import recoverage.server as srv
+
+        assert srv._plain({("a", "b"): "v"}) == {"['a', 'b']": "v"}
+        assert srv._plain({1: "v", "k": "w"}) == {1: "v", "k": "w"}
+
 
 class TestCoverageReadsAreSideEffectFree:
     """Reading coverage must not write to the directory the operator owns.
