@@ -24,8 +24,6 @@ lazy import io
 
 from rebrew.utils import floor_pct
 
-lazy from recoverage.server import pct_1dp
-
 #: Per-section values the table, CSV and Markdown renders all print, in the
 #: order they print them.  ONE list: `stats`, `export --format csv` and
 #: `export --format md` are the same table in three spellings, and a key added
@@ -87,6 +85,39 @@ _MD_PIPE = "\\|"
 #: table renders ragged.
 _MD_HEADER = "| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |"
 _MD_SEPARATOR = "|---------|-----:|------:|------:|------:|-----:|-----:|---------:|"
+
+
+def coverage_pct(covered: int, total: int) -> float:
+    """Byte coverage of *covered* of *total*, as a percentage floored to 2dp.
+
+    Floored, not rounded to nearest, and that is the whole point: 999_997 of
+    1_000_000 covered bytes round to ``100.0`` while three bytes are still
+    unmatched, so a project one short of complete reads as complete in every
+    surface that shows the number.  ``summary.coveragePercent`` and the
+    per-section ``coverage_pct`` are the same quantity, so they take the same
+    rounding, from here (rebrew's ``floor_pct``) rather than each one calling
+    ``round``.  A *total* of 0 has no ratio and answers 0.0.
+    """
+    return floor_pct(covered, total, 2)
+
+
+def pct_1dp(value: float) -> float:
+    """*value* (a :func:`coverage_pct` figure) at 1dp, floored like it was.
+
+    The narrow surfaces — `recoverage stats`, the Markdown export, the Potato
+    map header — print one decimal, and formatting the 2dp value with
+    ``%.1f`` rounded it back UP: 99.999% of 100_000 bytes floors to 99.99 and
+    then printed as ``100.0%`` in all three, while ``check --min-coverage
+    100`` failed the same section on the unrounded ratio.  Flooring once more
+    is what keeps "one byte short of complete" from reading as complete in
+    every surface that shows the number, which is why
+    :func:`coverage_pct` floors at all.
+
+    Takes the percentage, not the counts: the callers hold the 2dp figure
+    :func:`coverage_pct` already produced, and a second division here would be
+    a second rounding of the same ratio.
+    """
+    return floor_pct(value, 100, 1)
 
 
 def section_row(sec: Mapping[str, Any]) -> list[Any]:

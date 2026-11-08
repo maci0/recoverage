@@ -40,7 +40,6 @@ from rebrew.coverage_toml import (
 from rebrew.metadata.bindings import DATA_KINDS
 lazy import brotli
 lazy import zstandard as zstd
-lazy from rebrew.utils import floor_pct
 lazy from rebrew.workspace import (
     CONFIG_NAME,
     MATCHED_STATUSES,
@@ -53,6 +52,8 @@ lazy from rebrew.workspace import (
 )
 
 from recoverage import clock, config, metrics
+from recoverage.config import _ASCII_DIGITS, parse_ascii_int, strip_sign  # noqa: F401 — re-exported
+from recoverage.reporting import coverage_pct, pct_1dp  # noqa: F401 — re-exported
 lazy from recoverage._paths import config_fingerprint, coverage_source
 lazy from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
 
@@ -789,43 +790,6 @@ def query_param(name: str, default: str = "") -> str:
     latin-1 round trip in :func:`decode_query_value` is what recovers it.
     """
     return decode_query_value(request.query.get(name, default))
-
-
-#: The digits every integer a request may spell is written in.  ``int()``
-#: accepts any Unicode Nd digit, so ``?size=٤٠٩٦`` served a
-#: 4096-byte slice and ``?page=1_0`` opened page 10: spellings no client sends
-#: and no response documents, drawn from a repertoire the operator's locale
-#: picks.  ASCII only, the same rule ``config._ASCII_INT`` holds every
-#: ``RECOVERAGE_*`` integer to, so one number means one thing at both edges.
-_ASCII_DIGITS: Final = "0123456789"
-_ASCII_HEX_DIGITS: Final = "0123456789abcdef"
-
-
-def strip_sign(text: str) -> tuple[int, str]:
-    """Split a leading ``+``/``-`` off *text*: the sign, and the rest."""
-    if text[:1] == "-":
-        return -1, text[1:]
-    if text[:1] == "+":
-        return 1, text[1:]
-    return 1, text
-
-
-def parse_ascii_int(text: str, base: int = 10) -> int:
-    """*text* as an integer written in *base* with ASCII digits, else ValueError.
-
-    The one integer parse for every request-supplied number: ``?size=``,
-    ``?offset=``, ``?limit=``, the batch VA list, and Potato Mode's ``?page=``
-    and ``?idx=``.  ``int(text, base)`` is not that check on its own: it takes
-    digits from the whole Unicode Nd set plus the ``_`` separator, so a
-    request could name a byte count, a page or a VA in a spelling the endpoint
-    never documented and that no other surface accepts.  Callers already turn
-    :class:`ValueError` into their own 400 or their own default, so the reason
-    never reaches the client as one shape.
-    """
-    digits = _ASCII_HEX_DIGITS[:base] if base == 16 else _ASCII_DIGITS
-    if not text or any(c not in digits and c.lower() not in digits for c in text):
-        raise ValueError(f"not an ASCII base-{base} integer: {text!r}")
-    return int(text, base)
 
 
 class RequestBodyError(Exception):
@@ -1570,39 +1534,6 @@ def _section_summary(section: Any) -> dict[str, Any]:
         "totalFunctions": total_functions,
         "size": section.size,
     }
-
-
-def coverage_pct(covered: int, total: int) -> float:
-    """Byte coverage of *covered* of *total*, as a percentage floored to 2dp.
-
-    Floored, not rounded to nearest, and that is the whole point: 999_997 of
-    1_000_000 covered bytes round to ``100.0`` while three bytes are still
-    unmatched, so a project one short of complete reads as complete in every
-    surface that shows the number.  ``summary.coveragePercent`` and the
-    per-section ``coverage_pct`` are the same quantity, so they take the same
-    rounding, from here (rebrew's ``floor_pct``) rather than each one calling
-    ``round``.  A *total* of 0 has no ratio and answers 0.0.
-    """
-    return floor_pct(covered, total, 2)
-
-
-def pct_1dp(value: float) -> float:
-    """*value* (a :func:`coverage_pct` figure) at 1dp, floored like it was.
-
-    The narrow surfaces — `recoverage stats`, the Markdown export, the Potato
-    map header — print one decimal, and formatting the 2dp value with
-    ``%.1f`` rounded it back UP: 99.999% of 100_000 bytes floors to 99.99 and
-    then printed as ``100.0%`` in all three, while ``check --min-coverage
-    100`` failed the same section on the unrounded ratio.  Flooring once more
-    is what keeps "one byte short of complete" from reading as complete in
-    every surface that shows the number, which is why
-    :func:`coverage_pct` floors at all.
-
-    Takes the percentage, not the counts: the callers hold the 2dp figure
-    :func:`coverage_pct` already produced, and a second division here would be
-    a second rounding of the same ratio.
-    """
-    return floor_pct(value, 100, 1)
 
 
 def _summary(snap: CoverageSnapshot) -> dict[str, Any]:

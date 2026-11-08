@@ -36,6 +36,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - `recoverage.status_colors.LIGHT`, the unused light-ground status palette. `TERMINAL` and `RICH_STYLES` are unchanged.
+- `recoverage.server::parse_ascii_int` and `recoverage.server::strip_sign`, moved to `recoverage.config` (same names, same behaviour); `recoverage.server` re-exports them, so `from recoverage.server import parse_ascii_int` still resolves. `recoverage.server::coverage_pct` and `recoverage.server::pct_1dp` moved the same way to `recoverage.reporting` and are re-exported by `recoverage.server`.
 
 ## [8.9.0] - 2026-11-04
 

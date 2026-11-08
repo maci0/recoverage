@@ -29,6 +29,7 @@ from rich.theme import Theme
 
 from recoverage import clock, config, ops
 from recoverage._paths import coverage_source
+from recoverage.config import parse_ascii_int
 from recoverage.devserver import (
     _KeepAliveRequestHandler,
     _server_class_for,
@@ -499,8 +500,6 @@ def _checked_port(value: int | str) -> int:
     separator, so ``--port 1_0`` would otherwise become port 10), and it must
     be in the port range.
     """
-    from recoverage.server import parse_ascii_int
-
     if isinstance(value, str):
         try:
             port = parse_ascii_int(value)
@@ -2089,8 +2088,6 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
     negative gate is a usage error the range check reports, not a parse error);
     everything after it must be ASCII digits and one ASCII dot.
     """
-    from recoverage.server import parse_ascii_int
-
     text = value.strip()
     sign = ""
     if text[:1] in ("+", "-"):

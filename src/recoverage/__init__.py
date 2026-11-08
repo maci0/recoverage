@@ -7,8 +7,11 @@ Module map (dependencies point one way, left to right):
 - ``metrics``     — in-process RED + connection + regen counters (no in-package
   deps)
 - ``status_colors`` — shared terminal status palette (no in-package deps)
-- ``config``      — RECOVERAGE_* parsing, validation, startup banner (no
-  in-package deps)
+- ``config``      — RECOVERAGE_* parsing, validation, startup banner; also the
+  one ASCII-integer parse (``parse_ascii_int``/``strip_sign``) every
+  request-supplied number reads — ``int()``'s Unicode digits and ``_``
+  separator would otherwise name a value no surface documents (no in-package
+  deps)
 - ``devserver``   — the WSGI serving stack: socket family, admission cap, socket
   deadline, keep-alive framing (imports config+metrics; stdlib only)
 - ``_paths``      — live project or explicit portable snapshot resolution (imports config)
@@ -23,9 +26,11 @@ Module map (dependencies point one way, left to right):
   cross-cutting wiring (auth/log/security-header hooks, 500 handler,
   OPTIONS preflight catch-all) but no content routes; configured at
   startup via ``configure_security()``
-- ``reporting``   — the report's rows, escaping, exports and gate verdict, shared
-  by the CLI and the ops so every surface prints the same numbers (imports
-  server for the 1dp figure)
+- ``reporting``   — the report's rows, escaping, exports, gate verdict and the
+  floored percentage helpers (``coverage_pct``/``pct_1dp``) every surface
+  prints, shared by the CLI and the ops so every surface prints the same
+  numbers (no in-package deps: the percentage helpers moved here off
+  ``server`` so ``server`` imports them, not the other way round)
 - ``potato``      — server-side HTML renderer (imports server+disasm+_paths)
 - ``ui``          — SPA/static routes (imports server; /potato is mounted by
   potato)

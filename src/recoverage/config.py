@@ -157,6 +157,44 @@ _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 #: raises ValueError from the limit rather than from the parse.
 _ASCII_INT: Final = re.compile(r"\A[+-]?[0-9]+\Z")
 
+
+#: The digits every integer a request may spell is written in.  ``int()``
+#: accepts any Unicode Nd digit, so ``?size=٤٠٩٦`` served a
+#: 4096-byte slice and ``?page=1_0`` opened page 10: spellings no client sends
+#: and no response documents, drawn from a repertoire the operator's locale
+#: picks.  ASCII only, the same rule ``_ASCII_INT`` holds every
+#: ``RECOVERAGE_*`` integer to, so one number means one thing at both edges.
+_ASCII_DIGITS: Final = "0123456789"
+_ASCII_HEX_DIGITS: Final = "0123456789abcdef"
+
+
+def strip_sign(text: str) -> tuple[int, str]:
+    """Split a leading ``+``/``-`` off *text*: the sign, and the rest."""
+    if text[:1] == "-":
+        return -1, text[1:]
+    if text[:1] == "+":
+        return 1, text[1:]
+    return 1, text
+
+
+def parse_ascii_int(text: str, base: int = 10) -> int:
+    """*text* as an integer written in *base* with ASCII digits, else ValueError.
+
+    The one integer parse for every request-supplied number: ``?size=``,
+    ``?offset=``, ``?limit=``, the batch VA list, and Potato Mode's ``?page=``
+    and ``?idx=``.  ``int(text, base)`` is not that check on its own: it takes
+    digits from the whole Unicode Nd set plus the ``_`` separator, so a
+    request could name a byte count, a page or a VA in a spelling the endpoint
+    never documented and that no other surface accepts.  Callers already turn
+    :class:`ValueError` into their own 400 or their own default, so the reason
+    never reaches the client as one shape.
+    """
+    digits = _ASCII_HEX_DIGITS[:base] if base == 16 else _ASCII_DIGITS
+    if not text or any(c not in digits and c.lower() not in digits for c in text):
+        raise ValueError(f"not an ASCII base-{base} integer: {text!r}")
+    return int(text, base)
+
+
 #: Bounds of the character classes :func:`_carries_control_char` refuses: the
 #: last C0 code point, DEL, and the last C1 code point.  A request header, a
 #: query value and a cookie are latin-1 over the wire, so no carrier can spell
