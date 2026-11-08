@@ -57,6 +57,7 @@ from recoverage.potato import (
     PANEL_COLOR,
     TRACK_UNITS,
     _AccessKey,
+    _accesskey_attr,
     _build_filter_data,
     _build_progress,
     _build_url,
@@ -2258,6 +2259,15 @@ class TestSectionTabAccesskey:
         assert _section_tab_data("T", ".text", {".text": {}}, None, "", {"s", "t"}) == [
             (".text", "?target=T&section=.text", True, _AccessKey("", ""))
         ]
+
+    def test_a_letter_whose_lowercase_is_two_code_points_claims_one(self) -> None:
+        # U+0130 lowercases to "i" + U+0307: a two-code-point accesskey names
+        # no single key, and the dedup set held the pair while the browser
+        # answered to "i", so a second control claiming "i" was refused.
+        used: set[str] = set()
+        assert _accesskey_attr(used, "İ") == _AccessKey("i", 'accesskey="i"')
+        assert used == {"i"}
+        assert _accesskey_attr({"i"}, "İ") == _AccessKey("", "")
 
     def test_two_sections_sharing_a_letter_claim_it_once(self) -> None:
         # .rdata and .rsrc both answer "r", and "r" is the Reloc pill's own

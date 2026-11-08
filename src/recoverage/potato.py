@@ -2173,7 +2173,13 @@ def _accesskey_attr(used: set[str], key: str) -> _AccessKey:
     document through ``{{!s_acc}}`` (unescaped, as the assembled attribute
     must be).
     """
-    letter = key[:1].lower()
+    # One code point, folded with casefold then truncated back to one: ``lower``
+    # on U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) yields two code points
+    # ("i" + U+0307), and a two-code-point accesskey names no single key -- the
+    # browser resolves it as its first code unit while the dedup set holds the
+    # pair, so a second control claiming "i" was refused beside a shortcut
+    # that answered to "i".  The claim is the folded first code point.
+    letter = key[:1].casefold()[:1]
     if letter == "" or letter in used:
         return _AccessKey("", "")
     used.add(letter)
