@@ -47,8 +47,9 @@ ENV_PREFIX: Final = "RECOVERAGE_"
 #: * the two fuzz knobs, read by the test suite (``tests/test_fuzz.py``, the
 #:   `fuzz` make target);
 #: * ``RECOVERAGE_DEV_API``, the origin ``web/vite.config.ts`` proxies
-#:   ``/api``, ``/src`` and ``/original`` to in the frontend dev loop
-#:   (``make web-dev``; CONTRIBUTING.md documents it beside the loop);
+#:   ``/api``, ``/files``, ``/src``, ``/original`` and ``/highlight.js`` to in
+#:   the frontend dev loop (``make web-dev``; CONTRIBUTING.md documents it
+#:   beside the loop);
 #: * ``RECOVERAGE_BACKUP_DIR``, read by ``recoverage.backup.backup_dir_from_env``
 #:   and by nothing else (``recoverage backup`` is a TOOL command, not a
 #:   server setting).

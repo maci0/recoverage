@@ -2,13 +2,20 @@
 
 The backend names each call ``recoverage.<op>`` with a JSON request and reads a
 JSON reply (contract: the backend's ``internal/engines/recoverage`` package and
-its generated ``contracts/dispatch/recoverage.schema.json``).  Two ops are
+its generated ``contracts/dispatch/recoverage.schema.json``).  Four ops are
 answered here:
+
+``recoverage.coverage_plan`` lists the staged coverage inputs a retained
+snapshot carries, including absences, so the backend can plan a build before
+one runs.
 
 ``recoverage.coverage_gate`` compares one target's sections with a threshold
 and replies with the verdict document ``recoverage check --json`` prints.  A
 threshold no section meets is still a reply: the gate result is data, not a
 refusal.
+
+``recoverage.coverage_map`` returns the dashboard's section cells and their
+canonical statistics for one target.
 
 ``recoverage.coverage_export`` renders one target as JSON, CSV or Markdown and
 replies with the body a redirected ``recoverage export`` writes, so the backend

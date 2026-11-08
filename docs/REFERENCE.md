@@ -63,10 +63,11 @@ their defaults and what each accepts are in the README's
 [configuration table](../README.md#configuration).
 
 Portable-mode parsed coverage documents persist under `$XDG_CACHE_HOME/recoverage/documents/`
-(`~/.cache/recoverage/documents/` when it is unset or relative), one file per
-document, so a restart skips the TOML parse for every document whose bytes have
-not changed. It keeps the 64 most recently used documents, and deleting the
-directory is always safe. Live project reads bypass this persisted parse cache.
+(`~/.cache/recoverage/documents/` when it is unset or relative; on Windows
+`%LOCALAPPDATA%\recoverage\documents\`), one file per document, so a restart
+skips the TOML parse for every document whose bytes have not changed. It keeps
+the 64 most recently used documents, and deleting the directory is always safe.
+Live project reads bypass this persisted parse cache.
 
 ```bash
 # A service serving portable exports on a LAN interface,
@@ -628,9 +629,10 @@ Query-parameter rules, the same on every endpoint:
   (`DLL not found`, detail naming the key to add) whichever `format` you ask
   for. A 422 means the binary loaded and the requested window ran past its
   end.
-- `/functions` (list) takes `limit` (1..500, default 50) and `offset` (>= 0,
-  default 0). An unparseable or out-of-range value is clamped, and the
-  response echoes the `limit` and `offset` actually used.
+- `/functions` (list) takes `limit` (1..500, default 50) and `offset`
+  (0..10000000, default 0). A numeric value outside its range is clamped, an
+  unparseable one falls back to the default, and the response echoes the
+  `limit` and `offset` actually used.
 - `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
   string (with or without `0x`) or an integer. The body must be under 64 KiB
   (413) and the list non-empty (400). VAs with no match are omitted from the
