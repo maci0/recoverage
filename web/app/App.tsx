@@ -990,7 +990,7 @@ export function App() {
               active tab's state with the `tabpanel` the map is. */}
           <div
             ref={sectionTabRef}
-            // min-h-8.5 is one row of tabs (a 28px tab, the padding and the
+            // min-h-8.5 is one row of tabs (a 24px tab, the padding and the
             // border), held before the section list arrives so the topbar does
             // not grow under the reader when it does (CLS).
             className={cn(

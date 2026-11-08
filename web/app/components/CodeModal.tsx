@@ -49,6 +49,13 @@ export function CodeModal({
   latestClose.current = onClose;
   const onEscape = useCallback((event: KeyboardEvent): void => {
     if (event.key === "Escape") {
+      // Escape closes the dialog, and the page behind it is inert, so the
+      // event must not also reach the map or the search field behind it:
+      // the map's Escape clears the selected block and the search's clears
+      // the query, so a dialog Escape that bubbled through would take
+      // those down as well (WCAG 2.1.2).
+      event.preventDefault();
+      event.stopPropagation();
       latestClose.current();
     }
   }, []);

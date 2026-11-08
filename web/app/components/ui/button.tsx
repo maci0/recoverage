@@ -29,9 +29,15 @@ export const controlVariants = cva(
         active: "border-control-line-hover bg-surface-3 text-text",
       },
       size: {
-        sm: "h-7 px-2 text-micro",
+        // sm and icon are 24px tall (h-6/size-6): the WCAG 2.5.8 AA floor.
+        // The previous h-7/size-8 were 28/32px, which is also above the
+        // floor, but sm is the size the filter pills and copy/open controls
+        // use, and its spacing and the section-tab row ("28px tab") were
+        // written against h-7's height; h-6 keeps that row at one height
+        // while every sm control stays at or above the floor.
+        sm: "h-6 px-2 text-micro",
         md: "h-8 px-3 text-data",
-        icon: "size-8 text-data",
+        icon: "size-6 text-data",
       },
     },
     defaultVariants: { variant: "secondary", size: "md" },
