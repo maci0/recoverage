@@ -29,6 +29,7 @@ lazy import contextlib
 lazy import gzip
 lazy import os
 lazy import tarfile
+lazy import tempfile
 lazy from pathlib import Path
 
 #: Modes a normalized member is recorded with. The executable bit is kept: a
@@ -70,12 +71,20 @@ def normalized(member: tarfile.TarInfo, epoch: int) -> tarfile.TarInfo:
 
 
 def normalize_archive(path: Path, epoch: int) -> None:
-    """Rewrite the sdist at *path* in place, deterministically."""
-    tmp = path.with_name(path.name + ".tmp")
+    """Rewrite the sdist at *path* in place, deterministically.
+
+    A second (or concurrent) run must not corrupt the first.  The temp file
+    is unique per run (`mkstemp`, O_EXCL): a deterministic ``<name>.tmp``
+    shared by two runs interleaves / truncates the other's output, and a
+    retry after a crash reuses the half-written temp left behind.  A unique
+    temp plus atomic `replace` makes rerun converge to the same bytes.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
         with (
             gzip.open(path, "rb") as src,
-            tmp.open("wb") as raw,
+            os.fdopen(fd, "wb") as raw,
             gzip.GzipFile(
                 filename="", mode="wb", fileobj=raw, compresslevel=GZIP_LEVEL, mtime=0
             ) as dst,

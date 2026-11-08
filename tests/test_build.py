@@ -927,6 +927,20 @@ class TestReproducibleBuild:
                 digests.append(archive.read_bytes())
             assert digests[0] == digests[1]
 
+    def test_normalizing_the_same_archive_twice_converges_and_leaves_no_temp(self) -> None:
+        """Idempotency: rerunning over its own output is a fixed point, and the
+        temp file is unique per run so a retry/concurrency cannot interleave.
+        """
+        normalize = _normalizer()
+        with _scratch_dir() as td:
+            archive = Path(td) / "run.tar.gz"
+            _build_sdist(archive, 1_600_000_000, 1000)
+            normalize.normalize_archive(archive, EPOCH)
+            first = archive.read_bytes()
+            normalize.normalize_archive(archive, EPOCH)
+            assert archive.read_bytes() == first
+            assert [p.name for p in Path(td).iterdir()] == ["run.tar.gz"]
+
     def test_normalized_members_carry_the_stamp_and_no_owner(self) -> None:
         normalize = _normalizer()
         with _scratch_dir() as td:
