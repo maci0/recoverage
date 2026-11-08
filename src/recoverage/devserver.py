@@ -134,16 +134,30 @@ def listen_family(host: str) -> socket.AddressFamily:
     result: list[tuple[socket.AddressFamily, Any, Any, Any, Any]] = []
     errors: list[BaseException] = []
 
-    def _resolve() -> None:
+    def _resolve(
+        cancel: threading.Event,
+        dst: list[tuple[socket.AddressFamily, Any, Any, Any, Any]],
+        errs: list[BaseException],
+    ) -> None:
         try:
-            result.extend(socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+            # A wait in the resolver that needs no further callee is dead,
+            # so the abandonment path cancels it: the check lets a stale
+            # resolution write only to its own list, which the abandonment
+            # read past the join never looks at.
+            if cancel.is_set():
+                return
+            dst.extend(socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
         except BaseException as exc:  # re-raised on the caller thread
-            errors.append(exc)
+            errs.append(exc)
 
-    thread = threading.Thread(target=_resolve, daemon=True)
+    cancel = threading.Event()
+    thread = threading.Thread(
+        target=_resolve, args=(cancel, result, errors), daemon=True, name="recoverage-dns-resolve"
+    )
     thread.start()
     thread.join(timeout=_LISTEN_FAMILY_TIMEOUT_SECONDS)
     if thread.is_alive():
+        cancel.set()
         _log.warning(
             "DNS resolution for bind host %r timed out after %.1fs; using AF_INET",
             host,
