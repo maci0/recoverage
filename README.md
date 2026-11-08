@@ -154,7 +154,7 @@ Every error this package raises derives from `recoverage.config.RecoError`
 `OpsError`, `RequestBodyError`, `MissingAssetError`), so a single
 `except RecoError` handles any recoverage failure without enumerating
 subclasses; each subclass keeps its builtin base (`ValueError`/`RuntimeError`)
-so existing handlers keep working. See [docs/REFERENCE.md](docs/REFERENCE.md#mounting-the-app-in-your-own-wsgi-server)
+so existing handlers keep working. See [the reference](https://github.com/maci0/recoverage/blob/main/docs/REFERENCE.md)
 for transport bounds and the full WSGI-mount walkthrough.
 
 ## Documentation
