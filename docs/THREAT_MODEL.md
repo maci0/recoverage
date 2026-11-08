@@ -4,6 +4,14 @@ Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
 source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-09
+Second pass at HEAD `82ba29d`: the `_ServeConfig.render()` sharing
+(`src/recoverage/cli.py`) and the `--max-age-hours`/`--min-coverage` overflow
+refusals (`src/recoverage/cli.py`, landed in `b4c82a6` and `f7f7c1c`) were
+re-checked against the model below; the rendering is one `config.active_config`
+call for banner, `recoverage config` and `/api/health`, and an over-wide bound
+is refused with exit 2 / a named error rather than compared as infinity. No
+entry point, trust boundary or mitigation in this document changed in that
+pass, so the risk ranking stands. The older header note follows.
 (`verify`, `schema`, backup/restore hardening and the `ops call` stdio path
 re-checked against `src/recoverage/cli.py`, `src/recoverage/ops.py`,
 `src/recoverage/backup.py`, `src/recoverage/server.py`; backup retry suffixing, unreadable/symlink
@@ -65,8 +73,8 @@ this update does not claim to refresh every older file/line reference below.
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
 | 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly. A WSGI host that mounts `recoverage.webapp.app` and skips `server.configure_security(...)` reaches the same posture with no `--allow-remote` acknowledgement in front of it | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/webapp.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind. The acknowledgement is the CLI's, so it does not follow a mount, and `configure_security`'s own defaults are no token, no CORS and no `Host` allowlist |
-| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3091` and `:3129`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 6, so `_SNAPSHOT_INDEX_MAX` is 12 (`src/recoverage/server.py:3053` and `:3064`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all six kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:643`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:643`) since the last pass. |
-| 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3825`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3181` and `:3219`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_KINDS` is 6, so `_SNAPSHOT_INDEX_MAX` is 12 (`src/recoverage/server.py:3050` and `:3154`), which bounds how many such tables are live at once and not how large one is. The bound was raised from a literal 4 because a page that searches, opens a cell and hits the batch endpoint touches all six kinds, and the old cap evicted the first two on every sweep, so the memo missed on every pass and re-folded every row of a 50k-function array each time; the test that holds the working set is `TestSnapshotIndexHoldsOneSnapshotsWorkingSet` (`tests/test_server.py`). The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead, and the matched set grew by one name (`highlight.js`, `src/recoverage/ui.py:661`) since the last pass. |
+| 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3920`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
 | 5 | Project configuration controls live analysis inputs, which may extend outside HTTP-served file subtrees | `_paths.coverage_source`, `coverage_project.load_project_coverage`, `ui.serve_repo_file` | Operator trust and input validation; route containment does not sandbox project analysis |
 | 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection, so a flood of ordinary requests, or a set of idle keep-alive connections, spends a thread each while they are held | `src/recoverage/devserver.py` | Connections are admitted against `_MAX_CONNECTIONS` (128, `src/recoverage/devserver.py`) and refused at the cap with a 503 and a `Retry-After`, before a thread is created (`src/recoverage/devserver.py`); a 120 s per-socket deadline on every read and write in flight (`src/recoverage/devserver.py`) and a 15 s idle deadline between requests (`src/recoverage/devserver.py`); `/api/events` carries its own lower cap (`src/recoverage/api.py`) |
@@ -114,11 +122,11 @@ Network (all on the single Bottle app, all threaded):
   the same Bottle application with every route mounted, and a WSGI host can serve it
   directly instead of running `recoverage serve`. The routes, and therefore every
   boundary and threat below, are identical; what changes is who owns four of the
-  controls. `server.configure_security(...)` (`src/recoverage/server.py:130`) installs
+  controls. `server.configure_security(...)` (`src/recoverage/server.py:131`) installs
   the bearer token, the CORS allowlist and the `Host` allowlist into process-wide
   globals read by request threads without a lock (`CORS_ENABLED`,
   `CORS_ALLOWED_ORIGINS`, `_AUTH_TOKEN`, `ALLOWED_HOSTS`, declared at
-  `src/recoverage/server.py:94`), and its DEFAULTS are off in every direction: no token,
+  `src/recoverage/server.py:86`), and its DEFAULTS are off in every direction: no token,
   no CORS, and `ALLOWED_HOSTS is None`, which is no `Host` validation at all. A host
   that mounts the app and omits the call serves the whole project to every peer that can
   reach it — risk 1 with `cli._remote_bind_gate` (`src/recoverage/cli.py`), the only
@@ -128,7 +136,7 @@ Network (all on the single Bottle app, all threaded):
   `src/recoverage/devserver.py:372`) and the keep-alive framing live in
   `src/recoverage/devserver.py`, not in the app, so a host enforces its own or none, and
   risks 6 and 2 become the host's to answer. `server.configure_startup`
-  (`src/recoverage/server.py:170`) only publishes what `/api/health` reports: skipping
+  (`src/recoverage/server.py:197`) only publishes what `/api/health` reports: skipping
   it makes that block read `null` and tightens nothing.
 - `GET /` and `GET /index.html` - `src/recoverage/ui.py`. Inlines and compresses the
   whole SPA; sets the auth cookie from `?token=` (`src/recoverage/ui.py`,
@@ -141,13 +149,13 @@ Network (all on the single Bottle app, all threaded):
   configured binary, refusing paths outside the project and source paths outside
   that target's root. `GET /src/<path>` and `GET /original/<path>` also serve
   their fixed project subtrees. Every project file response carries inert CSP.
-- `GET /<asset>` (allowlist regex) - `src/recoverage/ui.py:620`. Package-shipped
+- `GET /<asset>` (allowlist regex) - `src/recoverage/ui.py:698`. Package-shipped
   JS/CSS/SVG. The matched set is `app.js`, `style.css`, `print.css`,
   `favicon.svg`, `highlight.js`, `archivo.woff2` and `jetbrains-mono.woff2`;
   `highlight.js` joined it with the highlighter's own second bundle
   (`web/vite.config.ts`, `highlighter`), which the SPA loads from
   `web/app/lib/highlight.ts:26` on the first code pane. Each of the seven
-  answers from `ui._STATIC_CACHE` (`src/recoverage/ui.py:643`), the one memo
+  answers from `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`), the one memo
   with no count cap (unmitigated 12); `app.js` is the bundle the shell inlines
   and `highlight.js` is the one the shell does not, so a request for it is
   expected on a code pane and is nothing else.
@@ -475,7 +483,7 @@ describe, not a wrong one.
    (`src/recoverage/webapp.py`) can be mounted directly, and everything the
    bundled listener provides as a SIDE EFFECT of being `serve` becomes the
    mount's to provide or to lose: the bearer token, the CORS allowlist and the
-   `Host` allowlist (`server.configure_security`, `src/recoverage/server.py:130`,
+   `Host` allowlist (`server.configure_security`, `src/recoverage/server.py:131`,
    whose defaults are all off), the admission cap, the per-connection deadline
    and the keep-alive framing (`src/recoverage/devserver.py`). The boundaries
    above are unchanged — the same routes, the same parsers, the same
@@ -677,7 +685,7 @@ that single read, so a rebuild landing mid-request cannot pair one build's
 cells with the next build's functions or unreadable list. Denial of service remains: a large
 function list with a `search` term is walked per request (`src/recoverage/api.py`),
 and the fold those walks did per row per keystroke is now built once per
-snapshot (`server.folded_row_columns`, `src/recoverage/server.py:3091` and `:3129`), so the
+snapshot (`server.folded_row_columns`, `src/recoverage/server.py:3181` and `:3219`), so the
 per-request cost is a substring test per row with a 64-entry total memo beside
 it (`api._LIST_TOTAL_CACHE_MAX`, `src/recoverage/api.py:559`). What moved rather
 than vanished is the sizing of that fold, which is unmitigated item 12a above.
@@ -846,7 +854,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 10. **A credential left where the platform would have kept it out.** The one
     credential here is a bearer value and it travels in a URL, which puts it in
     every place a URL is recorded. Two controls already sit on that: the
-    HttpOnly cookie `server.set_auth_cookie` (`src/recoverage/server.py:3605`)
+    HttpOnly cookie `server.set_auth_cookie` (`src/recoverage/server.py:3700`)
     writes on `/` and `/potato`, and `Referrer-Policy: no-referrer` on every
     response. `e4ce9d8` added the third by deleting `?token=` from
     `window.location` (`web/app/App.tsx`) once that cookie exists, which closes
@@ -902,7 +910,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Every body refusal answers `Connection: close` through `api._body_rejected`, the one helper that puts the header there | `src/recoverage/api.py` | Request smuggling: the reader stops at its cap, so the bytes after the stop point are still in the socket and a keep-alive handler would parse them as the next request |
 | Chunked and unframed framing refused rather than guessed: a non-hex chunk size, an unterminated chunk, a missing CRLF or an oversize trailer line is `RequestBodyMalformedError` | `src/recoverage/server.py` | A framing this reader cannot account for, silently accepted as a shorter body |
 | `sort` field and direction whitelisted against `_ALLOWED_SORT` and applied as an in-memory sort key | `src/recoverage/api.py` | Arbitrary field access through the sort parameter. The SQLite-era `ORDER BY` interpolation this row used to name is gone with the query builder: the rows are Python objects, so there is no statement for a sort value to reach |
-| Search is a folded substring test in Python (`server.fold_match`, or `server.fold_match_folded` against a term folded once) | `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/potato.py` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL. The folded haystacks are memoized per snapshot (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3091` and `:3129`, reached at `src/recoverage/api.py:2291` and `src/recoverage/potato.py:2042`), so the comparison is unchanged and only the number of folds per keystroke moved: the same test over the same text, built once. The address arms are still skipped when the term cannot hold a hex character (`server.fold_can_match_hex`), so the memos are built lazily and only for a term that can use them. The BROWSER half is a shipped table rather than this function (`format.foldForSearch`, `web/app/lib/format.ts`), so the two surfaces can disagree and did: the hand-written table it carried until `8aa9e88` covered ten ligatures, and a term such as `µ` against a symbol spelled `μ` matched nothing in the SPA while the API listed the row. The table is now generated over every code point where the two folds disagree (`tools/gen_full_fold.py`) and `tests/test_server.py` (`test_the_spa_fold_expansions_cover_every_casefold`) holds it against `str.casefold` over the whole scalar range, so a re-edit of the table cannot re-open the gap. One divergence is left standing on purpose, 28 code points where JavaScript's `toLowerCase` applies a SpecialCasing composition Python's `str.lower` does not: a miss in the SPA only, on a character the browser never presents in the first place |
+| Search is a folded substring test in Python (`server.fold_match`, or `server.fold_match_folded` against a term folded once) | `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/potato.py` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL. The folded haystacks are memoized per snapshot (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:3181` and `:3219`, reached at `src/recoverage/api.py:2291` and `src/recoverage/potato.py:2042`), so the comparison is unchanged and only the number of folds per keystroke moved: the same test over the same text, built once. The address arms are still skipped when the term cannot hold a hex character (`server.fold_can_match_hex`), so the memos are built lazily and only for a term that can use them. The BROWSER half is a shipped table rather than this function (`format.foldForSearch`, `web/app/lib/format.ts`), so the two surfaces can disagree and did: the hand-written table it carried until `8aa9e88` covered ten ligatures, and a term such as `µ` against a symbol spelled `μ` matched nothing in the SPA while the API listed the row. The table is now generated over every code point where the two folds disagree (`tools/gen_full_fold.py`) and `tests/test_server.py` (`test_the_spa_fold_expansions_cover_every_casefold`) holds it against `str.casefold` over the whole scalar range, so a re-edit of the table cannot re-open the gap. One divergence is left standing on purpose, 28 code points where JavaScript's `toLowerCase` applies a SpecialCasing composition Python's `str.lower` does not: a miss in the SPA only, on a character the browser never presents in the first place |
 | `_SSE_MAX_CLIENTS` cap, bounded per-client queue, idempotent unregistering | `src/recoverage/api.py` | Thread exhaustion via event streams, slow-client memory growth |
 | Connection cap: `_MAX_CONNECTIONS` slots taken before the thread, refused with a hand-written 503 plus `Retry-After` above it, released on every exit including thread-creation failure | `src/recoverage/devserver.py` | Thread and descriptor exhaustion from a flood of stalled peers. Refusing at accept rather than in the handler keeps the bound on the resource: a connection that never got a thread cannot pin one. The refusal is a `WARNING` naming the count, so the ceiling is legible to the operator |
 | Per-socket 120 s in-flight deadline and 15 s keep-alive idle deadline | `src/recoverage/devserver.py` | Threads pinned by half-open or non-reading peers, and by idle keep-alive connections |
@@ -958,7 +966,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 6. Trusted-by-assumption `rebrew-project.toml` and `RECOVERAGE_*`; the served
    trees follow them with no confirmation. `1991284` made a FAILED config read
    retryable rather than memoized (`server._get_targets_config`,
-   `src/recoverage/server.py:1577`), which is the right half of the fix and
+   `src/recoverage/server.py:1920`), which is the right half of the fix and
    moves the cost: a config that stays unreadable is now re-read and re-parsed
    on every request that reaches it, and it is still SERVED as a degraded
    target list rather than refused. The trust assumption is unchanged, and the
@@ -1001,25 +1009,25 @@ generic STRIDE checklist. Each entry names the shipped fix in
     (`src/recoverage/server.py`), which the inlined SPA shell requires, so an
     injection sink in the shell would execute. No such sink is known; the
     policy is the weak link if one appears.
-12. `ui._STATIC_CACHE` (`src/recoverage/ui.py:643`) has no count cap and no eviction, unlike
+12. `ui._STATIC_CACHE` (`src/recoverage/ui.py:661`) has no count cap and no eviction, unlike
     the three `src/recoverage/api.py` memos. It is bounded by the allowlisted filename regex
     and the accepted-encoding set rather than by a constant, so it is a
     structural bound today and an unguarded dict if the regex ever widens. It
     widened by one name in this pass: `highlight.js` joined the allowlist
-    (`src/recoverage/ui.py:620`), a second shipped bundle the SPA fetches on the
+    (`src/recoverage/ui.py:698`), a second shipped bundle the SPA fetches on the
     first code pane (`web/app/lib/highlight.ts:26`). The growth is by one entry
     per supported-encoding subset (`server.SUPPORTED_ENCODINGS` has three
-    members, `src/recoverage/server.py:1990`) and not by request count, so
+    members, `src/recoverage/server.py:2450`) and not by request count, so
     nothing about the dict is attacker-drivable while the regex stays a literal.
 12a. No memo in this package is bounded by BYTES, and the search-fold tables
     are where that is visible. `server.folded_row_columns` and
-    `server.folded_va_columns` (`src/recoverage/server.py:3091` and `:3129`) build one
+    `server.folded_va_columns` (`src/recoverage/server.py:3181` and `:3219`) build one
     entry per function and one per global for the snapshot's life, so a
     document with an inflated function count turns a per-keystroke CPU cost
     into a resident-memory cost that no constant in this tree bounds. The cap
-    that does exist, `_SNAPSHOT_INDEX_KINDS` (6, `src/recoverage/server.py:2743`), so
+    that does exist, `_SNAPSHOT_INDEX_KINDS` (6, `src/recoverage/server.py:3143`), so
     `_SNAPSHOT_INDEX_MAX` is `2 * len(_SNAPSHOT_INDEX_KINDS)` (12,
-    `src/recoverage/server.py:2671`), answers "how many tables are live", not "how
+    `src/recoverage/server.py:3050`), answers "how many tables are live", not "how
     large is one". The bound was raised from a literal 4 by `1991284` because a
     page that searches, opens a cell and hits the batch endpoint touches all six
     kinds, and the old cap evicted the first two on every sweep, so the memo
@@ -1115,7 +1123,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
   value in a URL, so the places it can be read are the places a URL can be
   read. `e4ce9d8` (`web/app/App.tsx`) now deletes `?token=` from
   `window.location` after `/` has exchanged it for the HttpOnly cookie
-  (`server.set_auth_cookie`, `src/recoverage/server.py:3605`), which takes the
+  (`server.set_auth_cookie`, `src/recoverage/server.py:3700`), which takes the
   value out of the address bar, the current history entry and any bookmark a
   reader saves the page under. It does not take it out of the places that made
   risk 4 a risk: the request line that carried it, an upstream proxy's access
