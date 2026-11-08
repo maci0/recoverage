@@ -6040,6 +6040,244 @@ _OPS_TOKENS = (
     b'"project_dir": "/tmp/x", "project_dir": "/tmp/y"',
 )
 
+# ---------------------------------------------------------------------------
+# CLI numeric-flag parsers: every CLI flag is user input, and a loose parse
+# (click's INT/FLOAT take Unicode digits, '_' separators, inf/nan) makes a
+# gate or a bind the wrong number.  Each helper must answer only the number
+# that was typed, and refuse the rest with the documented exit/config error.
+_CLI_NUM_SEEDS = [
+    b"60",
+    b"60.5",
+    b"0",
+    b"100",
+    b"9001",
+    b"25",
+    b"1_0",
+    b"inf",
+    b"nan",
+    b"",
+    b" 60",
+    b"+60",
+    b"-1",
+    b"101",
+    b"65536",
+    b"1e2",
+    b"6\xd9\xa0",
+]
+
+_CLI_NUM_TOKENS = (
+    b"0",
+    b"1",
+    b"9",
+    b"60",
+    b"100",
+    b"101",
+    b"65535",
+    b"65536",
+    b".",
+    b"_",
+    b"+",
+    b"-",
+    b" ",
+    b"e",
+    b"inf",
+    b"nan",
+    b"\xd9\xa0",
+    b"\x00",
+    b"\xff",
+)
+
+
+class TestCliNumericFlags:
+    """CLI numeric flags accept only the typed number or refuse loudly.
+
+    Pair oracle: an accepted value re-derives from the exact typed text
+    (ASCII digits, one optional dot for percentages, one optional sign),
+    and anything else exits 2 (percent/age) or raises ConfigError naming
+    --port.  A bool/Unicode-digit/underscore/inf spelling that parses is
+    the bug.
+    """
+
+    def test_numeric_flags_pair_oracle(self) -> None:
+        import typer
+
+        from recoverage import cli as cli_mod
+        from recoverage.config import ConfigError
+
+        def check(data: bytes) -> None:
+            text = data.decode("utf-8", "surrogateescape")
+            # --min-coverage: only 0..100 ASCII decimal, else Exit(2).
+            try:
+                value = cli_mod._checked_min_coverage(text, False)
+            except typer.Exit as exc:
+                code = exc.exit_code
+                assert code == 2, f"min_coverage {text!r}: exit {code}"
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_checked_min_coverage raised {type(exc).__name__}: {exc} for {text!r}"
+                ) from exc
+            else:
+                assert 0.0 <= value <= 100.0, f"min_coverage {text!r}: {value} out of range"
+                assert re.fullmatch(r"[+-]?[0-9]+(\.[0-9]*)?", text.strip()), (
+                    f"min_coverage {text!r}: non-ASCII spelling accepted as {value}"
+                )
+            # --max-age-hours: only finite >=0 ASCII decimal, else Exit(2).
+            try:
+                age = cli_mod._checked_max_age_hours(text, False)
+            except typer.Exit as exc:
+                code = exc.exit_code
+                assert code == 2, f"max_age {text!r}: exit {code}"
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_checked_max_age_hours raised {type(exc).__name__}: {exc} for {text!r}"
+                ) from exc
+            else:
+                assert age >= 0 and abs(age) != float("inf") and age == age, (  # noqa: PLR0124
+                    f"max_age {text!r}: non-finite/negative {age}"
+                )
+                assert re.fullmatch(r"[+-]?[0-9]+(\.[0-9]*)?", text.strip()), (
+                    f"max_age {text!r}: non-ASCII spelling accepted as {age}"
+                )
+            # --port / RECOVERAGE_PORT: only ASCII digits in 0..65535.
+            try:
+                port = cli_mod._checked_port(text)
+            except ConfigError as exc:
+                msg = str(exc)
+                assert "--port" in msg, f"port {text!r}: wrong error {msg}"
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_checked_port raised {type(exc).__name__}: {exc} for {text!r}"
+                ) from exc
+            else:
+                assert 0 <= port <= 65535, f"port {text!r}: {port} out of range"
+                assert re.fullmatch(r"[0-9]+", text), f"port {text!r}: non-ASCII spelling -> {port}"
+                assert port == int(text), f"port {text!r}: value drift {port}"
+
+        _fuzz(
+            _CLI_NUM_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=_CLI_NUM_TOKENS,
+            num_tokens=_CLI_NUM_TOKENS,
+            label="TestCliNumericFlags.test_numeric_flags_pair_oracle",
+        )
+
+    def test_typed_values_roundtrip(self) -> None:
+        from recoverage import cli as cli_mod
+
+        assert cli_mod._checked_min_coverage("60", False) == 60.0
+        assert cli_mod._checked_min_coverage("60.5", False) == 60.5
+        assert cli_mod._checked_max_age_hours("25", False) == 25.0
+        assert cli_mod._checked_port("9001") == 9001
+        assert cli_mod._checked_port("0") == 0
+
+
+_OPS_SCHEMA_SEEDS = [
+    b'{"project_dir": "/tmp/x", "sha256": "' + b"a" * 64 + b'", "min_coverage": 50}',
+    b'{"project_dir": "/tmp/x", "sha256": "'
+    + b"a" * 64
+    + b'", "min_coverage": 87.5, "files": [{"path": "a", "digest": "'
+    + b"b" * 64
+    + b'", "size": 1, "key": "k", "url": "u"}], "coverage_input": {"x": [1, 2]}}',
+    b'{"project_dir": "/tmp/x", "sha256": "'
+    + b"a" * 64
+    + b'", "format": "json", "verification_records": [{}]}',
+    b"{}",
+    b"[]",
+    b"null",
+]
+
+
+class TestOpsParseRequest:
+    """``ops.parse_request`` / ``ops._decode`` over the typed JSON schema.
+
+    Pair oracle: every accepted value has the right JSON kind per field
+    (bool is not int, str is not number, unknown/missing refused), and any
+    other exception than ``InvalidRequestError`` is a crash.
+    """
+
+    def test_parse_request_pair_oracle(self) -> None:
+        from dataclasses import fields
+
+        from recoverage import ops
+
+        request_types = (
+            ops.GateRequest,
+            ops.PlanRequest,
+            ops.MapRequest,
+            ops.ExportRequest,
+            ops.RetainedFile,
+        )
+
+        def check(data: bytes) -> None:
+            try:
+                raw = json.loads(data.decode("utf-8"))
+            except Exception:
+                return
+            for cls in request_types:
+                try:
+                    value = ops.parse_request(cls, raw)
+                except ops.InvalidRequestError as exc:
+                    code = exc.code
+                    assert code == "invalid-request", f"{cls.__name__}: wrong code {code!r}"
+                    continue
+                except BaseException as exc:
+                    raise AssertionError(
+                        f"{cls.__name__}: parse_request raised {type(exc).__name__}: {exc} "
+                        f"for {raw!r}"
+                    ) from exc
+                assert isinstance(value, cls), f"{cls.__name__}: wrong type {type(value)}"
+                if not isinstance(raw, dict):
+                    raise AssertionError(f"{cls.__name__}: non-dict accepted {raw!r}")  # noqa: TRY004
+                for spec in fields(cls):
+                    if spec.name not in raw:
+                        continue
+                    supplied = raw[spec.name]
+                    hint = spec.type
+                    if hint is int:
+                        assert type(supplied) is int, (
+                            f"{cls.__name__}.{spec.name}: accepted non-int {supplied!r}"
+                        )
+                    elif hint is str:
+                        assert type(supplied) is str, (
+                            f"{cls.__name__}.{spec.name}: accepted non-str {supplied!r}"
+                        )
+                    elif hint is float:
+                        assert type(supplied) in (int, float) and type(supplied) is not bool, (
+                            f"{cls.__name__}.{spec.name}: accepted non-number {supplied!r}"
+                        )
+
+        _fuzz(
+            _OPS_SCHEMA_SEEDS,
+            check,
+            iterations=240,
+            struct_tokens=_OPS_TOKENS,
+            num_tokens=_OPS_TOKENS,
+            label="TestOpsParseRequest.test_parse_request_pair_oracle",
+        )
+
+    def test_roundtrip_accepted_values(self) -> None:
+        from recoverage import ops
+
+        base = {"project_dir": "/tmp/x", "sha256": "a" * 64}
+        for min_cov in (50, 87.5, 0, 100):
+            value = ops.parse_request(ops.GateRequest, {**base, "min_coverage": min_cov})
+            assert value.min_coverage == float(min_cov)
+            assert value.project_dir == "/tmp/x"
+            assert value.sha256 == "a" * 64
+        for bad in (True, "50", None, [], {}, 1e309, -1e309):
+            try:
+                ops.parse_request(ops.GateRequest, {**base, "min_coverage": bad})
+            except ops.InvalidRequestError:
+                continue
+            raise AssertionError(f"min_coverage {bad!r} was accepted as a number")
+        for payload in ({**base, "min_coverage": 50, "bogus": 1}, {"project_dir": "/tmp/x"}):
+            try:
+                ops.parse_request(ops.GateRequest, payload)
+            except ops.InvalidRequestError:
+                continue
+            raise AssertionError(f"payload {payload!r} was accepted")
+
 
 class TestOpsDispatch:
     """``recoverage.ops.dispatch`` — the JSON op worker, the other structured-input surface.
