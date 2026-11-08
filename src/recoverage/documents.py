@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 lazy import contextlib
 lazy import gc
 lazy import hashlib
@@ -163,7 +163,11 @@ def cache_dir() -> Path | None:
     the ``LOCALAPPDATA`` directory ``Path.home()`` already resolves to.
     """
     raw = os.environ.get("XDG_CACHE_HOME", "")
-    if raw and Path(raw).is_absolute():
+    # PureWindowsPath.is_absolute() answers for a Windows-shaped value on any host:
+    # a POSIX host's Path never treats "C:\..." as absolute, so an XDG value carried
+    # over from a Windows checkout would escape to a relative "C:\..." directory
+    # instead of falling back to the platform cache.
+    if raw and (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute()):
         base = Path(raw)
     else:
         try:

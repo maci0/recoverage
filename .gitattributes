@@ -12,3 +12,6 @@
 # True binary assets — never normalize.
 *.png binary
 *.ico binary
+*.jpg binary
+*.jpeg binary
+*.woff2 binary
