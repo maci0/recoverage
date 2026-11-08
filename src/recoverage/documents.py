@@ -236,6 +236,11 @@ def _prune(root: Path) -> None:
     genuinely is not landing.
     """
     now = clock.wall_time()
+    # Integer nanoseconds, not the float ``st_mtime``: the rest of the package
+    # keys on ``st_mtime_ns`` (see ``server.mtime_ns_to_utc``), and a float
+    # second cannot hold that nanosecond, so the stale boundary would depend
+    # on the magnitude of the stamp rather than on the age alone.
+    now_ns = int(now * 1_000_000_000)
     slots: list[tuple[int, Path]] = []
     try:
         entries = list(root.iterdir())
@@ -254,7 +259,7 @@ def _prune(root: Path) -> None:
             )
             continue
         if entry.suffix == _TMP_SUFFIX:
-            if now - st.st_mtime > _STALE_TMP_SECONDS:
+            if now_ns - st.st_mtime_ns > _STALE_TMP_SECONDS * 1_000_000_000:
                 _unlink_quiet(entry, "stale temp")
         elif entry.suffix == _SLOT_SUFFIX:
             slots.append((st.st_mtime_ns, entry))
