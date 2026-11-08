@@ -662,12 +662,21 @@ mounts every route (`/api/*`, `/`, the static assets, `/potato`) on the shared
 `app` object. A WSGI host can serve it directly.
 
 ```python
+from recoverage.server import LOOPBACK_HOSTS, configure_security
 from recoverage.webapp import app  # a WSGI callable
 
 # `recoverage.server.app` ALONE is routeless: it is the shared kernel the
 # route modules mount on, so importing it registers no route and every path
 # answers 404. Import `recoverage.webapp` (or run the CLI), never bare
 # `recoverage.server`.
+
+# The two calls below are the CLI's own startup wiring, and they are the
+# minimum a mount needs: without `configure_security` the app runs with no
+# token, no CORS and no `Host` allowlist (the loopback posture, see below).
+# `configure_security` is fail-fast: it raises `config.ConfigError` on a
+# token no client could present or an origin no browser could send, the
+# same floor `serve` applies to its flags.
+configure_security(allowed_hosts=set(LOOPBACK_HOSTS))
 ```
 
 Two things the CLI does are yours to do when you mount the app yourself:

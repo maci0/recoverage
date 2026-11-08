@@ -651,6 +651,41 @@ class TestActiveConfig:
         assert rendered["source"] == "/tmp/x.db"
 
 
+class TestConfigureSecurityValidatesLikeTheCli:
+    """`configure_security` is the public WSGI-mount entry point, so it carries
+    the same fail-fast floor as the flags it stands in for: a token no client
+    can present, or an origin no browser sends, is a startup error here rather
+    than a silent lockout or a one-entry-short allowlist."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"auth_token": "  padded  "},
+            {"auth_token": "a b"},
+            {"cors_allowed_origins": ["not an origin"]},
+            {"cors_allowed_origins": ["http://evil@x"]},
+            {"cors_allowed_origins": ["http://localhost:5173/"]},
+            {"cors_allowed_origins": ["localhost:5173"]},
+        ],
+    )
+    def test_refuses_values_no_client_could_use(self, kwargs: dict) -> None:
+        from recoverage import server
+
+        with pytest.raises(config.ConfigError):
+            server.configure_security(**kwargs)
+
+    def test_stores_normalized_origins_and_a_usable_token(self) -> None:
+        from recoverage import server
+
+        server.configure_security(
+            cors_enabled=True,
+            cors_allowed_origins=["http://localhost:5173"],
+            auth_token="s3cret",
+        )
+        assert server.CORS_ALLOWED_ORIGINS == ["http://localhost:5173"]
+        assert server._auth_token_matches("s3cret")
+
+
 class TestServeResolution:
     """The flags-over-environment merge `serve` starts from."""
 

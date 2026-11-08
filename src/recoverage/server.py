@@ -142,13 +142,38 @@ def configure_security(
     both the storage and when/how it may change.  Call it once at startup,
     BEFORE the WSGI server starts accepting requests — request worker threads
     read these values without a lock.
+
+    Validation is fail-fast, the same floor the CLI applies to its flags and
+    the environment: an ``auth_token`` carrying whitespace or a control
+    character (``config.validate_token``) can never be presented by a client,
+    whose credential arrives trimmed, so installing it would start a server
+    that answers 401 to every reader while reporting ``token=set``.  A CORS
+    origin that is not one a browser could send (``cli._is_browser_origin``'s
+    ``scheme://host[:port]`` shape, tested here through ``_normalize_origin``
+    plus a round-trip) is likewise refused rather than stored: storing it
+    verbatim would leave CORS on with an allowlist one entry short of what
+    the caller wrote, which is the dropped-entry failure the CLI's own
+    validation exists to prevent.  Both raise ``config.ConfigError`` naming
+    the offending value class, never the token itself.
     """
+    from recoverage.config import ConfigError, validate_token
+
+    validate_token(auth_token or None, name="auth_token")
+    normalized: list[str] = []
+    for origin in cors_allowed_origins:
+        candidate = _normalize_origin(origin)
+        if not candidate or candidate != origin:
+            raise ConfigError(
+                f"auth_token/cors_allowed_origins: {origin!r} is not an origin a "
+                "browser could send (scheme://host[:port])"
+            )
+        normalized.append(candidate)
     global CORS_ENABLED, CORS_ALLOWED_ORIGINS, _AUTH_TOKEN, ALLOWED_HOSTS
     CORS_ENABLED = cors_enabled
     # Only normalized origins reach storage: an unparsable stored value would
     # match every unparsable request Origin and echo itself back as an
     # allow-origin.
-    CORS_ALLOWED_ORIGINS = list(cors_allowed_origins)
+    CORS_ALLOWED_ORIGINS = normalized
     _AUTH_TOKEN = auth_token
     ALLOWED_HOSTS = allowed_hosts
 
