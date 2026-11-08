@@ -808,7 +808,13 @@ def serve_command(
             server.draining = True
         threading.Thread(target=server.shutdown, daemon=True).start()
 
-    previous = signal.signal(signal.SIGTERM, stop)
+    # SIGTERM on POSIX, SIGBREAK on Windows (the Windows arm in
+    # cli._stop_on_sigterm): a handler for a signal the platform cannot
+    # deliver would leave the graceful drain unreachable there.
+    _names = [name for name in ("SIGTERM", "SIGBREAK") if hasattr(signal, name)]
+    _previous = {getattr(signal, name): signal.getsignal(getattr(signal, name)) for name in _names}
+    for _signum in _previous:
+        signal.signal(_signum, stop)
     try:
         server.serve_forever()
     finally:
@@ -816,4 +822,5 @@ def serve_command(
         with server.idle:
             server.draining = True
             server.idle.wait_for(lambda: server.active == 0, timeout=30)
-        signal.signal(signal.SIGTERM, previous)
+        for _signum, _handler in _previous.items():
+            signal.signal(_signum, _handler)

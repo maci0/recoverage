@@ -219,7 +219,14 @@ def test_an_unwritable_cache_still_serves_and_warns_once(
 
 def test_a_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", "relative/cache")
-    assert documents.cache_dir() == Path.home() / ".cache" / "recoverage" / "documents"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(documents.os, "name", "posix" if os.name != "nt" else "nt")
+    expected = (
+        Path(os.environ["LOCALAPPDATA"])
+        if os.name == "nt" and os.environ.get("LOCALAPPDATA")
+        else Path.home() / ".cache"
+    )
+    assert documents.cache_dir() == expected / "recoverage" / "documents"
 
 
 def test_the_cache_keeps_the_most_recently_used_slots(

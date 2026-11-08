@@ -156,17 +156,25 @@ def cache_dir() -> Path | None:
     """Where parsed documents persist, or None when there is no home to put it in.
 
     ``$XDG_CACHE_HOME`` when it is set and absolute (the XDG spec says a
-    relative value is ignored), else ``~/.cache``.
+    relative value is ignored), else ``%LOCALAPPDATA%`` on Windows or
+    ``~/.cache`` elsewhere: a ``.cache`` folder under the profile is not
+    where Windows keeps application caches, so there the conforming base is
+    the ``LOCALAPPDATA`` directory ``Path.home()`` already resolves to.
     """
     raw = os.environ.get("XDG_CACHE_HOME", "")
     if raw and Path(raw).is_absolute():
         base = Path(raw)
     else:
         try:
-            base = Path.home() / ".cache"
+            home = Path.home()
         except RuntimeError:
             # Path.home() raises when neither HOME nor the passwd entry names one.
             return None
+        base = (
+            Path(os.environ["LOCALAPPDATA"])
+            if os.name == "nt" and os.environ.get("LOCALAPPDATA")
+            else home / ".cache"
+        )
     return base.joinpath(*_CACHE_SUBDIR)
 
 
