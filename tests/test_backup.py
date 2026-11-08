@@ -253,6 +253,17 @@ class TestWriteBackup:
         with pytest.raises(BackupError, match="already exists"):
             write_backup(db, path)
 
+    def test_a_retry_of_identical_bytes_returns_the_existing_archive(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cron retry whose first run landed converges, not refuses."""
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_700_000_000.123456)
+        path = tmp_path / "snap.tar"
+        first = write_backup(db, path)
+        again = write_backup(db, path)
+        assert again.path == first.path
+        assert again.members == first.members
+
 
 class TestVerifyBackup:
     """Restore runs this first, so every refusal is made before a write."""

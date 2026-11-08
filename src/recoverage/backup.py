@@ -50,11 +50,12 @@ Where the archive goes is ``RECOVERAGE_BACKUP_DIR``, or the ``--to`` flag, or
 :func:`default_backup_dir` — a ``backups/`` beside the coverage directory, never
 inside it, because the glob a restore reads would then grow a member that is not
 a coverage document and a later backup would carry the earlier one.
-* **Re-running backup is safe.**  A stamped name that already exists is
-  refused for an explicit ``--to`` file, but a default (stamped) name is
-  retried under the next free suffix — a cron retry or two runs in one
-  instant still produce a verified archive instead of failing on the
-  first run's file.
+* **Re-running backup is safe.**  A repeat at an explicit ``--to`` file
+  holding identical bytes verifies and returns that archive; one holding
+  different bytes is refused, never overwritten.  A default (stamped)
+  name is retried under the next free suffix — a cron retry or two runs
+  in one instant still produce a verified archive instead of failing on
+  the first run's file.
 """
 
 from __future__ import annotations
@@ -626,6 +627,12 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     _require_outside_coverage_dir(db_dir, destination)
     try:
         _atomic_write(destination, blob)
+    except BackupError:
+        # A repeat at an explicit path holds identical bytes: its retry
+        # converged, so verify the existing archive instead of refusing.
+        if destination.is_file() and destination.read_bytes() == blob:
+            return verify_backup(destination)
+        raise
     except OSError as exc:
         raise BackupError(f"cannot write backup {destination}: {exc}") from exc
     try:
