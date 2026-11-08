@@ -79,8 +79,10 @@ its canonical project inputs. It takes no
 authentication, because it is a local command and the holder of the filesystem
 is the trust. It refuses to overwrite a document whose bytes differ unless
 `--force` is given, and `--force` overrides that check and no other. A restore
-is not logged through the package's logger and leaves no marker in the served
-output, so a rollback and a rebuild are indistinguishable to a reader. The model
+leaves no marker in the served
+output, so a rollback and a rebuild are indistinguishable to a reader. Backup
+prune failures (`src/recoverage/backup.py`) are WARNING-logged; the restore
+itself is not logged through the package's logger. The model
 carries that as risks 12 and 13, boundary 9, and unmitigated 16 and 17;
 `docs/RECOVERY.md` carries the operational drill.
 
