@@ -1331,7 +1331,9 @@ class TestFrontendAnalysisIsEnforced:
         behind a return. `noUncheckedSideEffectImports` is the sixth: it
         makes a bare side-effect import a reported error when the module
         carries no types, which is how a stylesheet or a polyfill the
-        bundler resolves resolves to nothing.
+        bundler resolves resolves to nothing. `erasableSyntaxOnly` is the seventh: it
+        bans enums, namespaces and parameter properties, so the frontend stays
+        standard syntax rather than runtime-emitting TypeScript extensions.
         """
         options = json.loads(_TSCONFIG.read_text(encoding="utf-8"))["compilerOptions"]
         for flag in (
@@ -1342,6 +1344,7 @@ class TestFrontendAnalysisIsEnforced:
             "noFallthroughCasesInSwitch",
             "forceConsistentCasingInFileNames",
             "noUncheckedSideEffectImports",
+            "erasableSyntaxOnly",
         ):
             assert options.get(flag) is True, f"web/tsconfig.json no longer sets {flag}"
         for flag in ("allowUnreachableCode", "allowUnusedLabels"):

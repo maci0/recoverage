@@ -24,6 +24,7 @@
     "allowUnusedLabels": false,
     "allowImportingTsExtensions": true,
     "noUncheckedSideEffectImports": true,
+    "erasableSyntaxOnly": true,
     "paths": {
       "@/*": ["./app/*"]
     }
