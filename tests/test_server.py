@@ -1346,6 +1346,34 @@ class TestCoverageVersionGate:
         assert "id" not in stored[0]
         assert srv._bucket_row(snap.sections[".text"])["exact"] == 1
 
+    def test_cells_json_never_leaves_a_lone_surrogate_for_the_encode(self) -> None:
+        """A lone surrogate in a cell label becomes U+FFFD, not a 500.
+
+        ``cells_json`` emits with ``ensure_ascii=False`` and the splice that
+        follows encodes strict UTF-8; a surrogate literal between them raised
+        ``UnicodeEncodeError`` and took the whole ``/data`` payload down.  The
+        sanitizer lives in ``_plain``, the JSON-shape boundary every other
+        path already clears (where ``ensure_ascii=True`` escaped instead).
+        """
+        import recoverage.server as srv
+        from recoverage.server import Cell
+
+        cell = Cell(
+            start=0,
+            end=1,
+            span=1,
+            state="exact",
+            label="bad\udcff",
+            functions=(),
+            parent_function=None,
+        )
+        text = srv.cells_json([cell])
+        stored = json.loads(text)
+        assert stored == [{"start": 0, "end": 1, "span": 1, "state": "exact", "label": "bad\ufffd"}]
+        text.encode("utf-8")  # must not raise
+        assert srv._plain("a\ud800b\udfff") == "a\ufffdb\ufffd"
+        assert srv._plain({"k\udcff": "v\udcff"}) == {"k\ufffd": "v\ufffd"}
+
 
 class TestCoverageReadsAreSideEffectFree:
     """Reading coverage must not write to the directory the operator owns.

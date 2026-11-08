@@ -2927,9 +2927,17 @@ def _plain(value: Any) -> Any:
     payload down with it.  ``null`` is the answer both renderers already read
     as "no figure" (``potato._similarity_pct`` leaves it alone, and the SPA
     tests ``== null``).
+
+    A lone surrogate becomes U+FFFD for the same reason: ``ensure_ascii=False``
+    (:func:`cells_json`) emits the surrogate literally, and the strict
+    ``.encode("utf-8")`` that follows raises ``UnicodeEncodeError``, taking
+    the whole payload down.  ``ensure_ascii=True`` escapes it instead, so
+    every other path survived; sanitizing here makes the two agree.
     """
+    if isinstance(value, str):
+        return "".join("\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value)
     if isinstance(value, Mapping):
-        return {key: _plain(item) for key, item in value.items()}
+        return {_plain(key): _plain(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [_plain(item) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
@@ -2979,13 +2987,13 @@ def _cell_json(cell: Cell) -> dict[str, Any]:
     bytes of a multi-megabyte payload where they were.
     """
     obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
-    obj["state"] = cell.state
+    obj["state"] = _plain(cell.state)
     if cell.functions:
-        obj["functions"] = list(cell.functions)
+        obj["functions"] = _plain(list(cell.functions))
     if cell.label:
-        obj["label"] = cell.label
+        obj["label"] = _plain(cell.label)
     if cell.parent_function:
-        obj["parent_function"] = cell.parent_function
+        obj["parent_function"] = _plain(cell.parent_function)
     return obj
 
 
