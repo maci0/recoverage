@@ -715,20 +715,23 @@ def _fail(
     raise typer.Exit(exit_code)
 
 
-def _check_env_or_exit() -> None:
+def _check_env_or_exit(*, json_output: bool = False) -> None:
     """Validate the RECOVERAGE_* environment, exiting 2 on the first bad value.
 
     `serve` runs the full merge through :func:`_resolve_serve_config`; the
     other commands read the environment directly (through `coverage_source`), where
     a misspelled name is a silent no-op and an empty ``RECOVERAGE_SNAPSHOTS`` escapes
     as a raw ConfigError traceback.  Both are the same fail-fast contract,
-    so every command applies it before it consumes a setting.
+    so every command applies it before it consumes a setting.  *json_output*
+    carries the command's own --json decision so the error shape matches
+    every other failure of that command: a config error in JSON mode is
+    still one JSON object on stderr, not a bare prose line.
     """
     try:
         config.check_unknown_vars()
         config.check_snapshot_override()
     except config.ConfigError as exc:
-        _fail(f"Error: {exc}", str(exc), 2, False)
+        _fail(f"Error: {exc}", str(exc), 2, json_output)
 
 
 def coverage_source_or_exit(*, json_output: bool = False) -> Path:
@@ -759,7 +762,7 @@ def _load_coverage_or_exit(
     """
     from recoverage.server import _log_safe, coverage_snapshots, unreadable_documents
 
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=json_output)
     p = coverage_source_or_exit(json_output=json_output)
     if config.snapshot_override() is not None and not any(p.glob(COVERAGE_GLOB)):
         _fail(
@@ -936,7 +939,6 @@ def _run_regen(root: Path, *, json_output: bool = False) -> None:
             "Regen failed: %s: %s",
             "misconfiguration",
             type(e).__name__,
-            exc_info=e,
             extra=metrics.regen_log_fields("failed"),
         )
         _fail(f"Error: {e}", str(e), 2, json_output)
@@ -945,7 +947,6 @@ def _run_regen(root: Path, *, json_output: bool = False) -> None:
             "Regen failed: %s: %s",
             "regen error",
             type(exc).__name__,
-            exc_info=exc,
             extra=metrics.regen_log_fields("failed"),
         )
         _fail(f"Error: {exc}", str(exc), exc.exit_code, json_output)
@@ -956,7 +957,6 @@ def _run_regen(root: Path, *, json_output: bool = False) -> None:
             "Regen failed: %s: %s",
             "internal error",
             type(e).__name__,
-            exc_info=e,
             extra=metrics.regen_log_fields("failed"),
         )
         _fail(f"Error: {message}", message, 1, json_output)
@@ -2353,8 +2353,8 @@ def regen(
 
     _use_utf8_stdout()
     _use_utf8_stderr()
-    _check_env_or_exit()
     json_output = _json_on(json_output)
+    _check_env_or_exit(json_output=json_output)
     _run_regen(_project_dir(), json_output=json_output)
     if not json_output:
         _secho("Done: live coverage refreshed.", fg=typer.colors.GREEN, err=True)
@@ -2403,7 +2403,7 @@ def backup(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=as_json)
     if config.snapshot_override() is None:
         _fail(
             "Error: select portable exports with RECOVERAGE_SNAPSHOTS. "
@@ -2491,7 +2491,7 @@ def restore(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=as_json)
     if config.snapshot_override() is None:
         _fail(
             "Error: select portable exports with RECOVERAGE_SNAPSHOTS.",
@@ -2550,7 +2550,7 @@ def verify(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=as_json)
     try:
         info = verify_archive_command(_expanduser_path(archive, as_json=as_json))
     except BackupError as exc:
@@ -2593,7 +2593,7 @@ def verify_backups(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=as_json)
     path = _expanduser_path(directory, as_json=as_json)
     try:
         archives = verify_all_backups(path)
@@ -2642,7 +2642,7 @@ def check_backup(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=as_json)
     path = _expanduser_path(directory, as_json=as_json)
     try:
         limit = _checked_max_age_hours(max_age_hours, as_json)
@@ -2699,7 +2699,7 @@ def open_cmd(
     learns why.
     """
     json_output = _json_on(json_output)
-    _check_env_or_exit()
+    _check_env_or_exit(json_output=json_output)
     try:
         resolved_port = config.port() if port is None else _checked_port(port)
     except config.ConfigError as exc:
