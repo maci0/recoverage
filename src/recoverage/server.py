@@ -1427,6 +1427,11 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 #: same and read worse.
 DATA_MARKER_TYPES: tuple[str, ...] = tuple(sorted(DATA_KINDS))
 
+#: Same membership as DATA_MARKER_TYPES, as a set for the per-row predicate
+#: below: ``in`` on a 4-tuple is a linear scan, and ``function_rows`` runs it
+#: once per function on every snapshot build.
+_DATA_MARKER_SET: frozenset[str] = frozenset(DATA_MARKER_TYPES)
+
 
 def _is_data_marker(fn: Any) -> bool:
     """Whether *fn* names data rather than a function.
@@ -1449,7 +1454,7 @@ def _is_data_marker(fn: Any) -> bool:
     rebrew's writer validates every marker against ``VALID_MARKERS``, so a
     document that parses can only reach the disagreement through an absent one.
     """
-    return fn.markerType in DATA_MARKER_TYPES
+    return fn.markerType in _DATA_MARKER_SET
 
 
 #: Cell states folded into each BYTE bucket :func:`_section_summary` sums, read
