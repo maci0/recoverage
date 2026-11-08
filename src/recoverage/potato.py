@@ -1041,7 +1041,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
             <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
           </tr><tr>
-            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{"{:,}".format(progress['sec_size'])}}</b> B &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> functions matched &middot; <b>{{"%.1f" % progress['coverage_pct_1dp']}}%</b> covered</font></td>
+            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{"{:,}".format(progress['sec_size'])}}</b> B &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> functions matched &middot; <b>{{"{:.1f}".format(progress['coverage_pct_1dp'])}}%</b> covered</font></td>
           </tr></table>
         </td></tr>
         % end
@@ -1165,7 +1165,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                It deliberately does NOT repeat the panel header directly above
                ("Coverage Map - {{section}} ({{block_count}} blocks)"): rendered
                back to back, the two read as the same heading printed twice. -->
-          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
+          <caption align="top"><font size="1" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
           <tr><td>
           <font size="1"><center>{{!grid_html}}</center></font>
           </td></tr></table>
@@ -1190,7 +1190,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 % end
 </font></td>
 <td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
-<td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
+<td valign="bottom"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
 </td></tr></table>
 </main>
