@@ -14,7 +14,9 @@ import type { HighlightLanguage } from "@/lib/highlight";
  * makes the page behind it `inert` and a dialog inside an inert region could
  * not be focused. `inert` is what actually contains focus — it removes the
  * background from the tab order and the accessibility tree, which a hand-rolled
- * Tab handler can only approximate. */
+ * Tab handler can only approximate. The trap below is the wrap that `inert`
+ * alone does not do: the browser cycles the dialog's own controls and, with
+ * no native dialog, never re-enters the first one by itself. */
 
 export type CodeModalProps = {
   open: boolean;
@@ -36,6 +38,7 @@ export function CodeModal({
   onClose,
 }: CodeModalProps): ComponentChildren {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [titleId] = useState(() => {
     dialogSeq += 1;
     return `code-modal-title-${dialogSeq}`;
@@ -47,6 +50,43 @@ export function CodeModal({
   // and every reopen stacked another.
   const latestClose = useRef(onClose);
   latestClose.current = onClose;
+  // The modal is the one focus container while it is open: the page behind it
+  // is `inert`, so Tab cannot leave the page, but without this handler it
+  // cycles through the dialog's own controls and then wraps back to the
+  // first one with no way out except Escape. The trap is the keydown that
+  // keeps Tab on the last focusable in the dialog — it wraps to the first
+  // (or, with Shift, to the last) instead of escaping the dialog (WCAG 2.1.2).
+  const onTrapTab = useCallback((event: KeyboardEvent): void => {
+    if (event.key !== "Tab") {
+      return;
+    }
+    const dialog = dialogRef.current;
+    if (dialog === null) {
+      return;
+    }
+    const focusable = [
+      ...dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ].filter((element) => element.offsetParent !== null || element === document.activeElement);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const [first] = focusable;
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) {
+      return;
+    }
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === dialog)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, []);
   const onEscape = useCallback((event: KeyboardEvent): void => {
     if (event.key === "Escape") {
       // Escape closes the dialog, and the page behind it is inert, so the
@@ -80,8 +120,10 @@ export function CodeModal({
     }
     closeRef.current?.focus();
     document.addEventListener("keydown", onEscape);
+    document.addEventListener("keydown", onTrapTab);
     return () => {
       document.removeEventListener("keydown", onEscape);
+      document.removeEventListener("keydown", onTrapTab);
       // Unmounting while open (the panel is unmounted when the target or the
       // section changes under a dialog) used to leave the page regions inert,
       // and an inert page is a page no keyboard user can reach at all.
@@ -90,7 +132,7 @@ export function CodeModal({
         (region as HTMLElement).inert = false;
       }
     };
-  }, [onEscape, open]);
+  }, [onEscape, onTrapTab, open]);
 
   if (!open) {
     return null;
@@ -98,6 +140,7 @@ export function CodeModal({
 
   return createPortal(
     <div
+      ref={dialogRef}
       className="modal fixed inset-0 z-40 flex items-center justify-center bg-scrim p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
