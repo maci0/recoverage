@@ -624,6 +624,48 @@ class TestRestoreBackup:
         for name, data in expected.items():
             assert (db / name).read_bytes() == data
 
+    def test_restore_removes_a_stale_document_the_archive_does_not_hold(
+        self, tmp_path: Path
+    ) -> None:
+        """A restore to the archive's snapshot set, not a merge into the live set.
+
+        A document the archive does not hold (deleted from the source
+        between backups, or newly written by a bad build) must not survive
+        the restore: leaving it serves a target the restore never had,
+        the exact partial-restore the manifest exists to prevent.
+        """
+        source = tmp_path / "source"
+        for target in ("A", "B"):
+            write_coverage(source, target, {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        destination.mkdir()
+        for path in source.glob("coverage-*.toml"):
+            (destination / path.name).write_bytes(path.read_bytes())
+        (destination / "coverage-C.toml").write_bytes(b"stale target\n")
+        (destination / "inventory.json").write_bytes(b"keep inventory")
+        restore_backup(archive, destination, force=True)
+        assert (destination / "coverage-C.toml").exists() is False
+        assert (destination / "inventory.json").read_bytes() == b"keep inventory"
+        assert sorted(p.name for p in destination.glob("coverage-*.toml")) == [
+            "coverage-A.toml",
+            "coverage-B.toml",
+        ]
+
+    def test_stale_documents_are_refused_without_force(self, tmp_path: Path) -> None:
+        source = tmp_path / "source"
+        write_coverage(source, "A", {})
+        archive = tmp_path / "backup.tar"
+        write_backup(source, archive)
+        destination = tmp_path / "destination"
+        destination.mkdir()
+        (destination / "coverage-Z.toml").write_bytes(b"stale target\n")
+        with pytest.raises(BackupError, match="would be removed"):
+            restore_backup(archive, destination)
+        assert (destination / "coverage-Z.toml").exists()
+        assert not (destination / "coverage-A.toml").exists()
+
     def test_a_corrupt_archive_writes_nothing_at_all(
         self, db: Path, archive: Path, tmp_path: Path
     ) -> None:

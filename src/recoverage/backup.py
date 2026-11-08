@@ -1138,6 +1138,11 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     moved, and deleting them to start again would discard the only copy of
     the pre-restore state.  The error names the directory; recovery is to
     inspect ``previous/`` and retry after it is cleared by hand.
+
+    Coverage documents in *db_dir* the archive does not hold are removed
+    (under ``force``) as part of the restore: the restored set is the
+    archive's set, so a target deleted from the source or added by a bad
+    build does not survive. Non-coverage files are untouched.
     """
     if db_dir.is_dir():
         for leftover in sorted(db_dir.glob(".restore-*")):
@@ -1153,6 +1158,32 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     for path in existing.values():
         if path.exists() and not path.is_file():
             raise BackupError(f"cannot restore over {path}: not a regular document")
+    # Stale documents the archive does not hold are part of the restored
+    # set, not neighbours of it: a document deleted from the source between
+    # backups, or written by a bad build after the archive, must not
+    # survive a restore that claims to re-establish the snapshot. Only
+    # coverage-shaped members are in scope — other files in the directory
+    # (inventory, operator notes) are not the archive's to delete.
+    stale: list[Path] = []
+    if db_dir.is_dir():
+        try:
+            stale = sorted(
+                path
+                for path in db_dir.glob(COVERAGE_GLOB)
+                if _is_coverage(path.name) and path.name not in existing
+            )
+        except OSError as exc:
+            raise BackupError(f"cannot list coverage documents in {db_dir}: {exc}") from exc
+        for path in stale:
+            if not path.is_file():
+                raise BackupError(f"cannot restore over {path}: not a regular document")
+    if stale and not force:
+        listed = ", ".join(str(p) for p in stale)
+        raise BackupError(
+            f"refusing to restore: {len(stale)} coverage document(s) in {db_dir} are "
+            f"not in {archive} and would be removed: {listed}. "
+            "Re-run with --force if removing them is what you want."
+        )
     if not force:
         clashing = []
         for name, path in existing.items():
@@ -1185,7 +1216,7 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
                 unchanged.add(name)
         except OSError as exc:
             raise BackupError(f"cannot read {path} to compare it: {exc}") from exc
-    if len(unchanged) == len(existing):
+    if len(unchanged) == len(existing) and not stale:
         return list(existing.values())
     try:
         db_dir.mkdir(parents=True, exist_ok=True)
@@ -1213,6 +1244,9 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
             (staging / name).replace(destination)
             published.append(destination)
             written.append(destination)
+        for destination in stale:
+            destination.replace(previous / destination.name)
+            saved.append(destination)
         _fsync_dir(db_dir)
     except BaseException as exc:
         rollback_errors: list[str] = []

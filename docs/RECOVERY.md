@@ -51,6 +51,10 @@ RECOVERAGE_SNAPSHOTS=/srv/restored recoverage check --json
 
 Restore validates every member before publishing files. Existing differing
 files require `--force`; review the named files before choosing to replace them.
+Coverage documents in the destination that the archive does not hold are
+refused without `--force` and removed with it, so a restored directory is the
+archive's set rather than a merge with whatever a bad build or a deleted
+target left behind; files that are not coverage documents are untouched.
 Stop readers during restore. A handled write failure rolls earlier replacements
 back; if rollback also fails, the error names the directory retaining the original
 files. A process or machine crash can leave a `.restore-*` directory behind;
