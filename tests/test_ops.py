@@ -119,7 +119,7 @@ def _refusal(
     code, out = _call(request, *args, op=op)
     assert code == 2, out
     body: dict[str, Any] = json.loads(out)
-    assert set(body) == {"error", "detail", "status"}
+    assert set(body) == {"error", "code", "detail", "status"}
     return body
 
 

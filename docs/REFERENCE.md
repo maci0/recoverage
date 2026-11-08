@@ -403,9 +403,11 @@ refusals are the ones `ops call` prints, with the refusal status as the HTTP
 status. A retained request does not read its `project_dir` (it need not exist);
 the worker writes its private snapshots under the workspace.
 
-A request is refused, with a JSON `{"error", "detail", "status"}` on stdout and
+A request is refused, with a JSON `{"error", "code", "detail", "status"}` on stdout and
 exit 2, when it is not JSON, names an unknown field, misses a required one, or
-names an op that does not exist. `--workspace` (or `RECOVERAGE_OPS_WORKSPACE`)
+names an op that does not exist. The `code` is the machine-readable key
+(`invalid_request`, `engine_error`, `target_unavailable`, or the refusal code
+the engine attached), matching the HTTP envelope shape. `--workspace` (or `RECOVERAGE_OPS_WORKSPACE`)
 confines every `project_dir` to that directory; without it the worker trusts
 any absolute path. Nothing is written to stderr except a log line for a failure
 the worker could not classify.

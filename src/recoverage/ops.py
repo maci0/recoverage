@@ -22,7 +22,7 @@ replies with the body a redirected ``recoverage export`` writes, so the backend
 serves recoverage's formatting instead of a second copy of it.
 
 Two transports: ``recoverage ops call <op>`` reads the request on stdin and
-writes the reply on stdout; a refusal writes ``{"error", "detail", "status"}``
+writes the reply on stdout; a refusal writes ``{"error", "code", "detail", "status"}``
 on stdout and exits ``EXIT_ERROR``.  ``recoverage ops serve`` answers
 ``POST /<op>`` over HTTP with rebrew's ops server (bearer token, host check,
 concurrency bound, ``/health``), calling the same :func:`dispatch`.
@@ -166,8 +166,10 @@ def _bounded(text: str) -> str:
 
 
 def error_body(code: str, detail: str, status: int) -> bytes:
-    """The refusal reply the transport writes."""
-    return json.dumps({"error": code, "detail": detail, "status": status}).encode()
+    """The refusal reply the transport writes, mirroring the HTTP error envelope."""
+    return json.dumps(
+        {"error": code, "code": code, "detail": detail, "status": status}
+    ).encode()
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +784,7 @@ def call_command(
 ) -> None:
     """Answer one op: the JSON request on stdin, the reply on stdout.
 
-    A refusal prints {"error","detail","status"} on stdout and exits 2.
+    A refusal prints {"error","code","detail","status"} on stdout and exits 2.
     """
     config = WorkerConfig(
         workspace=_existing_dir(workspace, "--workspace"),
