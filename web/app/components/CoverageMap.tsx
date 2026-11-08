@@ -409,6 +409,11 @@ export function CoverageMap({
   // back to the first block on the render the click that moved it caused, and
   // the arrow keys walked from there. Repainting on those changes is the
   // effect below's job, and it does not need the state rebuilt to do it.
+  // The rebuild is the refresh path (a db-updated reload hands a new pack),
+  // and the selected block survives it, so the cursor starts at that block
+  // rather than at focus: 0: a reload does not drop a keyboard reader into a
+  // place unrelated to the block they were on, where the next Enter would
+  // open a different block than the one the panel is showing.
   useLayoutEffect(() => {
     stateRef.current = {
       pack,
@@ -425,6 +430,18 @@ export function CoverageMap({
     paint();
     // `paint` is called for its side effect on the section that was just
     // rebuilt, and the effect below repaints on every change of its own.
+    // After the rebuild the cursor lands on the block the panel is showing
+    // when the rebuild kept the selection: the panel and the roving cursor
+    // name the same block instead of diverging after a refresh.
+    if (
+      stateRef.current !== null &&
+      selectedIndex !== null &&
+      selectedIndex >= 0 &&
+      selectedIndex < pack.n
+    ) {
+      stateRef.current.focus = selectedIndex;
+      paint();
+    }
   }, [declaredColumns, geometry, pack]);
 
   // A theme switch changes the tokens, not the geometry. `paint` is also a

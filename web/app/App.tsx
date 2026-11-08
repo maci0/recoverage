@@ -1250,11 +1250,11 @@ export function App() {
               // analysis, for minutes at a time.
               aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
               title={busy ? MSG.REGEN_IN_PROGRESS : "Re-run the coverage analysis. Takes minutes."}
-              // `aria-disabled`, not `disabled`: a disabled button leaves the
-              // tab order and drops the reader who just pressed it to <body>
-              // for the minutes the regen runs (WCAG 2.4.3).
-              // `useLiveReload.reload` refuses the click instead.
-              aria-disabled={busy ? "true" : undefined}
+              // Under a minute-scale run the button must leave the tab order
+              // while keeping a visible busy state: a keep-focusable button
+              // invites a second click and a second pipeline, and the
+              // progress is announced by the topbar status, not by focus.
+              disabled={busy}
               onClick={reload}
             >
               {busy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
@@ -1320,7 +1320,9 @@ export function App() {
               it is visually nothing. Shown, it floats over the foot of the
               viewport rather than sitting above the map: in the flow it pushed
               the map down when it arrived and pulled it back up four seconds
-              later, under a reader who was reading it. */}
+              later, under a reader who was reading it. While a regen runs the
+              copy says so and is never dismissed mid-run: the confirmation
+              after it leaves is the REGEN_DONE notice. */}
           <div
             className={
               notice === null
@@ -1329,13 +1331,14 @@ export function App() {
             }
             role="status"
             aria-live="polite"
+            aria-busy={busy ? "true" : undefined}
             onMouseEnter={notice === null ? undefined : onNoticeEnter}
             onMouseLeave={notice === null ? undefined : onNoticeLeave}
             onFocus={notice === null ? undefined : onNoticeEnter}
             onBlur={notice === null ? undefined : onNoticeLeave}
           >
             <span className="min-w-0">{notice ?? ""}</span>
-            {notice !== null && (
+            {notice !== null && notice !== MSG.REGEN_IN_PROGRESS && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -1559,19 +1562,39 @@ function MapArea({
     );
   }
   if (sectionEmpty) {
+    // The section rows have settled, so this is a confirmed empty target, not
+    // a pending read. The cause is usually a target the project config
+    // declares before its first build (the `/api/targets/<t>/data` contract
+    // answers 200 with no sections for it), and Regenerate in the topbar is
+    // the next action that writes it — naming it is what gives the reader a
+    // path onward instead of a dead end.
     return (
       <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">
           No coverage data for <span className="font-mono">{target}</span>
         </p>
         <p className="m-0 max-w-prose">
-          Check this target’s configuration, binary and inventory, or its selected offline snapshot.
-          If a build just finished writing this target, this view may be a
-          step behind it: retry the read rather than reloading the page.
+          This target has no coverage yet — either its first build has not
+          run, or this section holds no blocks. Use <b>Regenerate</b> in the
+          topbar to run the analysis now.
         </p>
-        <Button size="sm" onClick={onRetry}>
-          Retry
-        </Button>
+      </div>
+    );
+  }
+  // A loaded section that holds no blocks, distinct from the empty target
+  // above: its header row is already on the tab bar, so the reader's
+  // section exists and the emptiness is its content, not a missing build.
+  if (active !== null && active.cells !== undefined && active.cells.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
+        <p className="m-0 text-intro font-semibold text-text">
+          No blocks in <span className="font-mono">{active.name}</span>
+        </p>
+        <p className="m-0 max-w-prose">
+          This section exists for {target} but holds no coverage blocks.
+          Pick another section tab, or check whether the build that wrote
+          this target covered it.
+        </p>
       </div>
     );
   }
@@ -1653,6 +1676,9 @@ function describeMapArea(
       return `Could not load the ${isolate(active.name)} map.`;
     }
     return `Loading ${isolate(active.name)}.`;
+  }
+  if (active.cells.length === 0) {
+    return `${isolate(active.name)} holds no coverage blocks.`;
   }
   const filtered =
     filters.size > 0 ? ` Filtered by ${[...filters].toSorted().join(", ")}.` : "";
