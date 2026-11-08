@@ -428,11 +428,17 @@ export type RegenKey = string;
  * request would make every re-send a fresh one.
  *
  * `randomUUID` needs a secure context, which a plain-HTTP LAN visit is not.
+ * The fallback is `crypto.getRandomValues`, which is available in
+ * non-secure contexts, so the key stays unpredictable rather than
+ * falling back to the non-cryptographic `Math.random`.
  */
 export function newRegenKey(): RegenKey {
-  return crypto.randomUUID === undefined
-    ? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    : crypto.randomUUID();
+  if (crypto.randomUUID !== undefined) {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function sendRegen(key: RegenKey): Promise<Response> {
