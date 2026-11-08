@@ -1193,11 +1193,11 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
 
 
 def db_target_ids() -> list[str]:
-    """Target ids the coverage directory alone knows about, sorted.
+    """Target ids the coverage source alone knows about, sorted.
 
     The read-only counterpart to :func:`resolve_targets`: the ids written by the
     last build, before the project config contributes a target that has never
-    been built.  An empty directory is an empty list here rather than an error,
+    been built.  An empty source is an empty list here rather than an error,
     because this is also what the config-only fallback target list is built
     from.
     """
@@ -1972,7 +1972,7 @@ def _target_filename(tid: str, t_info: Any) -> str:
 
 
 def resolve_targets() -> list[dict[str, str]]:
-    """Resolve available targets from the coverage directory + config.
+    """Resolve available targets from the coverage source + config.
 
     Config-declared targets first, then any target the last build wrote, so the
     SPA dropdown and Potato Mode render and default to the same first entry.

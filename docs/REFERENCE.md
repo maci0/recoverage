@@ -115,7 +115,7 @@ Every value is validated at startup. An out-of-range port, a non-boolean flag,
 an unknown log level, an empty value where one is required, a bind address no
 resolver can answer (`0.0.0.0 `, `host:8001`), a CORS origin no browser could
 send, a token carrying whitespace a trimmed header could never present, a
-`RECOVERAGE_SNAPSHOTS` that is a file rather than the coverage directory, or a
+`RECOVERAGE_SNAPSHOTS` that is a file rather than the portable snapshot directory, or a
 misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
 variable named, instead of starting with a default you did not ask for. The
 same check runs for every command that reads the environment (`stats`,
@@ -231,7 +231,7 @@ recoverage check --min-coverage 60 --json                       # machine-readab
 
 Exit codes: 0 = gate passed, 1 = coverage below threshold (or a target/section
 that matched nothing), 2 = bad `--min-coverage` value, an unreadable coverage
-document, or a coverage directory holding no `coverage-*.toml`.
+document, or a coverage source holding no `coverage-*.toml`.
 
 ### `recoverage regen`
 
@@ -273,7 +273,7 @@ a crash mid-run leaves the previous backup rather than a truncated one.
 `--to` takes a file, or a directory to get the stamped default name: one
 that exists, or any path ending in `/`, which is created. The
 default directory is `$RECOVERAGE_BACKUP_DIR`, else a `backups/` beside the
-coverage directory, never inside it, because the next run would copy the
+portable snapshot directory, never inside it, because the next run would copy the
 previous archive as if it were a document. Exits 1 when there is nothing to
 back up: an empty archive verifies, and restoring one empties the dashboard,
 so a failed build must read as an alert rather than as a green run.
@@ -290,7 +290,7 @@ recoverage restore /srv/backups/nightly.tar --force
 The archive is verified in full (every member read, its size and digest
 checked) before the first document is written, and each document then lands
 through an atomic replace. A restore therefore either completes or leaves the
-coverage directory exactly as it was; half a restore is a dashboard that reads
+portable snapshot directory exactly as it was; half a restore is a dashboard that reads
 healthy and shows half a project.
 
 `--force` replaces differing selected offline snapshots; the refusal names every
@@ -613,7 +613,7 @@ must-revalidate`. Send `If-None-Match` and unchanged documents answer
 reports the server's own state, not the coverage documents'.
 `/api/targets` revalidates as well: its tag names both the coverage snapshot
 and the project config's stat, because the list merges the two, and it falls
-back to `no-store` when the coverage directory cannot be read, since there is
+back to `no-store` when the coverage source cannot be read, since there is
 then nothing to revalidate against.
 
 Query-parameter rules, the same on every endpoint:

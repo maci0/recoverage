@@ -5,7 +5,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 What the dashboard must do, one story per workflow, each with acceptance criteria
 that the shipped code satisfies. How it is built is [DESIGN.md](DESIGN.md); the
 attack surface is [THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the
-code: 2026-09-29.
+code: 2026-11-09.
 
 ---
 
@@ -500,7 +500,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - CSS minified with `rcssmin` (the bundle arrives minified by Vite and is inlined unchanged), compressed with Brotli/Zstd/gzip
-- Total payload 42,795 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 46,179 B and gzip 49,792 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-10-27)
+- Total payload 43,446 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 46,811 B and gzip 50,345 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-11-09)
 - The whole frontend except the highlighter is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Highlight.js is the second bundle `/highlight.js`, served by the dashboard itself and loaded the first time a code pane renders, so the shell does not carry it and no CDN is involved
