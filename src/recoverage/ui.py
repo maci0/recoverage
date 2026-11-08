@@ -565,15 +565,22 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
 #: The precise types the handful of suffixes that have one. Everything else on
 #: :data:`_REPO_COMPRESSIBLE` is text with no narrower answer, and
 #: :func:`_repo_file_type` says so.
+#:
+#: No ``.html``/``.svg``/``.xml``/``.xhtml`` entry here on purpose: a project
+#: file is untrusted input (the coverage document that placed it under
+#: ``src/`` is untrusted), and a content type the browser renders as a document
+#: gives it the dashboard origin.  ``_INERT_CSP`` in server.py is the second
+#: layer (opaque origin, no scripts), but a precise type must not reintroduce
+#: the document interpretation that hardening exists to neutralise.  Such a
+#: file is served as inert text; a reader who needs the document reads the
+#: bytes, not the rendering.
 _REPO_EXACT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".csv": "text/csv; charset=utf-8",
-    ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".map": "application/json; charset=utf-8",
     ".toml": "application/toml; charset=utf-8",
-    ".xml": "application/xml; charset=utf-8",
 }
 
 
