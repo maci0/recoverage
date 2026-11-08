@@ -5940,9 +5940,10 @@ class TestSpaLayoutAndFeedback:
         """
         app = _web("App.tsx")
         assert "py-12" not in app, "a map state still stamps the centered empty-state card"
-        assert "text-center" not in app.split("function MapArea", 1)[1].split(
-            "function UnreadableList", 1
-        )[0], "a map state is still centered"
+        assert (
+            "text-center"
+            not in app.split("function MapArea", 1)[1].split("function UnreadableList", 1)[0]
+        ), "a map state is still centered"
         empty = app.split("No coverage available", 1)[0].rsplit("<div", 1)[1]
         assert "border-t-2 border-border-strong" in empty, empty
         broken = app.split("The coverage document could not be read", 1)[0].rsplit("<div", 1)[1]
@@ -7360,3 +7361,86 @@ class TestSpaStoredDocumentationPresentation:
         )
         assert proc.returncode == 0, proc.stderr
         assert json.loads(proc.stdout) == [expected for _, _, expected in cases]
+
+
+class TestSpaUnparsableJsonNamesTheOperation:
+    """A successful status whose body is not JSON must say which request failed.
+
+    A proxy can answer 200 with an HTML error page, and a build can truncate
+    a payload: `res.json()` then rejects with a bare `SyntaxError` while the
+    server still holds a 200, so the pane rendered "Unexpected identifier"
+    against a request nobody could name. `decodeJson` in `web/app/api.ts` is
+    the one reader every successful answer goes through, and it names the
+    operation, the status and the request id -- the same correlation `refusal`
+    carries for a refused answer. Each pair below is (helper, operation), and
+    the helper must be a `decodeJson` call site: a new `res.json()` on a
+    success arm reopens the same bare SyntaxError.
+    """
+
+    HELPERS: ClassVar[list[tuple[str, str]]] = [
+        ("fetchTargets", "GET /api/targets"),
+        ("fetchData", "GET /api/targets/<target>/data"),
+        ("fetchStats", "GET /api/targets/<target>/stats"),
+        ("fetchFunction", "GET /api/targets/<target>/functions/<va>"),
+        ("fetchAsm", "GET /api/targets/<target>/asm"),
+    ]
+
+    def test_every_success_arm_reads_through_decode_json(self) -> None:
+        api = _web("api.ts")
+        for helper, operation in self.HELPERS:
+            assert "decodeJson<" in api, "decodeJson is gone"
+            assert f'"{operation}"' in api, f"{helper} does not name {operation}"
+        # No raw `res.json()` left on a success arm: the refusal and regen
+        # readers keep theirs, because both must fall back to NO_ENVELOPE
+        # rather than name a failure the reader cannot act on.
+        body = api.split("async function decodeJson", 1)[1]
+        assert body.count("res.json()") == 4, (
+            "a success arm reads res.json() directly again; "
+            "count is decodeJson itself, refusal, regen and updateCoverage"
+        )
+
+    def test_a_non_json_body_names_the_operation_and_the_request(self, tmp_path: Path) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        api = (REPO_ROOT / "web" / "app" / "api.ts").resolve().as_uri()
+        script = tmp_path / "decode.ts"
+        script.write_text(
+            "import { fetchAsm, fetchData, fetchFunction, fetchStats, fetchTargets } from "
+            + json.dumps(api)
+            + ";\n"
+            + "const calls = [\n"
+            + '  ["fetchTargets", () => fetchTargets()],\n'
+            + '  ["fetchData", () => fetchData("T", null)],\n'
+            + '  ["fetchStats", () => fetchStats("T")],\n'
+            + '  ["fetchFunction", () => fetchFunction("T", 1)],\n'
+            + '  ["fetchAsm", () => fetchAsm("T", 1, 16, ".text")],\n'
+            + "];\n"
+            + "const out = [];\n"
+            + "for (const [name, call] of calls) {\n"
+            + '  globalThis.fetch = async () => new Response("proxied html", {\n'
+            + "    status: 200,\n"
+            + '    headers: { "Content-Type": "text/html", "X-Request-ID": "rid-1" },\n'
+            + "  });\n"
+            + "  try { await call(); out.push([name, null, null]); }\n"
+            + "  catch (error) {\n"
+            + "    out.push([name, error.message, error.cause?.constructor?.name ?? null]);\n"
+            + "  }\n"
+            + "}\n"
+            + "globalThis.fetch = async () => new Response(\n"
+            + "  JSON.stringify({ targets: [], unreadable: [] }), { status: 200 });\n"
+            + 'out.push(["valid", await fetchTargets(), null]);\n'
+            + "console.log(JSON.stringify(out));\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        rows = json.loads(proc.stdout)
+        for (helper, operation), row in zip(self.HELPERS, rows[: len(self.HELPERS)], strict=True):
+            assert row[0] == helper
+            assert row[1] is not None and operation in row[1], row
+            assert "HTTP 200" in row[1] and "[request rid-1]" in row[1], row
+            assert row[2] == "SyntaxError", row
+        assert rows[-1] == ["valid", {"targets": [], "unreadable": []}, None]

@@ -3579,9 +3579,7 @@ class TestBatchFunctionLookup:
 
     def test_batch_unknown_fields_400(self) -> None:
         target = require_target()
-        status, headers, body = self._post(
-            target, json.dumps({"vas": ["0x10001000"], "extra": 1})
-        )
+        status, headers, body = self._post(target, json.dumps({"vas": ["0x10001000"], "extra": 1}))
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["code"] == "bad_request"

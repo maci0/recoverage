@@ -156,7 +156,7 @@ export async function fetchTargets(signal?: AbortSignal): Promise<TargetsPayload
   // SAFETY: the response is this origin's own JSON, whose shape
   // `recoverage.api.handle_api_targets` pins to `{"targets": [...],
   // "unreadable": [...]}`.
-  const body = (await res.json()) as Partial<TargetsPayload>;
+  const body = await decodeJson<Partial<TargetsPayload>>(res, "GET /api/targets");
   return { targets: body.targets ?? [], unreadable: body.unreadable ?? [] };
 }
 
@@ -183,7 +183,7 @@ export async function fetchData(
   // SAFETY: this origin's own JSON, whose shape
   // `recoverage.api._build_data_raw` pins: the fields read below are the ones
   // it writes, and the cells splice never changes the envelope.
-  return (await res.json()) as DataPayload;
+  return decodeJson<DataPayload>(res, "GET /api/targets/<target>/data");
 }
 
 export async function fetchStats(target: string, signal?: AbortSignal): Promise<StatsPayload> {
@@ -194,7 +194,7 @@ export async function fetchStats(target: string, signal?: AbortSignal): Promise<
   // SAFETY: this origin's own JSON, whose shape
   // `recoverage.api.handle_api_stats` pins: `summary` and `sections` are the
   // rows `recoverage.server._section_stats` writes.
-  return (await res.json()) as StatsPayload;
+  return decodeJson<StatsPayload>(res, "GET /api/targets/<target>/stats");
 }
 
 /** A function or global as `/api/targets/<t>/functions/<va>` serves it. */
@@ -255,6 +255,30 @@ type ErrorEnvelope = { error?: string; detail?: string };
  * the only thing left to read, and the caller already has it. */
 const NO_ENVELOPE: ErrorEnvelope = {};
 
+/** The body of a successful answer, read as JSON, with the operation named.
+ *
+ * A `res.json()` rejected by a body that is not JSON (a proxy's HTML 502
+ * served with a 200, a truncated payload) throws a bare `SyntaxError`: the
+ * browser holds it, the server holds a 200, and nothing joins them. Naming
+ * the operation here is what turns that into one line a reader can act on,
+ * and the status line the response carries the same way `refusal` does. */
+async function decodeJson<T>(res: Response, operation: string): Promise<T> {
+  try {
+    // SAFETY: the answer is this origin's own JSON, whose shape the
+    // `recoverage.api` handler serving `operation` pins; the cast is the one
+    // narrow every `fetch*` helper below already made at each call site.
+    return (await res.json()) as T;
+  } catch (error: unknown) {
+    const id = res.headers.get("X-Request-ID");
+    const detail = error instanceof Error ? error.message : String(error);
+    const request = id === null ? "" : ` [request ${id}]`;
+    throw new Error(
+      `${operation} returned a body that is not JSON (HTTP ${res.status}): ${detail}${request}`,
+      { cause: error },
+    );
+  }
+}
+
 /** The regen POST's own body shape, and the error envelope's: one response
  * carries one of them, and a caller reading a refusal needs both the status
  * and the words that came with it. */
@@ -313,7 +337,7 @@ export async function fetchFunction(
   }
   // SAFETY: this origin's own JSON, whose shape `recoverage.server.function_json`
   // pins: the fields read below are the ones it writes.
-  return (await res.json()) as FunctionDetail;
+  return decodeJson<FunctionDetail>(res, "GET /api/targets/<target>/functions/<va>");
 }
 
 export async function fetchAsm(
@@ -327,7 +351,7 @@ export async function fetchAsm(
   const res = await fetch(`/api/targets/${encodeUrlValue(target)}/asm${query}`, init(signal));
   // SAFETY: this origin's own JSON, whose shape `recoverage.api.handle_api_asm`
   // pins to `{asm}` or `{error, detail}`.
-  const payload = (await res.json()) as AsmPayload;
+  const payload = await decodeJson<AsmPayload>(res, "GET /api/targets/<target>/asm");
   if (payload.asm !== undefined && payload.asm !== "") {
     return payload.asm;
   }
