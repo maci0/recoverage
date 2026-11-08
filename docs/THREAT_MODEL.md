@@ -4,6 +4,33 @@ Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve` and the sibling commands). Every claim below carries
 a file reference so a later pass can re-verify it. Coverage authority and
 source/refresh boundaries reviewed: 2026-10-16. Last reviewed: 2026-11-09
+Fifth pass at HEAD `91a3264` (2026-11-09): the changes between `0cc379c` and
+HEAD were re-checked against the model below. `config.KNOWN_VARS`
+(`src/recoverage/config.py`) gained `RECOVERAGE_OPS_PORT` and
+`RECOVERAGE_OPS_HOST` (`src/recoverage/ops.py:serve_command`, `459ec73`), so
+the accepted set is now TWENTY-ONE names: SEVEN belong to the ops worker and
+the dashboard serve set is unchanged. `ops serve` now also runs
+`config.check_unknown_vars` at startup (`src/recoverage/ops.py`), so a
+misspelled `RECOVERAGE_*` name is a startup error there too, and `--port` is
+parsed through `server.parse_ascii_int` rather than click's INT coercion.
+`config.json_depth_exceeds` / `MAX_JSON_DEPTH` (256, `src/recoverage/config.py`,
+`66b29c2`) refuses a JSON body nesting past the bound before `json.loads`
+allocates it, at all three JSON readers: the batch POST body
+(`src/recoverage/api.py`), the ops request body (`src/recoverage/ops.py`) and
+the backup manifest (`src/recoverage/backup.py`). `backup._read_archive`
+now refuses a tar member the manifest never names and a manifest naming no
+coverage document (`f50ce8f`), and `_prune_old_archives` only prunes names
+whose stamp parses (`b4de22b`); `_archive_stamp_instant` refuses a short or
+non-ASCII-digit fraction rather than right-padding it via `strptime %f`.
+`server._snapshot_index` gained two kinds, `summary` and
+`functions_by_status` (`src/recoverage/server.py`), so `_SNAPSHOT_INDEX_KINDS`
+is 9 and `_SNAPSHOT_INDEX_MAX` is 18. `ops.error_body` now carries `code`
+beside `error` (`91a3264`), and `open`/`config` refusals emit the JSON error
+envelope in `-o json` mode (`f18f02d`). No entry point, trust boundary or
+mitigation below changed in a way that moves the risk ranking, so the risk
+ranking stands. The `.env.example` and README rows for the two new ops
+variables were restored in this pass (their absence was a failing
+`TestEnvExample` gate).
 Second pass at HEAD `82ba29d`: the `_ServeConfig.render()` sharing
 (`src/recoverage/cli.py`) and the `--max-age-hours`/`--min-coverage` overflow
 refusals (`src/recoverage/cli.py`, landed in `b4c82a6` and `f7f7c1c`) were
@@ -132,12 +159,12 @@ this update does not claim to refresh every older file/line reference below.
 | 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `src/recoverage/server.py`, `src/recoverage/api.py` | Tracebacks never reach a response body (`src/recoverage/server.py`); only the one-line exception class and a rebuild hint do |
 | 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `src/recoverage/server.py`, `src/recoverage/api.py` | `_MAX_DLL_SIZE` (512 MiB, `src/recoverage/server.py`) checked on `stat()` (`src/recoverage/server.py`) and again post-read (`src/recoverage/server.py`); a file that grows inside that window is fully read into RAM first. On the decode side, a negative VA, file offset or size is refused before a byte is sliced (`disasm._disassemble_loaded`, `src/recoverage/disasm.py:316`), so a negative index cannot count back from the end of the buffer into unrelated bytes, and the image width comes from a range-checked container header rather than a constant (unmitigated 10) |
 | 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `src/recoverage/server.py` | Rejected-token and rejected-Host events are logged with the peer address (`src/recoverage/server.py`); regen start, replay, completion and failure are logged (`src/recoverage/api.py`) |
-| 11 | NINETEEN `RECOVERAGE_*` environment variables are accepted under the prefix. Fifteen select the bind address, the token, the snapshot selection, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project; `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected. FIVE of the nineteen belong to the ops worker rather than to the dashboard: `RECOVERAGE_OPS_TOKEN`, `RECOVERAGE_OPS_WORKSPACE`, `RECOVERAGE_OPS_FILESTORE`, `RECOVERAGE_OPS_CONCURRENCY` and `RECOVERAGE_OPS_ALLOWED_HOSTS` (`src/recoverage/ops.py`), which `ops serve` reads and nothing `serve` resolves. FOUR are read by nothing in either server and are accepted only so an operator or a tool that exported one can still run a command: `RECOVERAGE_FUZZ_SEED` and `RECOVERAGE_FUZZ_ITERATIONS` (the test suite), `RECOVERAGE_DEV_API` (the origin `web/vite.config.ts` proxies `/api`, `/files`, `/src` and `/original` to in `make web-dev`, which also accepts a `host:port` form that Vite parses), and `RECOVERAGE_BACKUP_DIR` (where `recoverage backup` writes, `src/recoverage/backup.py`). Membership in `config.KNOWN_VARS` (`src/recoverage/config.py`) is therefore NOT a claim that a name is a dashboard setting, and a reader who treats the set as the settings table will miscount the environment. A TWENTIETH environment input, `XDG_CACHE_HOME`, selects where a copy of every parsed document is written, and it sits outside the set entirely: no startup validation, no banner line, and a parse cache in whatever directory the parent environment names | `src/recoverage/config.py`, `src/recoverage/cli.py`, `src/recoverage/backup.py`, `src/recoverage/ops.py`, `web/vite.config.ts` | Every value `serve` resolves is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.check_unknown_vars`, `src/recoverage/config.py`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose; the ops and tool knobs are validated by their own readers (`ops.serve_command` requires a token of at least `MIN_TOKEN_BYTES` and an existing `--workspace`, `src/recoverage/ops.py`) and by nothing `serve` resolves. `RECOVERAGE_BACKUP_DIR` was accepted by name but REFUSED by the same gate until `86ef853`, which is the one case where the set and the reader disagreed: a deployment whose crontab exported it had every command exit non-zero as a misspelling |
-| 12 | **An offline restore WRITES the selected portable read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage export --output <directory>` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`) | Every refusal happens before the first write: the archive is verified in full — every member read, size and digest checked against `manifest.json` — and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked |
+| 11 | TWENTY-ONE `RECOVERAGE_*` environment variables are accepted under the prefix. Fifteen select the bind address, the token, the snapshot selection, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project; `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected. SEVEN of the twenty-one belong to the ops worker rather than to the dashboard: `RECOVERAGE_OPS_TOKEN`, `RECOVERAGE_OPS_WORKSPACE`, `RECOVERAGE_OPS_FILESTORE`, `RECOVERAGE_OPS_CONCURRENCY`, `RECOVERAGE_OPS_ALLOWED_HOSTS`, `RECOVERAGE_OPS_PORT` and `RECOVERAGE_OPS_HOST` (`src/recoverage/ops.py`), which `ops serve` reads and nothing `serve` resolves. FOUR are read by nothing in either server and are accepted only so an operator or a tool that exported one can still run a command: `RECOVERAGE_FUZZ_SEED` and `RECOVERAGE_FUZZ_ITERATIONS` (the test suite), `RECOVERAGE_DEV_API` (the origin `web/vite.config.ts` proxies `/api`, `/files`, `/src` and `/original` to in `make web-dev`, which also accepts a `host:port` form that Vite parses), and `RECOVERAGE_BACKUP_DIR` (where `recoverage backup` writes, `src/recoverage/backup.py`). Membership in `config.KNOWN_VARS` (`src/recoverage/config.py`) is therefore NOT a claim that a name is a dashboard setting, and a reader who treats the set as the settings table will miscount the environment. A TWENTY-SECOND environment input, `XDG_CACHE_HOME`, selects where a copy of every parsed document is written, and it sits outside the set entirely: no startup validation, no banner line, and a parse cache in whatever directory the parent environment names | `src/recoverage/config.py`, `src/recoverage/cli.py`, `src/recoverage/backup.py`, `src/recoverage/ops.py`, `web/vite.config.ts` | Every value `serve` resolves is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.check_unknown_vars`, `src/recoverage/config.py`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose; the ops and tool knobs are validated by their own readers (`ops.serve_command` requires a token of at least `MIN_TOKEN_BYTES` and an existing `--workspace`, `src/recoverage/ops.py`) and by nothing `serve` resolves. `RECOVERAGE_BACKUP_DIR` was accepted by name but REFUSED by the same gate until `86ef853`, which is the one case where the set and the reader disagreed: a deployment whose crontab exported it had every command exit non-zero as a misspelling |
+| 12 | **An offline restore WRITES the selected portable read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage export --output <directory>` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`) | Every refusal happens before the first write: the archive is verified in full — every member read, size and digest checked against `manifest.json`, a member absent from the manifest refused, a manifest naming no coverage document refused — and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked. The manifest itself is depth-bounded (`config.json_depth_exceeds`, `src/recoverage/config.py`) before `json.loads` allocates it |
 | 13 | Portable backup archives copy exported reverse-engineering facts outside their snapshot directory, without encryption | `backup.write_backup`, `default_backup_dir`, `backup_dir_from_env` | File modes `0o600` and verified manifest; symlink document refusal (`backup._members`) and fail-closed `_require_outside_coverage_dir` (`OSError` → `BackupError`); archive retention prunes to `_RETENTION_COUNT` (30) stamped archives (`backup._prune_old_archives`), with a prune list or delete failure WARNING-logged rather than swallowed (`backup._prune_old_archives`); filesystem access remains a deployment control |
 
 | 14 | Portable-mode parsed-document caches copy exported facts under an operator-selected XDG cache location | `documents._load`, `_read_cached`, `_write_cached` | Content-digest association, schema revalidation, private new directory and best-effort slot pruning. Live reads bypass this cache; existing directory permissions are not rechecked |
-| 15 | The ops worker (`recoverage ops serve`, `src/recoverage/ops.py`) is a second HTTP surface with its own credential and its own posture, and nothing in the dashboard model above described it. It answers `POST /<op>` (`recoverage.coverage_gate`, `recoverage.coverage_export` and the plan/map ops) over rebrew's ops server, which takes a bearer token, a host allowlist and a concurrency bound, and it resolves every request's `project_dir` against `--workspace` and reads retained inputs and verification records inside it. A request that names a project outside the workspace, or a digest that matches no target, is refused inside `dispatch` (`src/recoverage/ops.py`), but the token is a second secret with its own lifecycle (risk 10's class) and the surface inherits every unmitigated item below that is about an in-process parser reading attacker-shaped input. The strongest property it has that the dashboard does not is a floor: `ops serve` refuses to start without a token of at least 32 bytes (`MIN_TOKEN_BYTES`, `src/recoverage/ops.py`), where the dashboard's `--token` is opt-in beside a remote bind | `src/recoverage/ops.py`, `src/recoverage/config.py` | Bearer token required, host allowlist, concurrency bound (`DEFAULT_CONCURRENCY`, capped at `MAX_CONCURRENCY` 64, `src/recoverage/ops.py`), workspace confinement of every `project_dir` (`ops.project_root`, `src/recoverage/ops.py`), request body capped at `MAX_REQUEST_BYTES` and reply at `MAX_REPLY_BYTES` (`src/recoverage/ops.py`), engine failures answered with a fixed detail and the cause logged rather than echoed (`src/recoverage/ops.py`) |
+| 15 | The ops worker (`recoverage ops serve`, `src/recoverage/ops.py`) is a second HTTP surface with its own credential and its own posture, and nothing in the dashboard model above described it. It answers `POST /<op>` (`recoverage.coverage_gate`, `recoverage.coverage_export` and the plan/map ops) over rebrew's ops server, which takes a bearer token, a host allowlist and a concurrency bound, and it resolves every request's `project_dir` against `--workspace` and reads retained inputs and verification records inside it. A request that names a project outside the workspace, or a digest that matches no target, is refused inside `dispatch` (`src/recoverage/ops.py`), but the token is a second secret with its own lifecycle (risk 10's class) and the surface inherits every unmitigated item below that is about an in-process parser reading attacker-shaped input. The strongest property it has that the dashboard does not is a floor: `ops serve` refuses to start without a token of at least 32 bytes (`MIN_TOKEN_BYTES`, `src/recoverage/ops.py`), where the dashboard's `--token` is opt-in beside a remote bind | `src/recoverage/ops.py`, `src/recoverage/config.py` | Bearer token required, host allowlist, concurrency bound (`DEFAULT_CONCURRENCY`, capped at `MAX_CONCURRENCY` 64, `src/recoverage/ops.py`), workspace confinement of every `project_dir` (`ops.project_root`, `src/recoverage/ops.py`), request body capped at `MAX_REQUEST_BYTES` and reply at `MAX_REPLY_BYTES` (`src/recoverage/ops.py`), JSON nesting past `MAX_JSON_DEPTH` (256, `config.json_depth_exceeds`, `src/recoverage/config.py`) refused before the decoder allocates it, engine failures answered with a fixed detail and the cause logged rather than echoed (`src/recoverage/ops.py`) |
 Owner and review cadence: not stated in the repository.
 
 The classes below the table are the ones this tree has already fixed once; start a review from that section rather than from a generic checklist.
@@ -286,16 +313,17 @@ Non-network entry points:
   `RECOVERAGE_ALLOW_REMOTE`, `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`,
   `RECOVERAGE_TOKEN`, `RECOVERAGE_SNAPSHOTS`, `RECOVERAGE_LOG_LEVEL`,
   `RECOVERAGE_MAX_CONNECTIONS` and `RECOVERAGE_CLIENT_TIMEOUT`
-  (`src/recoverage/config.py`), plus the five `RECOVERAGE_OPS_*` names the ops
+  (`src/recoverage/config.py`), plus the seven `RECOVERAGE_OPS_*` names the ops
   worker reads (`RECOVERAGE_OPS_TOKEN`, `RECOVERAGE_OPS_WORKSPACE`,
   `RECOVERAGE_OPS_FILESTORE`, `RECOVERAGE_OPS_CONCURRENCY`,
-  `RECOVERAGE_OPS_ALLOWED_HOSTS`, `src/recoverage/ops.py`), and the four names
+  `RECOVERAGE_OPS_ALLOWED_HOSTS`, `RECOVERAGE_OPS_PORT`,
+  `RECOVERAGE_OPS_HOST`, `src/recoverage/ops.py`), and the four names
   the prefix also accepts for a TOOL rather than for either server:
   `RECOVERAGE_FUZZ_SEED`, `RECOVERAGE_FUZZ_ITERATIONS`
   (`tests/test_fuzz.py`), `RECOVERAGE_DEV_API` (`web/vite.config.ts`, the
   `make web-dev` proxy target) and `RECOVERAGE_BACKUP_DIR`
   (`src/recoverage/backup.py`). `config.KNOWN_VARS` is the acceptance set for
-  all nineteen and is deliberately larger than either settings set;
+  all twenty-one and is deliberately larger than either settings set;
   `config.check_unknown_vars` (`src/recoverage/config.py`) refuses anything
   else carrying the prefix.
   Flags win over the environment, values are validated before the listener
@@ -779,12 +807,17 @@ the served trees.
 **Archive to coverage documents (the restore boundary).** This is the only
 boundary where the untrusted side supplies a FILE FORMAT rather than a string,
 and the classes differ in kind from every one above. Tampering: a tar can name
-the same member twice, declare a size that does not match what follows, or carry
-a name with a parent hop in it, and each is refused before anything is written
-(`backup._read_archive`, `src/recoverage/backup.py:321`: duplicate names refused
+the same member twice, declare a size that does not match what follows, carry
+a name with a parent hop in it, or smuggle a member the manifest never names
+carrying a payload that replaces a document the manifest does name — each is
+refused before anything is written
+(`backup._read_archive`, `src/recoverage/backup.py`: duplicate names refused
 rather than one picked, a member delivering more bytes than its header declares
 refused, a manifest name that is not a plain basename or does not match the
-coverage glob refused). Denial of service: a tar's size fields are
+coverage glob refused, a member absent from the manifest refused, a manifest
+naming no coverage document refused). The manifest itself is depth-bounded
+(`config.json_depth_exceeds`, `src/recoverage/config.py`) before `json.loads`
+allocates it. Denial of service: a tar's size fields are
 attacker-chosen integers, and a header claiming 10 GiB is the primitive, so both
 a per-member and an archive-wide bound are checked from the HEADERS before any
 member bytes are read (`_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`,
@@ -944,7 +977,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 |---------|------|--------|
 | Optional bearer token, constant-time compare, three credential sources | `src/recoverage/server.py` | Spoofing, unauthorized read |
 | Ops bearer token with a length floor: `ops serve` refuses to start unless `RECOVERAGE_OPS_TOKEN` holds at least `MIN_TOKEN_BYTES` (32) bytes; the token is environment-only, never a CLI flag, so it never appears in the process table | `src/recoverage/ops.py` (`ops.serve_command`, `TOKEN_ENV`, `MIN_TOKEN_BYTES`) | Spoofing on the ops surface, and the weakest-credential failure the dashboard permits beside a remote bind. There is no equivalent floor on `--token` |
-| Ops dispatch confinement: `project_dir` resolved inside `--workspace`, target resolved by binary `sha256` through rebrew's project config, body capped at `MAX_REQUEST_BYTES`, reply refused above `MAX_REPLY_BYTES`, engine failures answered with a fixed detail and the cause logged | `src/recoverage/ops.py` (`ops.project_root`, `ops.dispatch`, `MAX_REQUEST_BYTES`, `MAX_REPLY_BYTES`) | Path steering out of the workspace, oversized requests and replies, and exception detail reaching the caller |
+| Ops dispatch confinement: `project_dir` resolved inside `--workspace`, target resolved by binary `sha256` through rebrew's project config, body capped at `MAX_REQUEST_BYTES`, JSON nesting past `MAX_JSON_DEPTH` refused before allocation, reply refused above `MAX_REPLY_BYTES`, engine failures answered with a fixed detail and the cause logged | `src/recoverage/ops.py` (`ops.project_root`, `ops.dispatch`, `MAX_REQUEST_BYTES`, `MAX_REPLY_BYTES`), `src/recoverage/config.py` (`json_depth_exceeds`) | Path steering out of the workspace, oversized requests and replies, and exception detail reaching the caller |
 | Per-peer failure throttle with 429 + `Retry-After` (10 per 60 s, keyed on `REMOTE_ADDR`), prune, cap check and slot reservation under one lock, peer map bounded at 1024 keys with a spent window evicted before the oldest one, a verified request clearing only its own peer's window | `src/recoverage/server.py` | Online token guessing, check-then-act races under concurrency, an operator locked out by one hostile client, and a guesser reset by the operator's own traffic |
 | Host header allowlist on loopback binds, with a warning naming the rejected value and the peer | `src/recoverage/server.py` | DNS rebinding |
 | Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `src/recoverage/cli.py` | Accidental LAN exposure |
@@ -1085,11 +1118,12 @@ generic STRIDE checklist. Each entry names the shipped fix in
     entry per function and one per global for the snapshot's life, so a
     document with an inflated function count turns a per-keystroke CPU cost
     into a resident-memory cost that no constant in this tree bounds. The cap
-    that does exist, `_SNAPSHOT_INDEX_KINDS` (7, `src/recoverage/server.py:3150`), so
-    `_SNAPSHOT_INDEX_MAX` is `2 * len(_SNAPSHOT_INDEX_KINDS)` (14,
+    that does exist, `_SNAPSHOT_INDEX_KINDS` (9, `src/recoverage/server.py`),
+    so `_SNAPSHOT_INDEX_MAX` is `2 * len(_SNAPSHOT_INDEX_KINDS)` (18,
     `src/recoverage/server.py:3161`), answers "how many tables are live", not "how
     large is one". The bound was raised from a literal 4 by `1991284` because a
-    page that searches, opens a cell and hits the batch endpoint touches all seven
+    page that searches, opens a cell and hits the batch endpoint touches all
+    nine
     kinds, and the old cap evicted the first two on every sweep, so the memo
     missed on every pass; it is now derived from the kind set, so adding a kind
     without re-reading this item silently reverts that, and
