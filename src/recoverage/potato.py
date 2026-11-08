@@ -1141,7 +1141,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     <td valign="top" width="100%">
       <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> N:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> N:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{"%.1f".format(sec_stats.get('pct_1dp', sec_stats.get('pct', 0)))}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -1944,6 +1944,7 @@ def _compute_section_stats(
             "stub": buckets["stub"],
             "padding": buckets["padding"],
             "pct": _section_pct(summary, sections, name),
+            "pct_1dp": pct_1dp(_section_pct(summary, sections, name)),
         }
     return per_section_stats
 
