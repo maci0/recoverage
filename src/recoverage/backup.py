@@ -32,6 +32,11 @@ Where the archive goes is ``RECOVERAGE_BACKUP_DIR``, or the ``--to`` flag, or
 :func:`default_backup_dir` — a ``backups/`` beside the coverage directory, never
 inside it, because the glob a restore reads would then grow a member that is not
 a coverage document and a later backup would carry the earlier one.
+* **Re-running backup is safe.**  A stamped name that already exists is
+  refused for an explicit ``--to`` file, but a default (stamped) name is
+  retried under the next free suffix — a cron retry or two runs in one
+  instant still produce a verified archive instead of failing on the
+  first run's file.
 """
 
 from __future__ import annotations
@@ -214,6 +219,11 @@ def _atomic_write(path: Path, data: bytes) -> None:
     are one step, not a check-then-replace race between two backup runs.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise BackupError(
+            f"backup {path} already exists; refusing to overwrite it "
+            "(a repeat run must not silently replace an earlier backup)"
+        )
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
@@ -252,6 +262,33 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
     tmp.unlink()
     _fsync_dir(path.parent)
+
+
+def _default_archive_path(directory: Path) -> Path:
+    """A stamped archive name in *directory* that does not yet exist.
+
+    The stamp alone is not a unique key: a frozen/patched clock, a cron
+    retry inside one microsecond, or two runs in the same instant name the
+    same file, and the fail-if-exists publish then refuses the retry — the
+    first backup survives but the retry reports failure.  Probing for the
+    next free suffix keeps the default path retryable: the publish still
+    fails if a winner lands between probe and link, so the probe only
+    picks which name to attempt, never whether to publish.
+    """
+    base = f"{_ARCHIVE_PREFIX}{_stamp()}{_ARCHIVE_SUFFIX}"
+    candidate = directory / base
+    if not candidate.exists():
+        return candidate
+    stem, dot, suffix = base.rpartition(".")
+    for n in range(2, 1000):
+        candidate = directory / f"{stem}-{n}{dot}{suffix}"
+        if not candidate.exists():
+            return candidate
+    # The stamp has 10^6 subdivisions per second; a thousand collisions
+    # in one instant means the directory is being written by many
+    # concurrent schedulers.  Let the publish fail-if-exists and report
+    # it rather than probing forever.
+    return directory / base
 
 
 def _members(db_dir: Path) -> list[tuple[str, bytes]]:
@@ -365,11 +402,9 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     manifest = _manifest(members, created)
     blob = _tar_bytes(members, manifest)
     if destination is None:
-        destination = backup_dir_from_env(db_dir) / (
-            f"{_ARCHIVE_PREFIX}{_stamp()}{_ARCHIVE_SUFFIX}"
-        )
+        destination = _default_archive_path(backup_dir_from_env(db_dir))
     elif destination.is_dir():
-        destination = destination / f"{_ARCHIVE_PREFIX}{_stamp()}{_ARCHIVE_SUFFIX}"
+        destination = _default_archive_path(destination)
     _require_outside_coverage_dir(db_dir, destination)
     try:
         _atomic_write(destination, blob)
