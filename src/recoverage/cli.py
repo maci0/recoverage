@@ -820,6 +820,7 @@ def _run_regen(root: Path, *, json_output: bool = False) -> None:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
     from rebrew.config import ConfigError as RebrewConfigError
 
+    from recoverage import metrics
     from recoverage.regen import (
         RegenError,
         run_regen,
@@ -841,12 +842,33 @@ def _run_regen(root: Path, *, json_output: bool = False) -> None:
         # (exit 2) and the same bare message coverage_source_or_exit gives the read
         # commands for this exact file, instead of the class name and the
         # regen-failed 1 the generic arm below reported.
+        _log.error(
+            "Regen failed: %s: %s",
+            "misconfiguration",
+            type(e).__name__,
+            exc_info=e,
+            extra=metrics.regen_log_fields("failed"),
+        )
         _fail(f"Error: {e}", str(e), 2, json_output)
     except RegenError as exc:
+        _log.error(
+            "Regen failed: %s: %s",
+            "regen error",
+            type(exc).__name__,
+            exc_info=exc,
+            extra=metrics.regen_log_fields("failed"),
+        )
         _fail(f"Error: {exc}", str(exc), exc.exit_code, json_output)
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.
         message = f"rebrew regen failed: {type(e).__name__}: {e}"
+        _log.error(
+            "Regen failed: %s: %s",
+            "internal error",
+            type(e).__name__,
+            exc_info=e,
+            extra=metrics.regen_log_fields("failed"),
+        )
         _fail(f"Error: {message}", message, 1, json_output)
 
 

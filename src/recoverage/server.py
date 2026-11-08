@@ -2051,16 +2051,42 @@ def _find_dll_path(target: str) -> Path | None:
         if binary:
             # Portable offsets describe this binary even beside another project config.
             if not isinstance(binary, str) or "\x00" in binary or binary.startswith("//"):
+                _log.warning(
+                    "Refusing portable original DLL for target %s: not a plain relative path",
+                    _log_safe(target),
+                    extra=request_log_fields(500, target=_log_safe(target)),
+                )
                 return None
             relative = Path(binary.removeprefix("/"))
             if not is_plain_relative(relative):
+                _log.warning(
+                    "Refusing portable original DLL %s for target %s: outside the project tree",
+                    _log_safe(binary),
+                    _log_safe(target),
+                    extra=request_log_fields(500, target=_log_safe(target)),
+                )
                 return None
             root = _project_dir().resolve()
             try:
                 portable_binary = (root / relative).resolve()
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                _log.warning(
+                    "Refusing portable original DLL %s for target %s: %s",
+                    _log_safe(binary),
+                    _log_safe(target),
+                    _log_safe(str(exc)),
+                    extra=request_log_fields(500, target=_log_safe(target)),
+                )
                 return None
-            return portable_binary if portable_binary.is_relative_to(root) else None
+            if not portable_binary.is_relative_to(root):
+                _log.warning(
+                    "Refusing portable original DLL %s for target %s: outside the project tree",
+                    _log_safe(binary),
+                    _log_safe(target),
+                    extra=request_log_fields(500, target=_log_safe(target)),
+                )
+                return None
+            return portable_binary
     targets = _get_targets_config()
     t_info = targets.get(target)
     if t_info is None:

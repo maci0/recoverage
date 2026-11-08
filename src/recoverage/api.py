@@ -2426,7 +2426,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
         _log.warning(
             "Reading the batch request body failed: %s: %s",
             type(exc).__name__,
-            exc,
+            _server._log_safe(str(exc)),
         )
         return [], _body_rejected(
             400,
