@@ -289,6 +289,7 @@ check-bundle-clean: web-build
 web-build: ensure-bun
 	@$(SET_STRICT) \
 	export LC_ALL=C TZ=UTC; \
+	umask 022; \
 	bun install --frozen-lockfile; \
 	bun run build:web
 
@@ -453,6 +454,7 @@ ensure-bun:
 regen-oxlint: ensure-rebrew ensure-bun
 	@$(SET_STRICT) \
 	export LC_ALL=C TZ=UTC; \
+	umask 022; \
 	bun install --frozen-lockfile; \
 	$(UV_RUN) python tools/flatten_rikalabs_strict.py
 
@@ -496,6 +498,9 @@ payload-budget: ensure-rebrew
 # Windows contributor bootstraps through uv and has no ../rebrew beside the
 # tree, so `make browser-sbom` refused to print an inventory of bun.lock.
 browser-sbom:
+	@$(SET_STRICT) \
+	export LC_ALL=C TZ=UTC; \
+	umask 022; \
 	$(UV_STDLIB) $(PYTHON) tools/bundled_js_inventory.py
 
 # The same rows as an SPDX 2.3 document, which is the shape a vulnerability
