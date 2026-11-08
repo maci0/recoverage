@@ -3610,6 +3610,15 @@ def _opened_file_etag(path: str, encoding_key: str, raw: bytes) -> str:
     return etag
 
 
+#: The byte-to-ASCII gutter table for :func:`_format_hex_dump`: printable
+#: bytes pass through, every other byte reads as ``.`` — the old per-byte
+#: conditional, computed once so the dump maps the whole buffer in one
+#: C-level pass (``bytes.translate``) rather than one Python branch per byte.
+#: The value is the printable byte itself or 46 (``.``), index-aligned with
+#: the byte it replaces.
+_HEX_DUMP_ASCII = bytes(b if 32 <= b < 127 else 46 for b in range(256))
+
+
 def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None = 256) -> str:
     """Format bytes as the canonical 16-bytes-per-line hex dump.
 
@@ -3624,12 +3633,23 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
     """
     data = raw_bytes if max_bytes is None else raw_bytes[:max_bytes]
     lines: list[str] = []
+    # Two C-level passes over the whole buffer — ``bytes.hex()`` for the hex
+    # columns and one ``translate`` for the gutter — replace the old per-byte
+    # ``f"{b:02x}"`` formatting and per-byte branch, which built 16 Python
+    # strings plus a 16-char join per line.  The columns are then sliced out
+    # of the one hex string, which is the same two-char-per-byte spelling.
+    hex_text = data.hex()
+    ascii_text = data.translate(_HEX_DUMP_ASCII)
     for i in range(0, len(data), 16):
-        chunk = data[i : i + 16]
+        row = hex_text[i * 2 : (i + 16) * 2]
+        if len(row) <= 16:
+            hex_left = " ".join(row[j : j + 2] for j in range(0, len(row), 2))
+            hex_right = ""
+        else:
+            hex_left = " ".join(row[j : j + 2] for j in range(0, 16, 2))
+            hex_right = " ".join(row[j : j + 2] for j in range(16, len(row), 2))
+        ascii_repr = ascii_text[i : i + 16].decode()
         offset = hex_addr(base_offset + i)[2:]
-        hex_left = " ".join(f"{b:02x}" for b in chunk[:8])
-        hex_right = " ".join(f"{b:02x}" for b in chunk[8:])
-        ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
         lines.append(f"{offset}  {hex_left:<23s}  {hex_right:<23s}  |{ascii_repr}|")
     if max_bytes is not None and len(raw_bytes) > max_bytes:
         lines.append(f"... ({len(raw_bytes) - max_bytes} more bytes)")
