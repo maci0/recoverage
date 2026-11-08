@@ -127,7 +127,7 @@ def test_ops_use_project_specific_retained_snapshot(tmp_path, monkeypatch, op, e
     # The live files have changed after publication.
     for root in (workspace / "one", workspace / "two"):
         (root / "src/marker.c").write_text("live")
-    config = ops.WorkerConfig(workspace, store)
+    config = ops.WorkerConfig(workspace=workspace, filestore=store)
     for request in (one, two):
         status, body = call(config, op, {**bound_request(config, request), **extra})
         assert status == 200, body
@@ -140,7 +140,7 @@ def test_snapshot_tamper_and_changed_during_operation_are_refused(tmp_path, monk
     store = tmp_path / "store"
     store.mkdir()
     req = request_for(workspace / "project", store, "original")
-    config = ops.WorkerConfig(workspace, store)
+    config = ops.WorkerConfig(workspace=workspace, filestore=store)
     entry = req["files"][1]
     (store / entry["key"]).write_text("tampered")
     assert call(config, "recoverage.coverage_map", req)[0] == 400
@@ -170,7 +170,9 @@ def test_snapshot_without_helper_fails_closed(tmp_path, monkeypatch):
     store.mkdir()
     request = request_for(workspace / "project", store, "retained")
     monkeypatch.delattr(rebrew.ops, "retained_target_snapshot")
-    status, body = call(ops.WorkerConfig(workspace, store), "recoverage.coverage_map", request)
+    status, body = call(
+        ops.WorkerConfig(workspace=workspace, filestore=store), "recoverage.coverage_map", request
+    )
     assert status == 500
     assert "pinned rebrew" in body["detail"]
 
@@ -192,7 +194,9 @@ def test_external_inventory_is_refused(tmp_path):
         "size": len(data),
         "key": key,
     }
-    status, body = call(ops.WorkerConfig(workspace, store), "recoverage.coverage_map", request)
+    status, body = call(
+        ops.WorkerConfig(workspace=workspace, filestore=store), "recoverage.coverage_map", request
+    )
     assert status == 400, body
 
 
@@ -251,7 +255,7 @@ def test_real_retained_project_map(tmp_path):
         "rebrew_target": "bench",
         "binary_key": binary_sha,
     }
-    config = ops.WorkerConfig(workspace, store)
+    config = ops.WorkerConfig(workspace=workspace, filestore=store)
     request = bound_request(config, request)
     status, body = call(config, "recoverage.coverage_map", request)
     assert status == 200, body
@@ -261,7 +265,9 @@ def test_real_retained_project_map(tmp_path):
     from rebrew.workspace.status import TrustedCoverage
 
     live = ops.coverage_map(
-        ops.WorkerConfig(), ops.MapRequest(str(fixture), binary_sha), TrustedCoverage(())
+        ops.WorkerConfig(),
+        ops.MapRequest(project_dir=str(fixture), sha256=binary_sha),
+        TrustedCoverage(()),
     )
     assert body["stats"] == live["stats"]
     assert body["sections"] == live["sections"]
@@ -292,7 +298,9 @@ def test_real_retained_project_map(tmp_path):
     assert "Identified coverage" in md["body"]
     table_lines = [line for line in md["body"].splitlines() if line.startswith("|")]
     assert table_lines and len({len(line.split("|")) for line in table_lines}) == 1
-    untrusted = ops.coverage_map(ops.WorkerConfig(), ops.MapRequest(str(fixture), binary_sha))
+    untrusted = ops.coverage_map(
+        ops.WorkerConfig(), ops.MapRequest(project_dir=str(fixture), sha256=binary_sha)
+    )
     assert untrusted["stats"]["by_status"].get("EXACT", 0) > 0
 
 
@@ -303,7 +311,7 @@ def test_coverage_plan_reports_staged_readset_and_absences(tmp_path):
     store.mkdir()
     request = request_for(workspace / "project", store, "retained")
     other = request_for(workspace / "other", store, "different")
-    config = ops.WorkerConfig(workspace, store)
+    config = ops.WorkerConfig(workspace=workspace, filestore=store)
     (workspace / "project/src/marker.c").write_text("live modified")
     status, body = call(config, "recoverage.coverage_plan", request)
     assert status == 200, body
@@ -342,7 +350,7 @@ def test_retained_scoring_requires_bound_envelope(tmp_path):
     workspace.mkdir()
     store.mkdir()
     request = request_for(workspace / "project", store, "source")
-    config = ops.WorkerConfig(workspace, store)
+    config = ops.WorkerConfig(workspace=workspace, filestore=store)
     status, body = call(config, "recoverage.coverage_map", request)
     assert status == 409 and body["error"] == "coverage-input-invalid"
     partial = {**request, "coverage_input_digest": "a" * 64}
@@ -413,7 +421,7 @@ def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
         "rebrew_target": "sample",
         "binary_key": binary_sha,
     }
-    worker = ops.WorkerConfig(workspace, store)
+    worker = ops.WorkerConfig(workspace=workspace, filestore=store)
     request = bound_request(worker, request)
     result = item["result"]
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()

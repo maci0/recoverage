@@ -87,7 +87,9 @@ def test_serve_answers_ops_with_the_bearer_token(tmp_path: Path) -> None:
         status, reply = _post(port, "/recoverage.coverage_plan", body, token)
         assert status == 200, reply
         direct_status, direct = ops.dispatch(
-            ops.WorkerConfig(workspace.resolve(), store.resolve()), "recoverage.coverage_plan", body
+            ops.WorkerConfig(workspace=workspace.resolve(), filestore=store.resolve()),
+            "recoverage.coverage_plan",
+            body,
         )
         assert direct_status == 200
         assert json.loads(reply) == json.loads(direct)

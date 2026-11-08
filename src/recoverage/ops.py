@@ -88,8 +88,29 @@ class OpsError(Exception):
         self.status = status
 
 
+class InvalidRequestError(OpsError):
+    """The request was malformed or failed validation (HTTP 400)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail, code=INVALID_REQUEST, status=400)
+
+
+class NotFoundError(OpsError):
+    """The named op, target, or coverage was not found (HTTP 404)."""
+
+    def __init__(self, detail: str, *, code: str) -> None:
+        super().__init__(detail, code=code, status=404)
+
+
+class ConflictError(OpsError):
+    """The request conflicts with retained evidence state (HTTP 409)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail, code="coverage-input-invalid", status=409)
+
+
 def _invalid(detail: str) -> OpsError:
-    return OpsError(detail, code=INVALID_REQUEST, status=400)
+    return InvalidRequestError(detail)
 
 
 def _bounded(text: str) -> str:
@@ -107,7 +128,7 @@ def error_body(code: str, detail: str, status: int) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class WorkerConfig:
     """Where the worker may read projects from.
 
@@ -180,7 +201,7 @@ class RetainedRequest:
     verification_records: list[dict[str, Any]] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class GateRequest(RetainedRequest):
     """One target to gate: its project, its binary digest, and the threshold."""
 
@@ -191,7 +212,7 @@ class GateRequest(RetainedRequest):
     metric: str = "identified"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class PlanRequest(RetainedRequest):
     """Plan the readset for retained coverage inputs."""
 
@@ -199,7 +220,7 @@ class PlanRequest(RetainedRequest):
     sha256: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MapRequest(RetainedRequest):
     """One target to map."""
 
@@ -207,7 +228,7 @@ class MapRequest(RetainedRequest):
     sha256: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ExportRequest(RetainedRequest):
     """One target to render: its project, its binary digest, and the format."""
 
@@ -289,10 +310,9 @@ def _resolve_target(root: Path, sha256: str) -> str:
         binary = target_binary(root, entry)
         if binary is not None and binary.is_file() and _file_sha256(binary) == wanted:
             return name
-    raise OpsError(
+    raise NotFoundError(
         f"no target of project_dir has a binary with sha256 {wanted}",
         code=TARGET_NOT_FOUND,
-        status=404,
     )
 
 
@@ -316,10 +336,9 @@ def _target_snapshot(root: Path, target: str) -> Any:
                     f"coverage document for target {target} is unreadable: {reason}",
                     code=ENGINE_ERROR,
                 )
-        raise OpsError(
+        raise NotFoundError(
             f"no coverage document for target {target}",
             code=COVERAGE_NOT_FOUND,
-            status=404,
         )
     return snapshot
 
@@ -434,10 +453,8 @@ def coverage_gate(
     if metric not in ("identified", "verified"):
         raise _invalid("metric must be identified or verified")
     if metric == "verified" and trusted is None:
-        raise OpsError(
+        raise ConflictError(
             "verified coverage requires retained evidence",
-            code="coverage-input-invalid",
-            status=409,
         )
     root = project_root(config, request.project_dir)
     target = request.rebrew_target or _resolve_target(root, request.sha256)
@@ -549,7 +566,7 @@ OPS: dict[str, Op] = {
 def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
     op = OPS.get(name)
     if op is None:
-        raise OpsError(f"unknown op: {_bounded(name)}", code=UNKNOWN_OP, status=404)
+        raise NotFoundError(f"unknown op: {_bounded(name)}", code=UNKNOWN_OP)
     if len(body) > MAX_REQUEST_BYTES:
         raise OpsError(
             f"request exceeds {MAX_REQUEST_BYTES} bytes", code=INVALID_REQUEST, status=413
@@ -607,10 +624,8 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
                         return op.run(config, staged)
                     required = ("coverage_input", "coverage_input_digest", "verification_records")
                     if any(key not in raw for key in required):
-                        raise OpsError(
+                        raise ConflictError(
                             "retained coverage requires the complete input envelope",
-                            code="coverage-input-invalid",
-                            status=409,
                         )
                     from rebrew.coverage_input_contract import (
                         CoverageInputError,
@@ -646,9 +661,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
                         validate()
                         return reply
                     except CoverageInputError as exc:
-                        raise OpsError(
-                            str(exc), code="coverage-input-invalid", status=409
-                        ) from None
+                        raise ConflictError(str(exc)) from None
             except RebrewOpsError as exc:
                 raise OpsError(str(exc), code=exc.code, status=exc.status) from None
         return op.run(config, request)
@@ -710,7 +723,8 @@ def call_command(
     A refusal prints {"error","detail","status"} on stdout and exits 2.
     """
     config = WorkerConfig(
-        _existing_dir(workspace, "--workspace"), _existing_dir(filestore, "--filestore")
+        workspace=_existing_dir(workspace, "--workspace"),
+        filestore=_existing_dir(filestore, "--filestore"),
     )
     body = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     status, reply = dispatch(config, op, body)
@@ -821,7 +835,8 @@ def serve_command(
         )
         raise typer.Exit(EXIT_ERROR)
     worker = WorkerConfig(
-        _existing_dir(workspace, "--workspace"), _existing_dir(filestore, "--filestore")
+        workspace=_existing_dir(workspace, "--workspace"),
+        filestore=_existing_dir(filestore, "--filestore"),
     )
     hosts = frozenset(item.strip().lower() for item in allowed_hosts.split(",") if item.strip())
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?", item) for item in hosts):
