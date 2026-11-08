@@ -66,6 +66,8 @@ LATENCY_WINDOW: Final = 512
 P50: Final = 0.50
 P95: Final = 0.95
 MS_DIGITS: Final = 3
+#: Digits a rate (error_rate) is rounded to, beside the latencies it sits beside.
+RATE_DIGITS: Final = 6
 
 
 def status_bucket(status: int) -> str:
@@ -322,6 +324,13 @@ class RequestStats:
             return {
                 "total": self._total,
                 "errors": self._errors,
+                # The 5xx share, so an operator (or a monitor polling
+                # /api/health) can alert on the error rate without
+                # dividing two lifetime counters by hand.  ``None`` until
+                # the first request finishes: 0/0 is not a rate.
+                "error_rate": round(self._errors / self._total, RATE_DIGITS)
+                if self._total
+                else None,
                 "slow": self._slow,
                 "in_flight": self._in_flight,
                 "stale_claims": self._stale_claims,
@@ -462,6 +471,18 @@ REGEN = RegenStats()
 LOG_FIELDS_ATTR: Final = "log_fields"
 
 
+def log_fields(**fields: object) -> dict[str, dict[str, object]]:
+    """The ``extra=`` for a record that is not a request or a regen line.
+
+    Transition lines (health degraded to healthy and back, the config-only
+    target fallback opening and closing) are the ones an operator pivots from
+    a metric anomaly to, so they carry the same named fields the request
+    lines do: the event, the new state, and the reason, without reading
+    the prose to learn which transition it was.
+    """
+    return {LOG_FIELDS_ATTR: dict(fields)}
+
+
 def regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
     """The ``extra=`` for one regen lifecycle line, from every entry point.
 
@@ -493,6 +514,9 @@ REVALIDATION_CACHE: Final = "revalidate"
 #: The persisted TOML parse (`documents`): a hit is a document read from the
 #: JSON cache, a miss a full `tomllib` parse.
 DOCUMENT_CACHE: Final = "document"
+#: The per-slice disassembly memo (`disasm._disassemble_loaded`): a hit is a
+#: slice the memo already held, a miss a fresh capstone decode.
+DISASSEMBLY_CACHE: Final = "disassembly"
 
 
 class CacheStats:

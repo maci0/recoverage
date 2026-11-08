@@ -15,6 +15,7 @@ import logging
 import threading
 lazy from typing import Any
 
+from recoverage import metrics
 from recoverage.server import RecoError, _load_dll, binary_stamp, hex_addr
 
 _log = logging.getLogger("recoverage")
@@ -286,7 +287,20 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
         return ""
     generation = _disassembly_generation()
     stamp = binary_stamp(target)
+    cache_info = getattr(_disassemble_loaded, "cache_info", None)
+    before = cache_info() if cache_info is not None else None
     text = _disassemble_loaded(va, size, file_offset, target, stamp)
+    # The per-slice memo is a cache like the payload memos, so it is counted
+    # beside them: a disassembly panel that stopped hitting rebuilt capstone
+    # decodes per slice with no counter to say so.  lru_cache counts a hit
+    # only when the key was already present, so the delta is the outcome.
+    # The attribute check is a test seam: a harness that replaces the memo
+    # with a plain callable has no counts to read, and must not fail for it.
+    if before is not None:
+        if cache_info is not None and cache_info().hits > before.hits:
+            metrics.CACHES.hit(metrics.DISASSEMBLY_CACHE)
+        else:
+            metrics.CACHES.miss(metrics.DISASSEMBLY_CACHE)
     if generation == _disassembly_generation():
         return text
     # A rebuild's invalidation overtook this build: the bytes just memoized

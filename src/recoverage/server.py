@@ -1993,12 +1993,27 @@ def _log_config_error(reason: str | None) -> None:
         _config_error_reported = reason
     if reason is None:
         if previous is not None:
-            _log.info("%s read again; project targets are complete", CONFIG_NAME)
+            _log.info(
+                "%s read again; project targets are complete",
+                CONFIG_NAME,
+                extra=metrics.log_fields(event="config_read", status="recovered"),
+            )
         return
     if previous is None:
-        _log.warning("Failed to load %s: %s", CONFIG_NAME, reason)
+        _log.warning(
+            "Failed to load %s: %s",
+            CONFIG_NAME,
+            reason,
+            extra=metrics.log_fields(event="config_read", status="failed", reason=reason),
+        )
     else:
-        _log.warning("Failed to load %s: %s (was: %s)", CONFIG_NAME, reason, previous)
+        _log.warning(
+            "Failed to load %s: %s (was: %s)",
+            CONFIG_NAME,
+            reason,
+            previous,
+            extra=metrics.log_fields(event="config_read", status="failed", reason=reason),
+        )
 
 
 def _get_targets_config() -> dict[str, Any]:

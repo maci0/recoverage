@@ -540,7 +540,14 @@ def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
             # the parse error quotes document values.  repr escapes every
             # character that ends a log line, the guarantee server._log_safe
             # gives the request path, which this level cannot import.
-            _log.warning("skipping unreadable coverage document %r: %r", str(path), reason)
+            _log.warning(
+                "skipping unreadable coverage document %r: %r",
+                str(path),
+                reason,
+                extra=metrics.log_fields(
+                    event="document_unreadable", path=str(path), reason=reason
+                ),
+            )
             continue
         docs[name] = doc
         snapshots[target] = doc.snapshot

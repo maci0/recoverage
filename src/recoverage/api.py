@@ -1430,9 +1430,22 @@ def _log_health_status(status: str, reason: str) -> None:
         # Any move INTO a fault, including the first probe of the process,
         # where there is no previous state to have recovered from: the same
         # alert either way.  A healthy first probe is not news.
-        _log.warning("Dashboard health degraded: %s", reason)
+        _log.warning(
+            "Dashboard health degraded: %s",
+            reason,
+            extra=_metrics.log_fields(event="health_status", status=status, reason=reason),
+        )
     elif previous is not None:
-        _log.info("Dashboard health recovered: was %s (%s)", previous[0], previous[1])
+        _log.info(
+            "Dashboard health recovered: was %s (%s)",
+            previous[0],
+            previous[1],
+            extra=_metrics.log_fields(
+                event="health_status",
+                status=status,
+                previous=previous[0],
+            ),
+        )
 
 
 @app.get("/api/health")
@@ -1680,9 +1693,14 @@ def _log_targets_fallback(exc: Exception) -> None:
             "Coverage unavailable reading the target list, falling back to the "
             "config-only list: %s",
             reason,
+            extra=_metrics.log_fields(event="targets_fallback", status="degraded", reason=reason),
         )
     else:
-        _log.info("Target list recovered from the config-only list (was: %s)", previous)
+        _log.info(
+            "Target list recovered from the config-only list (was: %s)",
+            previous,
+            extra=_metrics.log_fields(event="targets_fallback", status="recovered"),
+        )
 
 
 def _clear_targets_fallback() -> None:
@@ -1698,7 +1716,10 @@ def _clear_targets_fallback() -> None:
         if previous is None:
             return
         _targets_fallback_reported = None
-    _log.info("Coverage documents read again; target list is no longer config-only")
+    _log.info(
+        "Coverage documents read again; target list is no longer config-only",
+        extra=_metrics.log_fields(event="targets_fallback", status="recovered"),
+    )
 
 
 @app.get("/api/targets")

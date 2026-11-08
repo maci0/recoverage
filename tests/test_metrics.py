@@ -628,6 +628,16 @@ class TestStats:
         metrics.REQUESTS.finish("/x", 200, 1.0)
         assert metrics.REQUESTS.snapshot()["in_flight"] == 0
 
+    def test_error_rate_is_the_5xx_share_of_finished_requests(self) -> None:
+        assert metrics.REQUESTS.snapshot()["error_rate"] is None
+        metrics.REQUESTS.finish("/x", 200, 1.0)
+        metrics.REQUESTS.finish("/x", 500, 1.0)
+        metrics.REQUESTS.finish("/x", 500, 1.0)
+        metrics.REQUESTS.finish("/x", 404, 1.0)
+        assert metrics.REQUESTS.snapshot()["error_rate"] == 0.5
+        metrics.REQUESTS.reclassify("/x", 404, 503)
+        assert metrics.REQUESTS.snapshot()["error_rate"] == 0.75
+
     def test_reclassify_moves_the_error_to_the_right_bucket(self) -> None:
         metrics.REQUESTS.finish("/api/x", 200, 5.0)
         metrics.REQUESTS.reclassify("/api/x", 200, 503)
