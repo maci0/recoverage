@@ -81,6 +81,7 @@ export type SectionSummary = {
   nearMatchBytes: number;
   stubBytes: number;
   paddingBytes: number;
+  otherBytes: number;
   coveredBytes: number;
   totalFunctions: number;
   size: number | null;

@@ -29,6 +29,7 @@ lazy from types import MappingProxyType
 lazy from urllib.parse import quote, unquote, urlsplit
 
 from bottle import Bottle, HTTPResponse, request, response
+from rebrew.coverage_db import _KNOWN_CELL_STATES as _REBREW_KNOWN_CELL_STATES
 from rebrew.coverage_toml import (
     BUCKET_OF_STATE,
     Cell,
@@ -769,7 +770,7 @@ def decode_query_value(raw: str) -> str:
     """
     try:
         return raw.encode("latin-1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
+    except UnicodeEncodeError, UnicodeDecodeError:
         return raw
 
 
@@ -1547,6 +1548,17 @@ _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
         key=itemgetter(1),
     )
 }
+#: The states rebrew's fold leaves to the ``other`` catch-all: every known
+#: state ``BUCKET_OF_STATE`` does not name.  The catch-all is the else-arm of
+#: rebrew's own ``_bucket_counts`` (``BUCKET_OF_STATE.get(state, "other")``),
+#: so reading it off the same source keeps the byte fold and the cell-count
+#: fold in step by construction rather than by a second hand-written copy.
+#: Without it, ``Section.covered_bytes`` (total-minus-``none``) counted
+#: ``drift``/``compile_error`` bytes while no named byte bucket summed them,
+#: so the served byte figures could not reconcile with ``coveredBytes``.
+#: ``tests/test_server.py`` (``TestBucketReconciliation``) pins the
+#: membership here against the same literal it writes down for the fold.
+_OTHER_BUCKET_STATES: frozenset[str] = frozenset(_REBREW_KNOWN_CELL_STATES - set(BUCKET_OF_STATE))
 #: The buckets ``_section_summary`` reports a count and a byte sum for.  The
 #: other five (``data``, ``thunk``, ``none``, ``proven``, ``size_mismatch``)
 #: contribute covered bytes and nothing else, which is why the summary carries
@@ -1604,6 +1616,7 @@ def _section_summary(section: Any) -> dict[str, Any]:
         for bucket, states in _BUCKET_FOLD.items()
         if bucket in _SUMMARY_COUNTED_BUCKETS
     }
+    other_bytes = sum(bytes_of_state.get(state, 0) for state in _OTHER_BUCKET_STATES)
     counts = {bucket: counts_of[bucket] for bucket in _SUMMARY_COUNTED_BUCKETS}
     total_functions = sum(len(cell.functions) for cell in section.cells if cell.state != "none")
     return {
@@ -1617,6 +1630,7 @@ def _section_summary(section: Any) -> dict[str, Any]:
         "nearMatchBytes": sizes["near_match"],
         "stubBytes": sizes["stub"],
         "paddingBytes": sizes["padding"],
+        "otherBytes": other_bytes,
         "coveredBytes": section.covered_bytes,
         "totalFunctions": total_functions,
         "size": section.size,
@@ -1644,6 +1658,7 @@ def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
     not its cell bytes, because that is the denominator the producer used and
     the number the served key has always carried.
     """
+
     def build() -> dict[str, Any]:
         stats = snap.function_stats
         by_status = stats["by_status"]
@@ -1808,7 +1823,7 @@ def _binary_stamp_at(path: Path | None) -> tuple[int, int, int, int] | None:
         return None
     try:
         st = path.stat()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns
 
@@ -2224,7 +2239,7 @@ def _find_dll_path(target: str) -> Path | None:
     # common case for a stale config.
     try:
         resolved = candidate.resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         # A name the platform cannot resolve at all (a NUL byte) is a
         # refusal, not a path.
         resolved = None

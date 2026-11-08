@@ -3507,10 +3507,45 @@ class TestBucketReconciliation:
             "nearMatchBytes": sizes["near_match"],
             "stubBytes": sizes["stub"],
             "paddingBytes": sizes["padding"],
+            "otherBytes": 0,
             "coveredBytes": covered,
             "totalFunctions": total_functions,
             "size": section.size,
         }
+
+    def test_other_bytes_reconcile_with_covered_bytes(self) -> None:
+        """States in the ``other`` catch-all carry bytes ``coveredBytes`` counts.
+
+        ``Section.covered_bytes`` is total-minus-``none`` while the named
+        byte buckets only sum the states ``BUCKET_OF_STATE`` names, so a
+        ``drift`` or ``compile_error`` cell contributed to ``coveredBytes``
+        and to no named byte sum.  ``otherBytes`` is the byte arm of the same
+        catch-all ``_bucket_row`` already serves for counts.
+        """
+        import recoverage.server as srv
+
+        snap = self._snap(("exact", "drift", "compile_error", "none", "skip"))
+        section = snap.sections[".text"]
+        summary = srv._section_summary(section)
+        assert summary["otherBytes"] == 3
+        assert summary["coveredBytes"] == 4
+        named = sum(
+            summary[k]
+            for k in ("exactBytes", "relocBytes", "nearMatchBytes", "stubBytes", "paddingBytes")
+        )
+        assert (
+            named
+            + summary["otherBytes"]
+            + sum(section.buckets.get(s, 0) for s in ("data", "thunk", "proven", "size_mismatch"))
+            == summary["coveredBytes"]
+        )
+
+    def test_other_bucket_states_are_the_unmapped_known_states(self) -> None:
+        """``_OTHER_BUCKET_STATES`` is the complement of the fold in the known vocabulary."""
+        import recoverage.server as srv
+        from tests.coverage_fixture import known_cell_states
+
+        assert set(srv._OTHER_BUCKET_STATES) == known_cell_states() - set(srv.BUCKET_OF_STATE)
 
     def test_verified_cells_count_as_exact(self) -> None:
         """'verified' is a match, and every surface must agree on that.
