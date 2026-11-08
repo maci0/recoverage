@@ -746,6 +746,10 @@ MIN_TOKEN_BYTES = 32
 #: Calls answered at once; the next is refused 503 with Retry-After.  A map call peaks near 115 MiB.
 DEFAULT_CONCURRENCY = 2
 
+#: Upper bound on simultaneous calls, so a typo reads as a refusal rather
+#: than a worker that admits thousands of 115 MiB calls at once.
+MAX_CONCURRENCY = 64
+
 
 @app.command("serve")
 def serve_command(
@@ -799,9 +803,10 @@ def serve_command(
                 err=True,
             )
             raise typer.Exit(EXIT_ERROR) from None
-        if resolved_concurrency < 1:
+        if not 1 <= resolved_concurrency <= MAX_CONCURRENCY:
             typer.secho(
-                "Error: --concurrency (or RECOVERAGE_OPS_CONCURRENCY) must be at least 1",
+                f"Error: --concurrency (or RECOVERAGE_OPS_CONCURRENCY) must be "
+                f"between 1 and {MAX_CONCURRENCY}",
                 fg=typer.colors.RED,
                 err=True,
             )
@@ -810,7 +815,19 @@ def serve_command(
     # A token that carries surrounding whitespace would never match a
     # stripped bearer header, so refuse it at startup like the dashboard
     # token rather than silently stripping it to a usable value.
-    from recoverage.config import ConfigError, validate_token
+    from recoverage.config import ConfigError, validate_bind, validate_token
+
+    # --port/--host are one setting with the dashboard's RECOVERAGE_PORT/
+    # RECOVERAGE_BIND: without the same floor an out-of-range port or a
+    # host:port/URL spelled as host reaches socket.bind() as a traceback
+    # (OverflowError/gaierror) instead of a startup error naming the flag.
+    try:
+        host = validate_bind(host, "--host")
+        if not 0 <= port <= 65535:
+            raise ConfigError(f"--port: {port} is not in the range 0-65535")
+    except ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_ERROR) from None
 
     raw_token = os.environ.get(TOKEN_ENV)
     try:
