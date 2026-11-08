@@ -44,7 +44,7 @@ try:
 except Exception:
     pytest.skip(
         f"no recoverage server at {BASE_URL} — start one with "
-        f"'uv run recoverage serve --port {urlsplit(BASE_URL).port or 8000}'"
+        f"'uv run --locked --extra dev recoverage serve --port {urlsplit(BASE_URL).port or 8000}'"
         f" (serve defaults to 8001, BASE_URL to {BASE_URL}), or point BASE_URL at it",
         allow_module_level=True,
     )

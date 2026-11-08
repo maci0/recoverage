@@ -124,7 +124,7 @@ start the server on the port the tests ask for (or point `BASE_URL` at the one
 you started):
 
 ```bash
-uv run recoverage serve --port 8787 --no-open   # in another shell
+uv run --locked --extra dev recoverage serve --port 8787 --no-open   # in another shell
 make test-browser
 ```
 
@@ -141,7 +141,7 @@ dev:web`) serves `web/index.html` on `127.0.0.1:5173` and proxies
 `recoverage serve` in another shell for the API half:
 
 ```bash
-uv run recoverage serve --no-open   # 127.0.0.1:8001, the proxy's default
+uv run --locked --extra dev recoverage serve --no-open   # 127.0.0.1:8001, the proxy's default
 make web-dev                        # http://127.0.0.1:5173
 ```
 
