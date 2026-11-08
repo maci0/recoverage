@@ -265,9 +265,6 @@ def warm_index_cache() -> None:
 
 
 # ── Routes ─────────────────────────────────────────────────────────
-#
-# /potato is registered by recoverage.potato, which owns the renderer; only
-# the SPA shell and the static assets below belong to this module.
 
 
 @app.get("/")
@@ -685,13 +682,6 @@ def _asset_etag(filename: str, encoding: str, raw: bytes) -> str:
 
 
 def _not_modified(etag: str) -> HTTPResponse:
-    """The 304 every revalidating surface answers: the shell, the packaged
-    assets, and the ``/src``/``original`` file trees.
-
-    One body, so one answer: a change to the ETag contract reaches all of them
-    at once, which is why they share this rather than each building the same
-    headers.
-    """
     return HTTPResponse(
         status=304,
         headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},

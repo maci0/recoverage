@@ -131,13 +131,7 @@ class _RouteRow:
 
 @dataclass
 class _CacheRow:
-    """One cache's hit and miss counters.
-
-    A dataclass for the reason :class:`_RouteRow` gives: the row is written
-    and read by name, and a list addressed by a bare column index type-checks
-    just as well while a swapped index inverts every hit rate an operator
-    reads.
-    """
+    """One cache's hit and miss counters."""
 
     hits: int = 0
     misses: int = 0

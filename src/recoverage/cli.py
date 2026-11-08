@@ -485,13 +485,7 @@ def _expanduser_path(raw: str, *, as_json: bool) -> Path:
 
 
 def _pin_utf8(stream: IO[str], errors: str) -> None:
-    """Reconfigure *stream* to encode UTF-8, whatever the locale's codec is.
-
-    One implementation for the two operator-facing streams, because they fail
-    the same way and only differ in what they do with a character the target
-    encoding cannot hold: stdout has to be readable (a piped value is parsed by
-    whatever reads it next), stderr only has to stay one line per warning.
-    """
+    """Reconfigure *stream* to encode UTF-8, whatever the locale's codec is."""
     encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
     if encoding == "utf8" and errors == "strict":
         return
