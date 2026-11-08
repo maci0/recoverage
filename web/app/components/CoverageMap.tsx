@@ -130,6 +130,11 @@ export type CoverageMapProps = {
   onGridReady?: (focusCell: (index: number) => void) => void;
   /** Clear the status filter, from the caption that says it hid the map. */
   onClearFilters?: (() => void) | undefined;
+  /** Clear the search, from the caption that says it hid the map. Offered
+   * when the search is the (or a) rule dimming the lattice: a caption naming
+   * both rules but offering only one way back leaves the reader who armed
+   * both with no button for the second. */
+  onClearSearch?: (() => void) | undefined;
 };
 
 type GridState = {
@@ -154,6 +159,7 @@ export function CoverageMap({
   onSelect,
   onGridReady,
   onClearFilters,
+  onClearSearch,
 }: CoverageMapProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -629,6 +635,11 @@ export function CoverageMap({
             {filters.size > 0 && onClearFilters !== undefined && (
               <Button size="sm" onClick={onClearFilters}>
                 Clear filter
+              </Button>
+            )}
+            {matchedFns !== null && onClearSearch !== undefined && (
+              <Button size="sm" onClick={onClearSearch}>
+                Clear search
               </Button>
             )}
           </p>

@@ -43,6 +43,11 @@ export type CoveragePanelProps = {
   /** Resolve a parent reference (hexadecimal VA or legacy name) for navigation. */
   parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
+  /** Dismiss the open selection, returning the panel to its hint. The map's
+   * click-again and Escape already close it, but neither is discoverable from
+   * the panel itself, so the panel carries its own affordance beside the
+   * copy controls. */
+  onClose?: (() => void) | undefined;
   /** Take the panel out of the flow below `lg`, where it stacks under the
    * map. Beside the map (`lg` and up) it stays, since nothing above it moves. */
   hiddenWhenStacked: boolean;
@@ -460,6 +465,7 @@ export function CoveragePanel({
   target,
   parentVaFor,
   onJumpToAddress,
+  onClose,
   hiddenWhenStacked,
 }: CoveragePanelProps): ComponentChildren {
   const [modal, setModal] = useState<{
@@ -563,6 +569,17 @@ export function CoveragePanel({
                   ariaLabel="Copy SHA256"
                   title="Copy the function's full SHA256 digest"
                 />
+              )}
+              {onClose !== undefined && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close block detail"
+                  title="Close this block's detail"
+                  onClick={onClose}
+                >
+                  <Icon name="x" />
+                </Button>
               )}
             </div>
           </div>

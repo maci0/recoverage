@@ -200,16 +200,42 @@ export function App() {
   const sectionTabRef = useRef<HTMLDivElement | null>(null);
 
   // A notice that is a result rather than a state: a jump that found no
-  // block, a regen that finished. It expires on its own. A notice that IS the
-  // state (a regen in flight, a failure) is set directly and stays until
-  // something replaces it.
-  const flash = useCallback((text: string) => {
-    setNotice(text);
+  // block, a search that matched nothing. It expires on its own. A notice
+  // that IS the state (a regen in flight, a failure) is set directly and
+  // stays until something replaces it.
+  const cancelFlashTimer = useCallback((): void => {
     if (noticeTimer.current !== null) {
       window.clearTimeout(noticeTimer.current);
+      noticeTimer.current = null;
     }
-    noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
   }, []);
+
+  const flash = useCallback(
+    (text: string) => {
+      cancelFlashTimer();
+      setNotice(text);
+      noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+    },
+    [cancelFlashTimer],
+  );
+
+  // The finished regen is the one result the reader clicked and waited
+  // minutes for, so it does not expire unseen: the reader is looking at the
+  // map when it lands, not at the toast. It stays until dismissed or until
+  // the next notice replaces it, and the toast carries the dismiss control
+  // beside it.
+  const flashPersistent = useCallback(
+    (text: string) => {
+      cancelFlashTimer();
+      setNotice(text);
+    },
+    [cancelFlashTimer],
+  );
+
+  const dismissNotice = useCallback((): void => {
+    cancelFlashTimer();
+    setNotice(null);
+  }, [cancelFlashTimer]);
 
   // The pending expiry is cancelled on unmount. It is the one timer here with
   // no other stop path: `flash` clears its predecessor, but the last one
@@ -907,7 +933,7 @@ export function App() {
     enabled: targetReady && loadError === null,
     onDbUpdated,
     onNotice: setNotice,
-    onDone: flash,
+    onDone: flashPersistent,
   });
 
   // Potato Mode reads `search` and a comma-joined `filter`, so the link carries
@@ -1271,17 +1297,29 @@ export function App() {
               viewport rather than sitting above the map: in the flow it pushed
               the map down when it arrived and pulled it back up four seconds
               later, under a reader who was reading it. */}
-          <p
+          <div
             className={
               notice === null
                 ? "sr-only"
-                : "fixed inset-x-4 bottom-4 z-30 mx-auto max-w-prose rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text shadow-lift"
+                : "fixed inset-x-4 bottom-4 z-30 mx-auto flex max-w-prose items-center gap-3 rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text shadow-lift"
             }
             role="status"
             aria-live="polite"
           >
-            {notice ?? ""}
-          </p>
+            <span className="min-w-0">{notice ?? ""}</span>
+            {notice !== null && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0"
+                aria-label="Dismiss notice"
+                title="Dismiss"
+                onClick={dismissNotice}
+              >
+                <Icon name="x" />
+              </Button>
+            )}
+          </div>
           {/* Over a map that is still drawn, a failed reload is a line above
               it. With no map, the map area itself carries the failure and its
               Retry, and a second copy here would say it twice. */}
@@ -1326,6 +1364,11 @@ export function App() {
               theme={theme}
               onSelect={onGridSelect}
               onClearFilters={() => toggleFilter("all")}
+              onClearSearch={() => {
+                setQuery("");
+                setResultsOpen(false);
+                setActiveResult(null);
+              }}
               onGridReady={(focus) => {
                 gridFocus.current = focus;
               }}
@@ -1356,6 +1399,7 @@ export function App() {
             target={target}
             parentVaFor={parentVaFor}
             onJumpToAddress={jumpToAddress}
+            onClose={() => setSelectedIndex(null)}
             hiddenWhenStacked={mapPending || holdMapArea}
           />
         )}
@@ -1431,6 +1475,7 @@ function MapArea({
   onSelect,
   onGridReady,
   onClearFilters,
+  onClearSearch,
 }: MapAreaProps): ComponentChildren {
   if (noTargets && unreadable.length > 0) {
     const one = unreadable.length === 1;
@@ -1547,6 +1592,7 @@ function MapArea({
       onSelect={onSelect}
       onGridReady={onGridReady}
       onClearFilters={onClearFilters}
+      onClearSearch={onClearSearch}
     />
   );
 }
