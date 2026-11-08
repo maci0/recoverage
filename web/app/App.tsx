@@ -37,13 +37,13 @@ import { Icon } from "@/system/icons/Icon";
 
 const TARGET_KEY = "recoverage_target";
 const THEME_KEY = "recoverage_theme";
-const NAV_NOTICE_MS = 4000;
+const NAV_NOTICE_MS = 10_000;
 /** How many matches the result list shows before it says how many it left out.
  * A target-wide term can match thousands of names, and the list is there to be
  * scanned, not to be a second index: past the cap it narrows the term. */
 const SEARCH_RESULT_LIMIT = 20;
-/** A notice being hovered or focused keeps its expiry paused: four seconds is
- * time to glance at a toast, not to read a miss and reach for dismiss.
+/** A notice being hovered or focused keeps its expiry paused: ten seconds is
+ * time to read a miss and reach for dismiss, not merely to glance at a toast.
  * The expiry restarts when the reader leaves. */
 const NOTICE_PAUSE_MS = 20_000;
 
@@ -934,7 +934,7 @@ export function App() {
    * actually holds: the list when `/api/targets` was refused, everything
    * otherwise. */
   const retryFailedLoad = useCallback((): void => {
-    if (loadError !== null) {
+    if (loadError !== null || targets.length === 0) {
       if (targetsControl.current === null) {
         targetsControl.current = new AbortController();
       }
@@ -942,7 +942,7 @@ export function App() {
       return;
     }
     coverage.reload();
-  }, [coverage, loadError, loadTargets]);
+  }, [coverage, loadError, loadTargets, targets.length]);
 
   /** What a rebuild refreshes: the target list as well as the map. A rebuild
    * can add a target, and the first live read beside an empty
@@ -971,6 +971,18 @@ export function App() {
     () => potatoUrl({ target, section, search: query, filters }),
     [filters, query, section, target],
   );
+
+  // The Regenerate button's name and reason, hoisted out of the JSX so the
+  // two do not nest: busy first, then the portable refusal, then the run.
+  let regenLabel = "Regenerate coverage data";
+  let regenTitle = "Re-run the coverage analysis. Takes minutes.";
+  if (busy) {
+    regenLabel = MSG.REGEN_IN_PROGRESS;
+    regenTitle = MSG.REGEN_IN_PROGRESS;
+  } else if (portable) {
+    regenLabel = "Regenerate coverage data (unavailable in portable mode)";
+    regenTitle = "Unavailable: this dashboard serves read-only portable snapshots.";
+  }
 
   /** What the map area is doing, for the live region above it. A section
    * switch and a lazy cell load both replace the canvas with no focusable
@@ -1254,19 +1266,17 @@ export function App() {
               // "Regenerate" leads the accessible name (WCAG 2.5.3), and it is
               // the honest name for what the click runs: rebrew's catalog
               // analysis, for minutes at a time.
-              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
-              title={
-                busy
-                  ? MSG.REGEN_IN_PROGRESS
-                  : portable
-                    ? "Unavailable: this dashboard serves read-only portable snapshots."
-                    : "Re-run the coverage analysis. Takes minutes."
-              }
+              aria-label={regenLabel}
+              title={regenTitle}
               // Under a minute-scale run the button must leave the tab order
               // while keeping a visible busy state: a keep-focusable button
               // invites a second click and a second pipeline, and the
               // progress is announced by the topbar status, not by focus.
-              disabled={busy}
+              // In portable mode the server always refuses the run, so the
+              // button is disabled rather than inviting a click that can only
+              // fail: it stays visible (no layout shift) and the title names
+              // why it is off.
+              disabled={busy || portable}
               onClick={reload}
             >
               {busy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
@@ -1404,6 +1414,8 @@ export function App() {
               portable={portable}
               loadError={failure}
               onRetry={retryFailedLoad}
+              onRegenerate={reload}
+              regenBusy={busy}
               filters={filters}
               matchedFns={matchedFns}
               selectedIndex={selectedIndex}
@@ -1502,6 +1514,10 @@ type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
   loadError: string | null;
   /** Re-run the read behind `loadError`. */
   onRetry: () => void;
+  /** Run the coverage analysis from an empty state, where the topbar button is not in reach. */
+  onRegenerate: () => void;
+  /** Whether a regen is in flight, which disables the empty state's button. */
+  regenBusy: boolean;
   onGridReady: (focus: (index: number) => void) => void;
 };
 
@@ -1516,6 +1532,8 @@ function MapArea({
   portable,
   loadError,
   onRetry,
+  onRegenerate,
+  regenBusy,
   filters,
   matchedFns,
   selectedIndex,
@@ -1543,6 +1561,9 @@ function MapArea({
           Fix the reported project inputs or selected offline snapshots.
           The map opens when coverage can be read.
         </p>
+        <Button size="sm" onClick={onRetry}>
+          Retry
+        </Button>
       </div>
     );
   }
@@ -1554,6 +1575,9 @@ function MapArea({
           Check the project configuration and target binaries, or the selected offline
           snapshots. Project input changes refresh the view automatically.
         </p>
+        <Button size="sm" onClick={onRetry}>
+          Retry
+        </Button>
       </div>
     );
   }
@@ -1576,6 +1600,9 @@ function MapArea({
         <p className="m-0 max-w-prose">
           Fix the reported project inputs or selected offline snapshot.
         </p>
+        <Button size="sm" onClick={onRetry}>
+          Retry
+        </Button>
       </div>
     );
   }
@@ -1594,8 +1621,13 @@ function MapArea({
         <p className="m-0 max-w-prose">
           {portable
             ? "This dashboard serves read-only portable snapshots, so this target cannot be built from here. Point the server at a live project to run the analysis."
-            : "This target has no coverage yet — either its first build has not run, or this section holds no blocks. Use Regenerate in the topbar to run the analysis now."}
+            : "This target has no coverage yet — either its first build has not run, or this section holds no blocks. Use Regenerate to run the analysis now."}
         </p>
+        {!portable && (
+          <Button size="sm" disabled={regenBusy} onClick={onRegenerate}>
+            {regenBusy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
+          </Button>
+        )}
       </div>
     );
   }
