@@ -3482,10 +3482,14 @@ def _similarity_pct(fraction: Any) -> str | None:
     ``pct_1dp`` reaches ``math.floor`` (which raises on NaN), while a bare
     format would have printed a literal "nan%".  The callers fall back to the
     generic detail-row rendering, which shows the stored value unchanged.
+    A fraction far outside 0..1 (e.g. 5) is judged here rather than printed
+    as "500.0%", a percentage that cannot describe a fraction.
     """
     if isinstance(fraction, bool) or not isinstance(fraction, int | float):
         return None
     if not math.isfinite(fraction):
+        return None
+    if not 0.0 <= fraction <= 1.0:
         return None
     return f"{pct_1dp(fraction * 100):.1f}%"
 

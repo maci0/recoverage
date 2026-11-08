@@ -243,12 +243,15 @@ def _prune(root: Path) -> None:
     that one says the whole cache directory is unusable and the write
     genuinely is not landing.
     """
-    now = clock.wall_time()
     # Integer nanoseconds, not the float ``st_mtime``: the rest of the package
     # keys on ``st_mtime_ns`` (see ``server.mtime_ns_to_utc``), and a float
     # second cannot hold that nanosecond, so the stale boundary would depend
-    # on the magnitude of the stamp rather than on the age alone.
-    now_ns = int(now * 1_000_000_000)
+    # on the magnitude of the stamp rather than on the age alone.  The
+    # seconds and the sub-second remainder are split with divmod so the
+    # conversion stays exact (``int(now * 1e9)`` rounds the last ~256 ns
+    # at present-day magnitudes from the float's 53-bit mantissa).
+    seconds, remainder = divmod(clock.wall_time(), 1.0)
+    now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
     slots: list[tuple[int, Path]] = []
     try:
         entries = list(root.iterdir())

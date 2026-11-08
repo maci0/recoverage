@@ -2051,7 +2051,20 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
     parsed: float | None = None
     if whole and not (dot and not frac) and "." not in frac:
         try:
-            parsed = float(f"{sign}{parse_ascii_int(whole)}.{parse_ascii_int(frac) if frac else 0}")
+            # Build the value from integers rather than ``float("...")`` on
+            # the joined string: the string form round-trips through a
+            # binary float, so 0.00000000000000000000000000001 (5e-29) read
+            # back as 0.1 -- a gate of ~0% that passes everything -- and a
+            # 40-digit whole part overflowed to 1e40 instead of missing the
+            # 0..100 range check as a clean usage error.
+            whole_int = parse_ascii_int(whole)
+            frac_int = parse_ascii_int(frac) if frac else 0
+            scale = 10**len(frac) if frac else 1
+            parsed = whole_int + frac_int / scale if frac else float(whole_int)
+            if sign == "-":
+                parsed = -parsed
+            if not (0.0 <= parsed <= 100.0):
+                parsed = None
         except ValueError:
             parsed = None
     if parsed is None:
