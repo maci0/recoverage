@@ -478,15 +478,19 @@ def _verify_archive(path: Path) -> tuple[BackupInfo, dict[str, bytes]]:
     manifest, members = _read_archive(path)
     described: list[tuple[str, int, str]] = []
     for entry in manifest["members"]:
-        name = entry["name"]
-        data = members.get(name)
+        if not isinstance(entry, dict):
+            raise BackupError(f"{path}: manifest member {entry!r} is not an object")
+        name = entry.get("name")
+        data = members.get(name) if isinstance(name, str) else None
         if data is None:
             raise BackupError(f"{path}: manifest names {name}, which the archive does not hold")
+        if "size" not in entry or "sha256" not in entry:
+            raise BackupError(f"{path}: member {name} is missing size or sha256 in the manifest")
         size = entry["size"]
         digest = _digest(data)
-        if not isinstance(size, int) or len(data) != size:
+        if not isinstance(size, int) or isinstance(size, bool) or len(data) != size:
             raise BackupError(f"{path}: {name} is {len(data)} bytes, manifest says {size!r}")
-        if digest != entry["sha256"]:
+        if not isinstance(entry["sha256"], str) or digest != entry["sha256"]:
             raise BackupError(
                 f"{path}: {name} does not match its manifest digest "
                 f"({digest[:12]}…, manifest {str(entry['sha256'])[:12]}…); the backup is corrupt"

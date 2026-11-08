@@ -5720,6 +5720,97 @@ class TestPersistedParseCache:
         )
 
 
+class TestBackupArchiveBytes:
+    """A tar that is not a recoverage backup is refused as one, never crashes."""
+
+    def _archive(self, members: list[tuple[str, bytes]], manifest: bytes) -> bytes:
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            for name, payload in [*members, ("manifest.json", manifest)]:
+                info = tarfile.TarInfo(name)
+                info.size = len(payload)
+                info.mode = 0o600
+                info.mtime = 0
+                tar.addfile(info, io.BytesIO(payload))
+        return buf.getvalue()
+
+    def test_no_archive_escapes_as_anything_but_backup_error(self, tmp_path: Path) -> None:
+        import hashlib
+
+        from recoverage import backup
+
+        data = b"seed coverage bytes for the backup campaign"
+        digest = hashlib.sha256(data).hexdigest()
+        good_manifest = json.dumps(
+            {
+                "format": 1,
+                "created": "2026-01-01T00:00:00+00:00",
+                "members": [{"name": "coverage-A.toml", "size": len(data), "sha256": digest}],
+            }
+        ).encode()
+        good = self._archive([("coverage-A.toml", data)], good_manifest)
+        truncated = good[: len(good) // 2]
+        wrong_digest = self._archive(
+            [("coverage-A.toml", data)],
+            json.dumps(
+                {
+                    "format": 1,
+                    "created": "x",
+                    "members": [{"name": "coverage-A.toml", "size": len(data), "sha256": "0" * 64}],
+                }
+            ).encode(),
+        )
+        missing_size = self._archive(
+            [("coverage-A.toml", data)],
+            b'{"format":1,"created":"x","members":[{"name":"coverage-A.toml"}]}',
+        )
+        missing_digest = self._archive(
+            [("coverage-A.toml", data)],
+            json.dumps(
+                {"format": 1, "created": "x", "members": [{"name": "coverage-A.toml", "size": len(data)}]}
+            ).encode(),
+        )
+        string_member = self._archive(
+            [("coverage-A.toml", data)],
+            b'{"format":1,"created":"x","members":["coverage-A.toml"]}',
+        )
+        seeds = [good, truncated, wrong_digest, missing_size, missing_digest, string_member]
+
+        def check(raw: bytes) -> None:
+            path = tmp_path / "candidate.tar"
+            path.write_bytes(raw)
+            try:
+                info = backup.verify_backup(path)
+            except backup.BackupError:
+                return
+            manifest, members = backup._read_archive(path)
+            assert info.members, f"{raw[:40]!r}: verified with no members"
+            for name, size, sha256 in info.members:
+                assert members[name] is not None and len(members[name]) == size
+                assert hashlib.sha256(members[name]).hexdigest() == sha256
+
+        _fuzz(
+            seeds,
+            check,
+            iterations=150,
+            struct_tokens=(
+                good_manifest,
+                b'"size": 999',
+                b'"sha256": "0"',
+                b'"members": []',
+                b'"format": 99',
+                b"coverage-A.toml",
+                b"manifest.json",
+                b"\x00",
+            ),
+            num_tokens=(b"0", b"1", b"-1", b"99999999999999999999", b"1.5", b"true"),
+            label="TestBackupArchiveBytes.test_no_archive_escapes_as_anything_but_backup_error",
+        )
+
+
 class TestCampaignSeeds:
     """One run seed determines the whole run; each campaign owns its stream.
 
