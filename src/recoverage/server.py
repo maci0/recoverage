@@ -55,7 +55,7 @@ from recoverage import clock, config, metrics
 from recoverage.config import _ASCII_DIGITS, parse_ascii_int, strip_sign  # noqa: F401 — re-exported
 from recoverage.reporting import coverage_pct, pct_1dp  # noqa: F401 — re-exported
 lazy from recoverage._paths import config_fingerprint, coverage_source
-lazy from recoverage.documents import COVERAGE_GLOB, load_all, unreadable, versions
+lazy from recoverage.documents import COVERAGE_GLOB, load_all, snapshot_set, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -1240,10 +1240,12 @@ def unreadable_documents() -> list[dict[str, str]]:
     broken document beside good ones drops its target from every list without
     a word, so the surfaces that list targets name these beside them.
     """
-    return [
-        {"file": name, "target": target, "error": reason}
-        for name, target, reason in unreadable(coverage_source())
-    ]
+    return _unreadable_rows(snapshot_set(coverage_source())[1])
+
+
+def _unreadable_rows(rows: tuple[tuple[str, str, str], ...]) -> list[dict[str, str]]:
+    """Shape :func:`documents.snapshot_set` unreadable rows for the wire."""
+    return [{"file": name, "target": target, "error": reason} for name, target, reason in rows]
 
 
 def target_key(target: str) -> str:
@@ -1297,14 +1299,14 @@ def coverage_for(target: str) -> CoverageSnapshot:
     request on a case-sensitive host, never pays for it.
     """
     target = unicodedata.normalize("NFC", target)
-    snapshots = load_all(coverage_source())
+    snapshots, unreadable_rows, _versions = snapshot_set(coverage_source())
     snapshot = snapshots.get(target)
     if snapshot is not None:
         return snapshot
-    # Only the miss path pays for the failure list: unreadable() re-reads the
-    # same state load_all just returned, so building it on every hit (the
+    # Only the miss path pays for the failure list: it is read off the same
+    # state the snapshots came from, so building it on every hit (the
     # common case) was pure redundant work per request.
-    failures = unreadable_documents()
+    failures = _unreadable_rows(unreadable_rows)
     failed = next((row for row in failures if row["target"] == target), None)
     if failed is not None:
         raise CoverageTomlError(f"{target}: {failed['error']}")
@@ -1749,7 +1751,18 @@ def binary_stamp(target: str) -> tuple[int, int, int, int] | None:
     The stat is what keys the byte memo, the disassembly memo and those
     routes' validators on the binary itself.
     """
-    path = _find_dll_path(target)
+    return _binary_stamp_at(_find_dll_path(target))
+
+
+def _binary_stamp_at(path: Path | None) -> tuple[int, int, int, int] | None:
+    """Stat *path* into a binary stamp, None when there is no file to stat.
+
+    :func:`binary_stamp` and :func:`_load_dll` both resolve the target's
+    binary path and stat it; calling the public wrapper from the loader
+    resolved the path twice per request (a config stat plus a
+    ``Path.resolve()`` each time), so the loader reuses the path it already
+    holds through this helper instead.
+    """
     if path is None:
         return None
     try:
@@ -2282,7 +2295,8 @@ def _load_dll(target: str) -> bytes | None:
         config_fingerprint(_project_dir()),
         _snapshot_db_mtime() if config.snapshot_override() is not None else None,
     )
-    stamp = binary_stamp(target)
+    dll_path = _find_dll_path(target)
+    stamp = _binary_stamp_at(dll_path)
     with DLL_LOCK:
         if config_fp != _DLL_CONFIG_MTIME:
             _DLL_CONFIG_MTIME = config_fp
@@ -2290,7 +2304,6 @@ def _load_dll(target: str) -> bytes | None:
             _DLL_STAMPS.clear()
         elif target in DLL_DATA and _stamp_current(target, stamp):
             return DLL_DATA[target]
-    dll_path = _find_dll_path(target)
     if dll_path is None:
         return _cache_dll_unavailable(
             target,

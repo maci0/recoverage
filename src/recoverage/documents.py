@@ -395,8 +395,51 @@ def load_all(db_dir: Path) -> Mapping[str, CoverageSnapshot]:
     a directory with no document, one unreadable document skipped with a
     warning naming it, and THE SAME mapping for an unchanged directory.
     """
+    return snapshot_set(db_dir)[0]
+
+
+def snapshot_set(
+    db_dir: Path,
+) -> tuple[
+    Mapping[str, CoverageSnapshot],
+    tuple[tuple[str, str, str], ...],
+    tuple[tuple[str, str, int], ...],
+]:
+    """One read of *db_dir*: snapshots, unreadable rows, content versions.
+
+    The three readers below each re-read the directory state on their own:
+    in live mode that is a ``load_project_coverage`` poll per call (stat of
+    the config plus every input fingerprint walk), and in portable mode a
+    ``glob`` plus ``stat`` per document per call.  A handler that needs two
+    of the three (``/api/targets``, ``/api/health``) paid that walk two or
+    three times per request for one build's data.  One call here returns all
+    three from the same state, so the answers cannot straddle a rebuild.
+    """
     project = _project_view(db_dir)
-    return project.snapshots if project is not None else _current(db_dir)[3]
+    if project is not None:
+        return (
+            project.snapshots,
+            tuple(
+                ("rebrew-project.toml", target, reason)
+                for target, reason in sorted(project.failures.items())
+            ),
+            project.versions,
+        )
+    _dir, key, docs, snapshots, failures = _current(db_dir)
+    unreadable_rows = tuple(
+        (name, unicodedata.normalize("NFC", name[len(_PREFIX) : -len(_SUFFIX)]), reason)
+        for name, reason in sorted(failures.items())
+    )
+    version_rows = tuple(
+        (
+            name,
+            doc.digest if doc else f"stat:{mtime_ns}:{size}:{ino}:{ctime_ns}",
+            size,
+        )
+        for name, mtime_ns, size, ino, ctime_ns in key
+        for doc in (docs.get(name),)
+    )
+    return snapshots, unreadable_rows, version_rows
 
 
 def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
@@ -409,16 +452,7 @@ def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
     payload names.  It is document-derived text (a parse error can quote a
     value), so a caller renders it as text, never as markup.
     """
-    project = _project_view(db_dir)
-    if project is not None:
-        return tuple(
-            ("rebrew-project.toml", target, reason)
-            for target, reason in sorted(project.failures.items())
-        )
-    return tuple(
-        (name, unicodedata.normalize("NFC", name[len(_PREFIX) : -len(_SUFFIX)]), reason)
-        for name, reason in sorted(_current(db_dir)[4].items())
-    )
+    return snapshot_set(db_dir)[1]
 
 
 def versions(db_dir: Path) -> tuple[tuple[str, str, int], ...]:
@@ -432,15 +466,7 @@ def versions(db_dir: Path) -> tuple[tuple[str, str, int], ...]:
     answer.  Read off the same state :func:`load_all` returns, so a version
     and the snapshot built from those bytes cannot come from two reads.
     """
-    project = _project_view(db_dir)
-    if project is not None:
-        return project.versions
-    _dir, key, docs, _snapshots, _unreadable = _current(db_dir)
-    out: list[tuple[str, str, int]] = []
-    for name, mtime_ns, size, ino, ctime_ns in key:
-        doc = docs.get(name)
-        out.append((name, doc.digest if doc else f"stat:{mtime_ns}:{size}:{ino}:{ctime_ns}", size))
-    return tuple(out)
+    return snapshot_set(db_dir)[2]
 
 
 def _current(db_dir: Path) -> _State:
