@@ -405,7 +405,11 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
                 handle = tar.extractfile(member)
                 if handle is None:  # pragma: no cover - getmembers/isfile agree
                     continue
-                payload = handle.read(_MAX_MEMBER_BYTES + 1)
+                # extractfile returns a file-like (ExFileObject) that is not
+                # closed by leaving the tar; closing it releases the archive's
+                # underlying descriptor on this cold CLI path per member.
+                with handle:
+                    payload = handle.read(_MAX_MEMBER_BYTES + 1)
                 # The header sized the read above; a member that delivers more
                 # than it declared is a truncated-then-appended stream, and
                 # taking only the declared count would verify a prefix of the
