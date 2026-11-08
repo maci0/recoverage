@@ -495,12 +495,16 @@ class TestApiHealth:
     """Test /api/health returns valid JSON."""
 
     def test_health_returns_200(self) -> None:
+        from recoverage import __version__
+
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
-        assert "version" in data
-        assert "db" in data
-        assert "extras" in data
+        assert data["version"] == __version__
+        assert isinstance(data["db"], dict) and "exists" in data["db"]
+        assert isinstance(data["extras"], dict)
+        assert set(data["extras"]) == {"capstone", "pygments"}
+        assert data["status"] in {"healthy", "degraded"}
 
     def test_health_has_security_headers(self) -> None:
         _status, headers, _ = wsgi_get("/api/health")
@@ -7013,9 +7017,19 @@ class TestIndexWarmup:
 
         # An inflated payload stands in for a future shell that does not fit,
         # measured exactly as _check_payload_budget measures the real one: the
-        # smallest of the three static encodings.  Random bytes, not a run of
-        # one character, which every codec would compress back to nothing.
-        inflated = ui.CACHED_INDEX_PAYLOAD + os.urandom(120_000)
+        # smallest of the three static encodings.  Deterministic pseudo-random
+        # bytes (a linear congruential generator over the payload hash), not
+        # a run of one character, which every codec would compress back to
+        # nothing — seeded so the overage is reproducible run to run.
+        seed = int.from_bytes(
+            __import__("hashlib").sha256(ui.CACHED_INDEX_PAYLOAD).digest()[:8], "little"
+        )
+        pseudo = bytearray(120_000)
+        state = seed
+        for i in range(len(pseudo)):
+            state = (state * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+            pseudo[i] = (state >> 56) & 0xFF
+        inflated = ui.CACHED_INDEX_PAYLOAD + bytes(pseudo)
         best = min(
             len(gzip.compress(inflated, compresslevel=GZIP_STATIC_LEVEL)),
             len(brotli.compress(inflated, quality=BROTLI_STATIC_QUALITY)),

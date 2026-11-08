@@ -187,9 +187,11 @@ class TestColorOptOut:
 
 class TestVersionFlag:
     def test_version_prints_version(self) -> None:
+        from recoverage import __version__
+
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "recoverage" in result.output
+        assert result.output.strip() == f"recoverage {__version__}"
 
     def test_version_falls_back_to_the_module_constant(self) -> None:
         """`--version` answers from the tree's own version when metadata is gone.
@@ -625,6 +627,8 @@ class TestExportCommand:
         assert "--format csv" in result.output
 
     def test_export_csv_format(self) -> None:
+        from recoverage.reporting import CSV_HEADER
+
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
         reader = csv.reader(io.StringIO(result.output))
@@ -633,16 +637,27 @@ class TestExportCommand:
         # satisfied by an export that emitted a single section.
         assert len(rows) == 3
         header = rows[0]
-        assert "target" in header
-        assert "section" in header
-        assert "coverage_pct" in header
+        assert header == list(CSV_HEADER), (
+            f"CSV header drifted from reporting.CSV_HEADER: {header!r} vs {CSV_HEADER!r}"
+        )
         assert {r[header.index("section")] for r in rows[1:]} == {".text", ".data"}
+        assert all(r[header.index("target")] == "FAKEDLL" for r in rows[1:]), rows[1:]
+        assert all(len(r) == len(header) for r in rows), rows
 
     def test_export_md_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "md"])
         assert result.exit_code == 0
-        assert "| Section |" in result.output
-        assert "|------" in result.output
+        lines = [line for line in result.output.splitlines() if line.strip()]
+        header = next(line for line in lines if line.startswith("| Section |"))
+        assert header == "| Section | Size | Cells | EXACT | RELOC | NEAR | STUB | Coverage |", (
+            f"Markdown header drifted: {header!r}"
+        )
+        separator = lines[lines.index(header) + 1]
+        assert separator == "|---------|-----:|------:|------:|------:|-----:|-----:|---------:|", (
+            f"Markdown separator drifted: {separator!r}"
+        )
+        sections = [line.split("|")[1].strip() for line in lines if line.startswith("| .")]
+        assert sections == [".text", ".data"], f"Markdown sections wrong: {sections!r}"
 
     def test_export_md_column_counts_match_header(self) -> None:
         """Every Markdown data row must have as many cells as the header."""
