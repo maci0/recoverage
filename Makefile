@@ -288,7 +288,7 @@ check-bundle-clean: web-build
 # committed one as stale.
 web-build: ensure-bun
 	@$(SET_STRICT) \
-	export LC_ALL=C TZ=UTC; \
+	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
 	umask 022; \
 	bun install --frozen-lockfile; \
 	bun run build:web

@@ -778,6 +778,10 @@ class TestReproducibleBuild:
         recipe = _MAKEFILE.split("\nweb-build:", 1)[1].split("\n\n", 1)[0]
         for var in ("LC_ALL=C", "TZ=UTC"):
             assert var in recipe, f"the bundle recipe does not export {var}"
+        assert 'SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)"' in recipe, (
+            "the bundle recipe does not export SOURCE_DATE_EPOCH, so a "
+            "bundler that honors it embeds the wall clock instead of the commit"
+        )
         assert "bun run build:web" in recipe, "the bundle recipe no longer builds the bundle"
 
     def test_the_two_build_step_clears_what_it_extracts_into(self) -> None:
