@@ -223,7 +223,14 @@ _PERCENT_SIGN: Final = "%"
 #: it would refuse a real binding on a host with no other route to that
 #: network.  :func:`validate_bind` therefore checks the percent sign on its
 #: own, and only on the values this set does not already cover.
-_NOT_IN_AN_ADDRESS: Final = frozenset("@\\/?#")
+#:
+#: The shell metacharacters are in this set for the Windows browser opener
+#: (``cli.open_browser`` launches ``cmd /c start`` with the dashboard URL
+#: built from this value): a ``&``, ``%`` or ``"`` in the host would be
+#: interpreted by ``cmd``, not by the URL parser, so a bind value carrying
+#: one executed a second command.  No hostname or address carries any of
+#: them either, so refusing them costs no real binding.
+_NOT_IN_AN_ADDRESS: Final = frozenset("@\\/?#\"&|<>^`' \t;()[]{}!$*~")
 
 
 class RecoError(Exception):
