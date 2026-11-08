@@ -4,8 +4,10 @@ from __future__ import annotations
 
 lazy from pathlib import Path
 
+from recoverage.config import RecoError
 
-class RegenError(RuntimeError):
+
+class RegenError(RecoError, RuntimeError):
     """A live coverage refresh could not produce every configured target."""
 
     def __init__(self, message: str, exit_code: int = 1) -> None:

@@ -74,6 +74,7 @@ lazy import tarfile
 lazy import tempfile
 lazy from typing import Any, Final
 
+from recoverage.config import RecoError
 lazy from recoverage import clock
 lazy from recoverage.documents import COVERAGE_GLOB
 
@@ -132,7 +133,7 @@ _MAX_MEMBER_BYTES: Final = 1 << 30
 _MAX_ARCHIVE_BYTES: Final = 1 << 30
 
 
-class BackupError(RuntimeError):
+class BackupError(RecoError, RuntimeError):
     """A backup could not be taken, verified, or restored.
 
     One class for both directions: the caller reports the message and exits

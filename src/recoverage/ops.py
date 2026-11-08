@@ -52,6 +52,7 @@ import typer
 lazy from rebrew.coverage_toml import CoverageTomlError
 lazy from rebrew.workspace import CONFIG_NAME
 
+from recoverage.config import RecoError
 lazy from recoverage import reporting
 lazy from recoverage._paths import project_override
 
@@ -83,7 +84,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ALLOWED_HOST = re.compile(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?")
 
 
-class OpsError(Exception):
+class OpsError(RecoError):
     """A refusal: a detail safe to show, a stable code, and an HTTP status."""
 
     def __init__(self, detail: str, *, code: str = ENGINE_ERROR, status: int = 500) -> None:
@@ -720,6 +721,21 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
     except Exception:  # the engine is a trust boundary: log the cause, answer a fixed detail
         _log.exception("%s failed", name)
         raise OpsError(f"{name} failed; the worker log has the cause") from None
+
+
+def dispatch_json(
+    config: WorkerConfig, name: str, request: Mapping[str, Any]
+) -> tuple[int, Any]:
+    """Answer one call from a dict: ``(200, reply)`` or ``(status, refusal)``.
+
+    Convenience over :func:`dispatch` for in-process callers; the reply and
+    refusal are parsed JSON values rather than wire bytes.
+    """
+    status, body = dispatch(config, name, json.dumps(request).encode())
+    try:
+        return status, json.loads(body)
+    except ValueError:
+        return status, body
 
 
 def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:

@@ -226,7 +226,17 @@ _PERCENT_SIGN: Final = "%"
 _NOT_IN_AN_ADDRESS: Final = frozenset("@\\/?#")
 
 
-class ConfigError(ValueError):
+class RecoError(Exception):
+    """Base for all recoverage errors.
+
+    A consumer can catch ``RecoError`` to handle any failure the package
+    raises without enumerating each subclass; each subclass retains its
+    documented builtin base (``ValueError``/``RuntimeError``) so existing
+    ``except ValueError``/``except RuntimeError`` handlers keep working.
+    """
+
+
+class ConfigError(RecoError, ValueError):
     """An unset or invalid ``RECOVERAGE_*`` value.
 
     Carries only the variable name and, for non-secret settings, the value it

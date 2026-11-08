@@ -15,7 +15,7 @@ import logging
 import threading
 lazy from typing import Any
 
-lazy from recoverage.server import _load_dll, binary_stamp, hex_addr
+from recoverage.server import RecoError, _load_dll, binary_stamp, hex_addr
 
 _log = logging.getLogger("recoverage")
 
@@ -69,7 +69,7 @@ _probe_reason: str | None = None  # None once probed: either healthy or broken
 _probed = False
 
 
-class CapstoneUnavailableError(RuntimeError):
+class CapstoneUnavailableError(RecoError, RuntimeError):
     """capstone is on the path but cannot be loaded (broken or partial install).
 
     Raised by :func:`get_capstone_md` and, by contract, unreachable from a

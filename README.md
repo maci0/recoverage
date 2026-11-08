@@ -134,6 +134,29 @@ function metadata and survive dashboard restarts and export removal.
 
 ---
 
+## Using recoverage as a library
+
+`recoverage` is a publishable Python package (`py.typed`, PEP 561). A WSGI
+host can mount the fully wired application directly and catch documented
+failures through one base class:
+
+```python
+from recoverage.config import RecoError
+from recoverage.server import LOOPBACK_HOSTS, configure_security
+from recoverage.webapp import app  # a WSGI callable; `recoverage.server.app` alone is routeless
+
+configure_security(allowed_hosts=set(LOOPBACK_HOSTS))  # fail-fast: raises RecoError
+# ... serve `app` from your WSGI host ...
+```
+
+Every error this package raises derives from `recoverage.config.RecoError`
+(`ConfigError`, `RegenError`, `BackupError`, `CapstoneUnavailableError`,
+`OpsError`, `RequestBodyError`, `MissingAssetError`), so a single
+`except RecoError` handles any recoverage failure without enumerating
+subclasses; each subclass keeps its builtin base (`ValueError`/`RuntimeError`)
+so existing handlers keep working. See [docs/REFERENCE.md](docs/REFERENCE.md#mounting-the-app-in-your-own-wsgi-server)
+for transport bounds and the full WSGI-mount walkthrough.
+
 ## Documentation
 
 | Document | What it covers |

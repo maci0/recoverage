@@ -20,6 +20,7 @@ lazy import rcssmin
 lazy from bottle import static_file
 lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 
+from recoverage.config import RecoError
 from recoverage.server import (
     CACHE_REVALIDATE,
     SUPPORTED_ENCODINGS,
@@ -45,7 +46,7 @@ lazy import recoverage.server as _server
 # ── Index caching ──────────────────────────────────────────────────
 
 
-class MissingAssetError(RuntimeError):
+class MissingAssetError(RecoError, RuntimeError):
     """A packaged asset the dashboard cannot render without is unreadable.
 
     Its own type, distinct from the OSError underneath it, because the two
