@@ -3850,7 +3850,9 @@ def _finish_request() -> None:
     timed = route not in metrics.UNBOUNDED_ROUTES
     metrics.REQUESTS.finish(route, status, duration_ms, timed=timed, rule_matched=rule is not None)
     _REQUEST_TLS.counted = (route, status)
-    if timed and duration_ms >= metrics.SLOW_REQUEST_MS:
+    if status >= 500:
+        level, template = logging.WARNING, "%s %s -> %d in %.0fms"
+    elif timed and duration_ms >= metrics.SLOW_REQUEST_MS:
         level, template = logging.WARNING, "Slow request: %s %s -> %d in %.0fms"
     # `_log_safe` is two `str.translate` calls over the control-character
     # table, and the arguments are evaluated before logging can discard them:

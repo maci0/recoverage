@@ -182,6 +182,33 @@ class TestRequestId:
         assert errors[0].request_id == "trace-me"
         assert errors[0].exc_info is not None, "the traceback did not reach the log"
 
+    def test_a_5xx_request_logs_at_warning_without_debug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 5xx is visible at the default level, not only under DEBUG.
+
+        ``_finish_request`` logged every non-slow 5xx at DEBUG, so at the
+        default INFO level an error rate spike left no per-request line at
+        all: the counter moved, the log stayed quiet.
+        """
+        from rebrew.coverage_toml import CoverageTomlError
+
+        def _raise() -> None:
+            raise CoverageTomlError("no readable coverage document")
+
+        monkeypatch.setattr(_api, "resolve_targets", _raise)
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            status, _headers, _ = wsgi_get("/api/targets/FAKEDLL/stats")
+        assert status.startswith("503"), status
+        lines = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and " /api/targets/FAKEDLL/stats -> 503" in r.getMessage()
+        ]
+        assert lines, "the 5xx left no WARNING line at the default level"
+        assert lines[0].request_id
+
     def test_every_module_logs_on_the_package_logger(self) -> None:
         """No module names itself, or it silently loses the correlation.
 
