@@ -2159,10 +2159,10 @@ def _parse_byte_count(raw: str) -> int:
     A sign is still honoured, because the callers clamp or reject a negative
     value with their own message.
     """
-    sign, text = _server.strip_sign(raw.strip())
+    sign, text = _config.strip_sign(raw.strip())
     if text[:2].lower() == "0x":
-        return sign * _server.parse_ascii_int(text[2:], 16)
-    return sign * _server.parse_ascii_int(text, 10)
+        return sign * _config.parse_ascii_int(text[2:], 16)
+    return sign * _config.parse_ascii_int(text, 10)
 
 
 def _page_int(raw: str) -> int:
@@ -2173,7 +2173,7 @@ def _page_int(raw: str) -> int:
     turn the :class:`ValueError` into their own default, so the shape of the
     failure never reaches the client.
     """
-    return _server.parse_ascii_int(raw.strip(), 10)
+    return _config.parse_ascii_int(raw.strip(), 10)
 
 
 def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | None]:
@@ -2528,7 +2528,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
                     s = s[2:]
                 if not s:
                     raise ValueError("empty VA")
-                parsed_va = _server.parse_ascii_int(s, 16)
+                parsed_va = _config.parse_ascii_int(s, 16)
             except ValueError:
                 return [], invalid_va(
                     entry, f"unparseable VA {entry!r}; expected hex like 0x10001000"

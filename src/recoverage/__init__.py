@@ -29,8 +29,8 @@ Module map (dependencies point one way, left to right):
 - ``reporting``   — the report's rows, escaping, exports, gate verdict and the
   floored percentage helpers (``coverage_pct``/``pct_1dp``) every surface
   prints, shared by the CLI and the ops so every surface prints the same
-  numbers (no in-package deps: the percentage helpers moved here off
-  ``server`` so ``server`` imports them, not the other way round)
+  numbers (no in-package deps; a leaf the route modules read directly, never
+  through ``server``)
 - ``potato``      — server-side HTML renderer (imports server+disasm+_paths)
 - ``ui``          — SPA/static routes (imports server; /potato is mounted by
   potato)

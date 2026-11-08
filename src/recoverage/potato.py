@@ -49,7 +49,6 @@ from recoverage.server import (
     app,
     binary_stamp,
     coverage_for,
-    coverage_pct,
     db_target_ids,
     fold_can_match_hex,
     fold_needle,
@@ -68,8 +67,6 @@ from recoverage.server import (
     lookup_function,
     lookup_global,
     mtime_ns_to_utc,
-    parse_ascii_int,
-    pct_1dp,
     request,
     request_log_fields,
     resolve_targets,
@@ -84,7 +81,9 @@ from recoverage.server import (
 )
 lazy from recoverage import __version__
 lazy from recoverage._paths import coverage_source
+lazy from recoverage.config import parse_ascii_int
 lazy from recoverage.disasm import disassembly_available, get_disassembly
+lazy from recoverage.reporting import coverage_pct, pct_1dp
 
 _log = logging.getLogger("recoverage")
 

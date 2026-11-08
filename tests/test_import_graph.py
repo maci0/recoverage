@@ -49,7 +49,7 @@ _LEVELS: dict[str, int] = {
     "documents": 1,
     "backup": 1,
     "server": 2,
-    "reporting": 2,
+    "reporting": 0,
     "disasm": 3,
     "api": 4,
     "potato": 4,

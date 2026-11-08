@@ -407,7 +407,8 @@ def _verified_section_bytes(section: Any, trusted: Any) -> int:
 
 
 def _snapshot_stats(snap: Any, trusted: Any = None) -> dict[str, Any]:
-    from recoverage.server import _section_stats, coverage_pct
+    from recoverage.reporting import coverage_pct
+    from recoverage.server import _section_stats
 
     stats = _section_stats(snap)
     if trusted is not None:
@@ -831,7 +832,7 @@ def serve_command(
     # Typer/click's INT coercion accepts Unicode digits and ``1_0`` spellings,
     # so parse the concurrency through the same ASCII floor the dashboard
     # settings use; the flag and env var are one setting.
-    from recoverage.server import parse_ascii_int
+    parse_ascii_int = _config.parse_ascii_int
 
     # Misspelled RECOVERAGE_* names are a startup error everywhere else
     # (``_check_env_or_exit``); ``ops serve`` must not silently accept them

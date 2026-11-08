@@ -1973,7 +1973,7 @@ def stats(
     from rich.markup import escape
     from rich.table import Table
 
-    from recoverage.server import pct_1dp
+    from recoverage.reporting import pct_1dp
 
     with _open_targets(target, json_output=json_output) as (snapshots, targets):
         if json_output:
@@ -2174,8 +2174,6 @@ def _checked_max_age_hours(value: str, json_output: bool) -> float:
     would be read as 10h rather than refused. Only ASCII digits and one
     ASCII dot survive, and the bound must be finite and non-negative.
     """
-    from recoverage.server import parse_ascii_int
-
     text = value.strip()
     whole, dot, frac = text.partition(".")
     parsed: float | None = None
