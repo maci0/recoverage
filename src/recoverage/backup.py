@@ -78,6 +78,12 @@ DEFAULT_BACKUP_SUBDIR: Final = "backups"
 _ARCHIVE_PREFIX: Final = "coverage-"
 _ARCHIVE_SUFFIX: Final = ".tar"
 
+#: How many stamped archives to keep in the backup directory.  Unbounded
+#: growth is the silent failure mode of a nightly job: the volume fills
+#: until the backup (and then the dashboard) fails.  30 keeps a month of
+#: daily backups; older archives are deleted after a successful new one.
+_RETENTION_COUNT: Final = 30
+
 #: Most bytes one member of an archive may hold, and most bytes an archive may
 #: hold in total.  A verify (and a restore, which verifies first) holds every
 #: member's bytes in memory, because that is what makes it one pass; the bound
@@ -294,17 +300,27 @@ def _default_archive_path(directory: Path) -> Path:
 def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     """``(name, bytes)`` for every coverage document in *db_dir*, name-sorted.
 
-    The same glob and the same skip-on-``OSError`` discipline
-    :func:`recoverage.documents._stat_key` walks, so a backup covers exactly
-    what the server would read, and a document that vanishes mid-backup is one
-    fewer member rather than a failed run.
+    An unreadable document is a refusal, not a skip: a backup that silently
+    omits one target verifies cleanly yet restores to a dashboard missing
+    that target — the gap is invisible until the restore that needs it.
+    A scheduled job hitting a transient read error must fail loudly (and
+    alert on the non-zero exit) rather than record a partial archive as
+    the night's good backup.
     """
     out: list[tuple[str, bytes]] = []
     for path in sorted(db_dir.glob(COVERAGE_GLOB)):
         try:
-            out.append((path.name, path.read_bytes()))
-        except OSError:
-            continue
+            data = path.read_bytes()
+        except OSError as exc:
+            raise BackupError(f"cannot read coverage document {path}: {exc}") from exc
+        # A symlinked document must not be followed out of the coverage
+        # directory: read only a regular file, and refuse a link whose
+        # target escapes (or any link at all, since the glob should name
+        # the document itself). ``is_symlink`` first so a dangling link is
+        # refused by name rather than as a read error.
+        if path.is_symlink():
+            raise BackupError(f"coverage document {path} is a symlink; refusing to follow it")
+        out.append((path.name, data))
     return out
 
 
@@ -364,8 +380,11 @@ def _require_outside_coverage_dir(db_dir: Path, destination: Path) -> None:
     """
     try:
         inside = destination.resolve().is_relative_to(db_dir.resolve())
-    except OSError:
-        return
+    except OSError as exc:
+        # Fail closed: an unresolvable destination (dangling symlink, loop,
+        # permission) cannot be proven outside the coverage directory, so
+        # admitting it risks the archive landing inside the data it protects.
+        raise BackupError(f"cannot resolve backup destination {destination}: {exc}") from exc
     if inside:
         raise BackupError(
             f"backup destination {destination} is inside the coverage directory {db_dir}; "
@@ -373,6 +392,30 @@ def _require_outside_coverage_dir(db_dir: Path, destination: Path) -> None:
             "or a later restore reads its own archive as a document and one "
             "deletion removes data and backup together"
         )
+
+
+def _prune_old_archives(archive_dir: Path) -> None:
+    """Delete stamped archives beyond _RETENTION_COUNT, oldest first.
+
+    Only names this module writes (prefix+suffix+timestamp shape) are
+    considered, so an operator's other files in the directory are never
+    removed.  Best-effort: a deletion failure is logged, not raised —
+    the new backup already verified and must not be reported as failed
+    because the old ones could not be pruned.
+    """
+    try:
+        candidates = sorted(
+            p
+            for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+            if p.is_file() and not p.is_symlink()
+        )
+    except OSError:
+        return
+    for stale in candidates[:-_RETENTION_COUNT] if len(candidates) > _RETENTION_COUNT else []:
+        try:
+            stale.unlink()
+        except OSError as exc:
+            _log.warning("backup: cannot prune old archive %r: %r", str(stale), str(exc))
 
 
 def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
@@ -410,7 +453,9 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
         _atomic_write(destination, blob)
     except OSError as exc:
         raise BackupError(f"cannot write backup {destination}: {exc}") from exc
-    return verify_backup(destination)
+    info = verify_backup(destination)
+    _prune_old_archives(destination.parent)
+    return info
 
 
 def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
