@@ -161,6 +161,14 @@ export function byteCount(amount: number): string {
   return `${count(amount)} ${plural(amount, { one: "byte", other: "bytes" })}`;
 }
 
+/** A whole-second duration in the reader's locale, with its noun agreeing
+ * (`Intl.PluralRules` rather than `=== 1`, so a Polish/Arabic reader gets the
+ * right form for 5, and `count` rather than a bare interpolation, so the
+ * digits are the locale's). */
+export function secondsLabel(amount: number): string {
+  return `${count(amount)} ${plural(amount, { one: "second", other: "seconds" })}`;
+}
+
 /** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. The `u` flag
  * is the Unicode-aware parser; `\d` stays ASCII digits under it, so a
  * non-ASCII digit spelling still fails the test and the stamp falls back to
@@ -514,7 +522,8 @@ export const MSG = {
     "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
   NA: "(n/a)",
-  REGEN_USING_CACHE: (remaining: number) => `Using cached data. Regeneration available in ${remaining}s.`,
+  REGEN_USING_CACHE: (remaining: number) =>
+    `Using cached data. Regeneration available in ${secondsLabel(remaining)}.`,
   REGEN_IN_PROGRESS: "Regenerating…",
   REGEN_ALREADY_RUNNING:
     "This regeneration is already running. The map refreshes by itself when it finishes.",
