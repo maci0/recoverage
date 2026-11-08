@@ -151,14 +151,14 @@ class TestTargetFileRoutes:
         write_coverage(root / "exports", "game", {}, paths={"originalDll": "../secret.exe"})
         status, headers, body = wsgi_get("/files/game/binary")
         # An escaping portable ref resolves to no binary, which the route
-        # answers as the 404 "target binary unavailable" envelope: serving
+        # answers as the target-specific 404 envelope: serving
         # the configured binary would be the fallback this test exists to
         # forbid, so the body must be that envelope, not a bare "not 200".
         assert status.startswith("404"), status
         assert json.loads(decode_body(body, headers)) == {
             "error": "Not found",
             "code": "not_found",
-            "detail": "target binary unavailable",
+            "detail": "target 'game' has no available binary ([targets.game].binary)",
         }
         assert body != b"game binary"
 
