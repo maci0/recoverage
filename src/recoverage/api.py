@@ -1885,11 +1885,13 @@ def _build_data_raw(
 
     # The format version travels with the payload so the client learns it from
     # the server; a second copy hardcoded in app.js would drift as rebrew
-    # advances the format. It is the version of the documents THIS build read
-    # (server.known_schema_versions documents why that is not the same thing
-    # as the set the reader accepts), so it is a constant while rebrew reads
-    # exactly one version.
-    data["known_schema"] = _server.known_schema_versions()
+    # advances the format. Read off *snap* itself rather than re-loading every
+    # document through known_schema_versions(): that helper exists for callers
+    # holding no snapshot, and re-reading the whole directory (stat key plus,
+    # in live mode, a project load) on every /data build cost more than the
+    # one string it returns. Every readable snapshot carries the one version
+    # the reader accepts (see known_schema_versions), so this is the same list.
+    data["known_schema"] = [str(snap.version)]
 
     # Per-section cell stats, through the same reader /stats and the Potato map
     # header use: the buckets are derived from the snapshot's cells, so /data

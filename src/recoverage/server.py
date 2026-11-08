@@ -1286,6 +1286,9 @@ def coverage_for(target: str) -> CoverageSnapshot:
     snapshot = snapshots.get(target)
     if snapshot is not None:
         return snapshot
+    # Only the miss path pays for the failure list: unreadable() re-reads the
+    # same state load_all just returned, so building it on every hit (the
+    # common case) was pure redundant work per request.
     failures = unreadable_documents()
     failed = next((row for row in failures if row["target"] == target), None)
     if failed is not None:
@@ -1298,7 +1301,7 @@ def coverage_for(target: str) -> CoverageSnapshot:
     if snapshot is not None:
         return snapshot
     failed = next(
-        (row for row in failures if target_key(row["target"]) == target_key(target)),
+        (row for row in failures if target_key(row["target"]) == wanted),
         None,
     )
     if failed is not None:

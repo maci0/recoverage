@@ -78,6 +78,9 @@ ENGINE_ERROR = "engine-error"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
+#: Compiled once at import rather than per allowed-hosts entry.
+_ALLOWED_HOST = re.compile(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?")
+
 
 class OpsError(Exception):
     """A refusal: a detail safe to show, a stable code, and an HTTP status."""
@@ -839,7 +842,7 @@ def serve_command(
         filestore=_existing_dir(filestore, "--filestore"),
     )
     hosts = frozenset(item.strip().lower() for item in allowed_hosts.split(",") if item.strip())
-    if any(not re.fullmatch(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?", item) for item in hosts):
+    if any(not _ALLOWED_HOST.fullmatch(item) for item in hosts):
         typer.secho(
             "Error: --allowed-hosts must contain exact DNS names and optional ports",
             fg=typer.colors.RED,
