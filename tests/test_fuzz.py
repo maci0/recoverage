@@ -6646,6 +6646,7 @@ class TestReferencedPathsParse:
             except Exception as exc:  # the contract is BackupError only
                 raise AssertionError(f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}") from exc
             for ref in refs:
+                # _referenced_paths returns the path spellings as strings.
                 assert isinstance(ref, str), f"{raw[:60]!r}: non-text ref {ref!r}"
                 assert ref, f"{raw[:60]!r}: an empty ref was carried"
 
@@ -6940,3 +6941,109 @@ class TestOpsAllowedHosts:
             num_tokens=self._TOKENS,
             label="TestOpsAllowedHosts.test_a_host_is_accepted_only_as_one_plain_authority",
         )
+
+class TestJsonDepthGuard:
+    """`config.json_depth_exceeds` differential guard vs `json.loads` depth."""
+
+    _DEPTH_SEEDS = (
+        b'{"vas": ["0x10001000"]}',
+        b'{"a": {"b": {"c": 1}}}',
+        b"[[[[1]]]]",
+        b'"[[[[ not a bracket ]]]]"',
+        b'{"a": "[[[[", "b": [1,2]}',
+        b'"""[[[[',
+        b'"\\"[[[[',
+        b'"\\u0022"[[[[',
+        b"[]",
+        b'"unterminated [[[[',
+        b"\xff\xfe[[[[",
+    )
+    _DEPTH_TOKENS = (
+        b"{",
+        b"}",
+        b"[",
+        b"]",
+        b'"',
+        b"\\",
+        b"a",
+        b":",
+        b",",
+        b"1",
+        b'"a"',
+        b'"""',
+        b'"\\\\"',
+        b'"[[[["',
+    )
+
+    @staticmethod
+    def _decoded_depth(raw: bytes) -> int | None:
+        try:
+            obj = json.loads(raw.decode("utf-8"))
+        except UnicodeError, ValueError, RecursionError:
+            return None
+
+        def depth(o: Any) -> int:
+            if isinstance(o, (list, tuple)):
+                return 1 + max((depth(x) for x in o), default=0)
+            if isinstance(o, dict):
+                return 1 + max((depth(x) for x in o.values()), default=0)
+            return 0
+
+        return depth(obj)
+
+    def test_guard_never_undercounts_the_decoder(self) -> None:
+        def check(data: bytes) -> None:
+            try:
+                exceeds = config.json_depth_exceeds(data)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"json_depth_exceeds raised {type(exc).__name__}: {exc}"
+                ) from exc
+            assert isinstance(exceeds, bool)
+            if exceeds:
+                return
+            decoded = self._decoded_depth(data)
+            if decoded is None:
+                return
+            assert decoded <= config.MAX_JSON_DEPTH, (
+                f"{data[:60]!r}: guard shallow but depth {decoded}"
+            )
+
+        _fuzz(
+            list(self._DEPTH_SEEDS),
+            check,
+            iterations=400,
+            struct_tokens=self._DEPTH_TOKENS,
+            num_tokens=self._DEPTH_TOKENS,
+            label="TestJsonDepthGuard.test_guard_never_undercounts_the_decoder",
+        )
+
+    def test_deep_body_is_refused_before_the_decoder_recurses(self) -> None:
+        for depth in (
+            0,
+            1,
+            10,
+            config.MAX_JSON_DEPTH - 1,
+            config.MAX_JSON_DEPTH,
+            config.MAX_JSON_DEPTH + 1,
+            300,
+            1000,
+            5000,
+        ):
+            bodies = (
+                b"[" * depth + b"1" + b"]" * depth,
+                b'{"a": ' * depth + b"1" + b"}" * depth,
+                b'""' + b"[" * depth + b"]" * depth,
+                b'{"a": "' + b"[[[[" * depth + b'"}',
+            )
+            for raw in bodies[:2]:
+                exceeds = config.json_depth_exceeds(raw)
+                if depth > config.MAX_JSON_DEPTH:
+                    assert exceeds, f"depth {depth} not refused"
+            for raw in bodies:
+                exceeds = config.json_depth_exceeds(raw)
+                if exceeds:
+                    continue
+                decoded = self._decoded_depth(raw)
+                if decoded is not None:
+                    assert decoded <= config.MAX_JSON_DEPTH
