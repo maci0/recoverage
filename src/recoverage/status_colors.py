@@ -1,21 +1,8 @@
 """Shared status colors, owned by relumea-brand and copied with provenance.
 
-LIGHT mirrors the web word tokens; TERMINAL balances black and white grounds.
-Keep verdicts, origin, activity and warnings semantically separate.
+TERMINAL balances black and white grounds. Keep verdicts, origin, activity and
+warnings semantically separate.
 """
-
-LIGHT: dict[str, str] = {
-    "exact": "#0f7a42",
-    "reloc": "#00686e",
-    "proven": "#265937",
-    "library": "#943a77",
-    "thunk": "#5b3fa8",
-    "near": "#445b99",
-    "warn": "#8a5a00",
-    "stub": "#5f6673",
-    "live": "#0b5c8a",
-    "fail": "#a32318",
-}
 
 TERMINAL: dict[str, str] = {
     "exact": "#1e864f",
