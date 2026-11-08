@@ -7,6 +7,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage verify` checks a backup archive against its manifest without
+  restoring it, and exits 1 naming the member whose size or digest disagrees.
 - `recoverage ops serve` answers the same ops as `ops call` over HTTP, as
   `POST /<op>` on rebrew's ops server (bearer token `RECOVERAGE_OPS_TOKEN` of at
   least 32 bytes, Host allow-list, `--concurrency` bound answered 503 with
@@ -28,6 +30,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.
+- Dependency ranges now carry an upper bound (`bottle>=0.13,<1`, `rich>=15.0.0,<16`, `capstone>=5.0,<6`, and the like), so a future major of a runtime dependency is not selected silently.
+- A backup destination inside the coverage directory is refused, and a repeat write to an existing archive path is refused rather than overwriting the earlier backup.
+
+### Removed
+
+- `recoverage.status_colors.LIGHT`, the unused light-ground status palette. `TERMINAL` and `RICH_STYLES` are unchanged.
 
 ## [8.9.0] - 2026-11-04
 
