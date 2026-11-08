@@ -1360,9 +1360,16 @@ def _is_browser_origin(value: str) -> bool:
     entry than the one written, and the operator would not learn that until a
     request they expected to be allowed was refused.
     """
-    if not value or any(ch.isspace() for ch in value):
+    if any(ch.isspace() for ch in value):
         return False
-    parts = urlsplit(value)
+    if any(ch in value for ch in ("@", "\\", "%")) or any(
+        ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value
+    ):
+        return False
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
     if parts.scheme not in _ORIGIN_SCHEMES:
         return False
     if parts.path or parts.query or parts.fragment:

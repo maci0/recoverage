@@ -86,6 +86,7 @@ from typing import Any, ClassVar
 from urllib.parse import unquote, urlsplit
 
 import pytest
+import typer
 from conftest import (
     HAS_DB,
     WSGI_PEER,
@@ -115,6 +116,7 @@ from recoverage.api import (
     _REGEN_KEY_RE,
     _clear_derived_caches,
 )
+from recoverage.cli import _is_browser_origin
 from recoverage.server import (
     _best_encoding,
     _hostname_of,
@@ -7327,3 +7329,166 @@ class TestJsonDepthGuard:
                 decoded = self._decoded_depth(raw)
                 if decoded is not None:
                     assert decoded <= config.MAX_JSON_DEPTH
+
+
+class TestCorsOriginValidator:
+    """`cli._is_browser_origin` validator (CORS allowlist) + `_normalize_origin` agreement."""
+
+    _ORIGIN_SEEDS = (
+        b"http://example.com:5173",
+        b"https://example.com",
+        b"http://localhost:8001",
+        b"http://[::1]:8080",
+        b"http://example.com/path",
+        b"http://user@example.com",
+        b"http://example.com:99999",
+        b"ftp://example.com",
+        b"http://example.com:80:90",
+        b"http://exa mple.com",
+        b"http://example.com\n",
+        b"",
+        b"not a url",
+    )
+    _ORIGIN_TOKENS = (
+        b"http://",
+        b"https://",
+        b"ftp://",
+        b"://",
+        b"example.com",
+        b"localhost",
+        b"[::1]",
+        b":",
+        b":80",
+        b":65535",
+        b":65536",
+        b":0",
+        b"/",
+        b"?q=1",
+        b"#frag",
+        b"@",
+        b" ",
+        b"\x00",
+        b"\xff",
+        b"%20",
+    )
+
+    def test_validator_never_raises_and_agrees_with_normalizer(self) -> None:
+        def check(data: bytes) -> None:
+            text = data.decode("utf-8", errors="surrogateescape")
+            try:
+                accepted = _is_browser_origin(text)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_is_browser_origin raised {type(exc).__name__}: {exc} on {text!r}"
+                ) from exc
+            assert isinstance(accepted, bool)
+            try:
+                normalized = _normalize_origin(text)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_normalize_origin raised {type(exc).__name__}: {exc} on {text!r}"
+                ) from exc
+            assert isinstance(normalized, str)
+            if accepted:
+                assert normalized, f"accepted {text!r} but normalized to empty"
+                assert " " not in normalized and "\t" not in normalized
+                from urllib.parse import urlsplit
+
+                parts = urlsplit(normalized)
+                assert parts.path in ("", "/"), f"{text!r}: normalized has path {parts.path!r}"
+                assert not parts.query and not parts.fragment
+                assert not parts.username and not parts.password
+            if any(c in text for c in (" ", "\t", "\n", "\r", "\x00")):
+                assert not accepted, f"whitespace/control origin accepted: {text!r}"
+            if "://" not in text:
+                assert not accepted, f"schemeless origin accepted: {text!r}"
+
+        _fuzz(
+            list(self._ORIGIN_SEEDS),
+            check,
+            iterations=400,
+            struct_tokens=self._ORIGIN_TOKENS,
+            num_tokens=self._ORIGIN_TOKENS,
+            label="TestCorsOriginValidator.test_validator_never_raises_and_agrees_with_normalizer",
+        )
+
+
+class TestCheckedNumericCliParsers:
+    """`cli._checked_min_coverage` / `_checked_max_age_hours` never crash or return inf/nan."""
+
+    _NUM_SEEDS = (
+        b"0",
+        b"100",
+        b"50.5",
+        b"25",
+        b"-1",
+        b"+50",
+        b"1e2",
+        b"nan",
+        b"inf",
+        b"1_0",
+        b"99999999999999999999999",
+        b"0." + b"0" * 50 + b"1",
+        b"5.",
+        b".5",
+        b"",
+        b" 50 ",
+        b"50.5.5",
+    )
+    _NUM_TOKENS = (
+        b"0",
+        b"1",
+        b"9",
+        b".",
+        b"+",
+        b"-",
+        b" ",
+        b"e",
+        b"inf",
+        b"nan",
+        b"_",
+        b"\xff",
+        b"\x00",
+        b"100",
+        b"99999999999999999999999999",
+    )
+
+    def test_numeric_parsers_never_raise_except_exit_and_stay_finite(self) -> None:
+        import math
+
+        def check(data: bytes) -> None:
+            text = data.decode("utf-8", errors="surrogateescape")
+            for parser in (cli._checked_min_coverage, cli._checked_max_age_hours):
+                try:
+                    value = parser(text, True)
+                except typer.Exit:
+                    continue
+                except BaseException as exc:
+                    raise AssertionError(
+                        f"{parser.__name__} raised {type(exc).__name__}: {exc} on {text!r}"
+                    ) from exc
+                assert isinstance(value, float)
+                assert math.isfinite(value), f"{parser.__name__} returned non-finite for {text!r}"
+                assert value >= 0, f"{parser.__name__} returned negative for {text!r}"
+                if parser is cli._checked_min_coverage:
+                    assert value <= 100.0, f"_checked_min_coverage out of range for {text!r}"
+                try:
+                    oracle = float(text.strip())
+                except ValueError:
+                    oracle = None
+                if oracle is not None and math.isfinite(oracle) and oracle >= 0:
+                    if parser is cli._checked_min_coverage and oracle > 100.0:
+                        pass
+                    else:
+                        assert value == oracle or abs(value - oracle) < 1e-9, (
+                            f"{parser.__name__}({text!r})={value!r} oracle={oracle!r}"
+                        )
+
+        _fuzz(
+            list(self._NUM_SEEDS),
+            check,
+            iterations=400,
+            struct_tokens=self._NUM_TOKENS,
+            num_tokens=self._NUM_TOKENS,
+            label="TestCheckedNumericCliParsers.test_numeric_parsers_never_raise_except_exit_and_stay_finite",
+        )
