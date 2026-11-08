@@ -1664,6 +1664,26 @@ class TestAuthTokenMatches:
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "")
         assert srv._auth_token_matches("") is False
 
+    def test_surrogate_credential_is_a_mismatch_not_a_crash(self, monkeypatch: Any) -> None:
+        """A credential decoded with surrogateescape must not raise.
+
+        A strict UTF-8 encode raises UnicodeEncodeError on the
+        U+DC80..U+DCFF a surrogateescape decode produces, turning a wrong
+        token into a 500 instead of a 401.
+        """
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "hunter2")
+        assert srv._auth_token_matches("hunter\udcff") is False
+
+    def test_surrogate_token_matches_its_own_byte(self, monkeypatch: Any) -> None:
+        """A configured token holding a non-UTF-8 byte matches that byte."""
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "hunter\udcff")
+        assert srv._auth_token_matches("hunter\udcff") is True
+        assert srv._auth_token_matches("hunterÿ") is False
+
 
 class TestTokenAuthEndpoint:
     """WSGI-level behavior of the --token gate, incl. guess throttling."""
@@ -2555,7 +2575,10 @@ class TestStaticAssetRevalidation:
 
         _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
         html = decode_body(body, headers).decode("utf-8")
-        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin fetchpriority="high">' in html
+        assert (
+            '<link rel="preload" href="/api/targets" as="fetch" crossorigin fetchpriority="high">'
+            in html
+        )
         assert "credentials:" not in _web("api.ts")
 
 

@@ -112,6 +112,30 @@ def test_serve_answers_ops_with_the_bearer_token(tmp_path: Path) -> None:
             proc.stdout.close()
 
 
+def test_serve_counts_a_non_utf8_token_by_its_bytes(tmp_path: Path) -> None:
+    """The token-length check must not raise on a non-UTF-8 env value."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "recoverage",
+            "ops",
+            "serve",
+            "--port",
+            "0",
+            "--workspace",
+            str(tmp_path / "missing"),
+        ],
+        env={**os.environ, "RECOVERAGE_OPS_TOKEN": "t" * 40 + "ÿ"},
+        capture_output=True,
+        text=True,
+        timeout=START_TIMEOUT,
+        check=False,
+    )
+    assert "UnicodeEncodeError" not in result.stderr
+    assert "must hold at least" not in result.stderr
+
+
 def test_serve_refuses_a_short_token_and_a_missing_workspace(tmp_path: Path) -> None:
     for token, extra in (("short", ["--workspace", str(tmp_path)]), ("t" * 40, [])):
         result = subprocess.run(

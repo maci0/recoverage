@@ -3590,9 +3590,14 @@ def _auth_token_matches(provided: str) -> bool:
     # time to a client measuring response latency on a network-reachable
     # server (--allow-remote).  Both sides are encoded because
     # hmac.compare_digest raises TypeError on non-ASCII str — and *provided*
-    # comes straight from request headers.
+    # comes straight from request headers.  The encoding is not UTF-8 strict:
+    # a credential decoded with surrogateescape (a harness, a filename, an
+    # env value) carries U+DC80..U+DCFF, which UTF-8 cannot encode, so a
+    # strict encode turns a wrong token into a 500 instead of a 401.
+    # ``fs_text_bytes`` is the exact inverse of that decode, so it maps a
+    # surrogate back to the byte it escaped and leaves valid text UTF-8.
     return bool(_AUTH_TOKEN) and hmac.compare_digest(
-        provided.encode("utf-8"), _AUTH_TOKEN.encode("utf-8")
+        fs_text_bytes(provided), fs_text_bytes(_AUTH_TOKEN)
     )
 
 

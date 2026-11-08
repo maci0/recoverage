@@ -760,7 +760,12 @@ def serve_command(
     from rebrew import ops as rebrew_ops
 
     token = os.environ.get(TOKEN_ENV, "").strip()
-    if len(token.encode()) < MIN_TOKEN_BYTES:
+    # Length in the bytes the environment carried, not code points: an
+    # environment value is decoded with surrogateescape, so a token holding
+    # a non-UTF-8 byte carries U+DC80..U+DCFF, which a strict UTF-8 encode
+    # refuses and turns the length check into a traceback at startup.
+    # ``os.fsencode`` is its exact inverse.  Valid UTF-8 text is unchanged.
+    if len(os.fsencode(token)) < MIN_TOKEN_BYTES:
         typer.secho(
             f"Error: {TOKEN_ENV} must hold at least {MIN_TOKEN_BYTES} bytes",
             fg=typer.colors.RED,
