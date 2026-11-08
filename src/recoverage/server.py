@@ -759,6 +759,30 @@ def strip_ascii_whitespace(value: str) -> str:
     return value.strip(_ASCII_SPACE)
 
 
+def truncate_text(value: str, limit: int) -> str:
+    """*value* cut at *limit* code points, without splitting a grapheme cluster.
+
+    ``value[:limit]`` counts code points, so a cap of 400 lands between the
+    two Regional Indicators of a flag: a lone Regional Indicator renders as
+    a letter, not a flag.  A trailing ZWJ joins nothing and is dropped with
+    it.  A combining mark at the cut is not an orphan — its base is before
+    it — so it stays.  One place, so a cap cannot be spelled two ways.
+    """
+    if len(value) <= limit:
+        return value
+    cut = value[:limit]
+    cut = cut.removesuffix("\u200d")
+    trailing_ri = 0
+    for char in reversed(cut):
+        if 0x1F1E6 <= ord(char) <= 0x1F1FF:
+            trailing_ri += 1
+        else:
+            break
+    if trailing_ri % 2 == 1:
+        cut = cut[:-1]
+    return cut
+
+
 #: Longest ``?search=`` either surface accepts.  A longer term is compared
 #: against every row of every function, and names nothing a user types.
 #: Lives here, beside the trimming helper the term is read through, because
@@ -3715,7 +3739,7 @@ def _new_request_id() -> str:
     if provided:
         # Untrusted: capped and control-char escaped so a crafted header
         # cannot forge log lines (same rule as _log_safe) or bloat the log.
-        return _log_safe(provided)[:_REQUEST_ID_MAX_LEN]
+        return truncate_text(_log_safe(provided), _REQUEST_ID_MAX_LEN)
     return _mint_request_id()
 
 

@@ -77,6 +77,7 @@ from recoverage.server import (
     set_auth_cookie,
     strip_ascii_whitespace,
     target_key,
+    truncate_text,
     unreadable_documents,
     verify_by_va,
     verify_payload,
@@ -1453,7 +1454,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     # _MAX_GRID_COLUMNS cells) rather than with the number of rows compared.
     # An uncapped term is only a per-row comparison on /functions; here one
     # request line is enough to ask for a page of hundreds of megabytes.
-    search_query = search_query[:MAX_SEARCH_CHARS]
+    search_query = truncate_text(search_query, MAX_SEARCH_CHARS)
     view = qs.get("view", [""])[0]
     sort_key = qs.get("sort", ["va"])[0]
     status_filter = qs.get("status", [""])[0]
