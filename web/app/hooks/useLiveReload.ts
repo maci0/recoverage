@@ -25,6 +25,7 @@ export function useLiveReload({
   enabled,
   onDbUpdated,
   onNotice,
+  onFailure,
   onDone,
 }: {
   enabled: boolean;
@@ -32,6 +33,8 @@ export function useLiveReload({
   /** A message that stays until something replaces it: an in-flight line and a
    * failure both have to outlive the read that raised them. */
   onNotice: (text: string | null) => void;
+  /** A regen failure, which must not expire unseen like a transient notice. */
+  onFailure?: ((text: string) => void) | undefined;
   /** A transient confirmation, which the shell clears on its own. */
   onDone: (text: string) => void;
 }): LiveReload {
@@ -132,17 +135,17 @@ export function useLiveReload({
           // A refusal carries the server's own words and the request id, so
           // the reader is left with something an operator can look up rather
           // than one line covering every way this can fail.
-          onNotice(reason ?? MSG.REGEN_UNAVAILABLE);
+          (onFailure ?? onNotice)(reason ?? MSG.REGEN_UNAVAILABLE);
         }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a failed regen is reported to the reader as REGEN_UNAVAILABLE, and the refresh still runs
       } catch {
-        onNotice(MSG.REGEN_UNAVAILABLE);
+        (onFailure ?? onNotice)(MSG.REGEN_UNAVAILABLE);
       } finally {
         setBusy(false);
         onDbUpdated();
       }
     })();
-  }, [busy, onDbUpdated, onDone, onNotice]);
+  }, [busy, onDbUpdated, onDone, onFailure, onNotice]);
 
   return { reload, busy };
 }

@@ -955,7 +955,11 @@ export function App() {
   const { reload, busy } = useLiveReload({
     enabled: targetReady && loadError === null,
     onDbUpdated,
+    // A regen failure is the failure the reader waited minutes for: it
+    // must not expire unseen under the transient-notice timer, so it
+    // holds like the success beside it until dismissed or replaced.
     onNotice: setNotice,
+    onFailure: flashPersistent,
     onDone: flashPersistent,
   });
 
@@ -1403,6 +1407,7 @@ export function App() {
               onGridReady={(focus) => {
                 gridFocus.current = focus;
               }}
+              onRegenerate={reload}
             />
           )}
           <ul
@@ -1486,6 +1491,7 @@ type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
   /** Re-run the read behind `loadError`. */
   onRetry: () => void;
   onGridReady: (focus: (index: number) => void) => void;
+  onRegenerate?: (() => void) | undefined;
 };
 
 function MapArea({
@@ -1507,6 +1513,7 @@ function MapArea({
   onGridReady,
   onClearFilters,
   onClearSearch,
+  onRegenerate,
 }: MapAreaProps): ComponentChildren {
   if (noTargets && unreadable.length > 0) {
     const one = unreadable.length === 1;
@@ -1578,6 +1585,11 @@ function MapArea({
           run, or this section holds no blocks. Use <b>Regenerate</b> in the
           topbar to run the analysis now.
         </p>
+        {onRegenerate === undefined ? null : (
+          <Button size="sm" onClick={onRegenerate}>
+            Regenerate
+          </Button>
+        )}
       </div>
     );
   }

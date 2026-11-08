@@ -5,7 +5,10 @@ import type { ComponentChildren } from "preact";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/system/icons/Icon";
 
-/** How long the outcome label holds before the button returns to its own. */
+/** How long a success holds before the button returns to its own. A failure
+ * is not a flash: the reader who needs the text most is the one whose copy
+ * was refused, and a one-second "Copy failed" they were not looking at
+ * leaves the button reading as though nothing happened. */
 const COPIED_FLASH_MS = 1000;
 
 /** A button that flashes the outcome of a copy, then restores its label. The
@@ -39,9 +42,13 @@ export function CopyButton({
     },
     [],
   );
-  const scheduleReset = (): void => {
+  const scheduleReset = (sticky = false): void => {
     if (resetTimer.current !== null) {
       window.clearTimeout(resetTimer.current);
+      resetTimer.current = null;
+    }
+    if (sticky) {
+      return;
     }
     resetTimer.current = window.setTimeout(() => setFlashed(null), COPIED_FLASH_MS);
   };
@@ -58,9 +65,10 @@ export function CopyButton({
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Copy failed")
       } catch {
         setFlashed("Copy failed");
-      } finally {
-        scheduleReset();
+        scheduleReset(true);
+        return;
       }
+      scheduleReset();
     })();
   };
   return (
