@@ -6650,7 +6650,8 @@ class TestReferencedPathsParse:
                 return
             except Exception as exc:  # the contract is BackupError only
                 raise AssertionError(f"{raw[:60]!r}: raised {type(exc).__name__}: {exc}") from exc
-            for ref in refs:
+            for key, ref in refs:
+                assert isinstance(key, str) and key, f"{raw[:60]!r}: bad key {key!r}"
                 assert isinstance(ref, str), f"{raw[:60]!r}: non-text ref {ref!r}"
                 assert ref, f"{raw[:60]!r}: an empty ref was carried"
 
@@ -6830,4 +6831,118 @@ class TestBackupStampParsing:
             struct_tokens=self._STAMP_TOKENS,
             num_tokens=self._STAMP_TOKENS,
             label="TestBackupStampParsing.test_retention_prune_never_deletes_a_non_stamped_file",
+        )
+
+
+class TestOpsAllowedHosts:
+    """`ops._ALLOWED_HOST` — the exact Host authorities `ops serve` allow-lists.
+
+    No campaign reached this grammar: the serve startup check
+    ``_ALLOWED_HOST.fullmatch(item)`` over the comma-split, stripped,
+    lowercased ``--allowed-hosts`` entries is the only place an operator's
+    spelling crosses a regex, and a wrong answer is a host the server
+    accepts that was never named (or one it refuses that was).  Structure
+    tokens carry the dangerous spellings byte mutation rarely spells:
+    embedded authorities, ports past 65535, empty labels, control bytes.
+
+    Contract, over every mutated value:
+
+    * the regex never raises and never takes more than a bounded time
+      (no nested quantifier, so no ReDoS: the first char is alnum and the
+      rest is a single character class, the port a bounded digit run);
+    * an accepted value is exactly one lowercase DNS authority with an
+      optional port 1..65535, no control/space/NUL, no userinfo, no path;
+    * an accepted value round-trips: it is its own stripped lowercased
+      form (the startup normalization).
+    * the port is a real port: the regex spells 1..65535, not any five
+      digits, so ``:0``/``:99999`` are refused (found by this campaign).
+    """
+
+    _SEEDS: ClassVar[list[bytes]] = [
+        b"example.com",
+        b"example.com:8080",
+        b"localhost",
+        b"a-b.example.co.uk:1",
+        b"",
+        b"exam ple.com",
+        b"example.com:65536",
+        b"example.com:0",
+        b"-bad.com",
+        b"bad-.com",
+        b"a..b",
+        b"user@example.com",
+        b"example.com/path",
+        b"example.com:80x",
+        b"EXAMPLE.COM",
+        b"a" * 300 + b".com",
+        b"\x00example.com",
+        b"example.com\n",
+        b"::1",
+        b"[::1]:8080",
+    ]
+
+    _TOKENS: ClassVar[tuple[bytes, ...]] = (
+        b"example.com",
+        b":8080",
+        b":65536",
+        b":0",
+        b":",
+        b".",
+        b"-",
+        b"@",
+        b"/",
+        b"\\",
+        b"\x00",
+        b"\n",
+        b" ",
+        b"%00",
+        b"EXAMPLE.COM",
+        b"a" * 64,
+        "éxample.com".encode(),
+        b"[::1]",
+        b"::",
+    )
+
+    def test_a_host_is_accepted_only_as_one_plain_authority(self) -> None:
+        from recoverage.ops import _ALLOWED_HOST
+
+        def check(data: bytes) -> None:
+            raw = data.decode("utf-8", "surrogateescape")
+            item = raw.strip().lower()
+            try:
+                accepted = bool(_ALLOWED_HOST.fullmatch(item))
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_ALLOWED_HOST raised {type(exc).__name__}: {exc} for {item!r}"
+                ) from exc
+            if not accepted:
+                return
+            assert item == item.strip().lower(), f"{item!r}: not normalized"
+            assert not any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in item), (
+                f"{item!r}: control/space in accepted host"
+            )
+            assert "@" not in item and "/" not in item and "\\" not in item, (
+                f"{item!r}: userinfo/path in accepted host"
+            )
+            assert item.count(":") <= 1, f"{item!r}: more than one port colon"
+            if ":" in item:
+                host, port_text = item.rsplit(":", 1)
+                assert port_text.isascii() and port_text.isdigit(), f"{item!r}: non-ASCII port"
+                assert 1 <= int(port_text) <= 65535, f"{item!r}: port out of range"
+            else:
+                host = item
+            assert host and host[0].isascii() and host[0].isalnum(), (
+                f"{item!r}: host does not start alnum"
+            )
+            assert all(ch.isascii() and (ch.isalnum() or ch in ".-") for ch in host), (
+                f"{item!r}: non-DNS char in host"
+            )
+
+        _fuzz(
+            self._SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=self._TOKENS,
+            num_tokens=self._TOKENS,
+            label="TestOpsAllowedHosts.test_a_host_is_accepted_only_as_one_plain_authority",
         )

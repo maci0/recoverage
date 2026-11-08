@@ -79,8 +79,15 @@ ENGINE_ERROR = "engine-error"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
-#: Compiled once at import rather than per allowed-hosts entry.
-_ALLOWED_HOST = re.compile(r"[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?")
+#: Compiled once at import rather than per allowed-hosts entry. The port
+#: is a real port, not any five digits: ``:0`` and ``:99999`` name no
+#: listener, and the rebrew server compares the request's Host against
+#: this list verbatim, so accepting them would allow-list a spelling no
+#: client can legitimately send while refusing nothing.
+_ALLOWED_HOST = re.compile(
+    r"[a-z0-9][a-z0-9.-]*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}"
+    r"|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?"
+)
 
 
 class OpsError(RecoError):
