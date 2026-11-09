@@ -921,7 +921,6 @@ def serve_command(
     from rebrew import telemetry
 
     from recoverage import __version__
-
     from recoverage import config as _config
 
     # Typer/click's INT coercion accepts Unicode digits and ``1_0`` spellings,
@@ -992,8 +991,7 @@ def serve_command(
         host = validate_bind(host, "--host")
         if not _config.MIN_PORT <= resolved_port <= _config.MAX_PORT:
             raise ConfigError(
-                f"--port: {resolved_port} is not in the range "
-                f"{_config.MIN_PORT}-{_config.MAX_PORT}"
+                f"--port: {resolved_port} is not in the range {_config.MIN_PORT}-{_config.MAX_PORT}"
             )
     except ConfigError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)

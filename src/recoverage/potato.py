@@ -2969,15 +2969,9 @@ def _sort_header(
     current = key == active
     direction = "desc" if current and not descending else "asc"
     arrow = (" &darr;" if descending else " &uarr;") if current else ""
-    aria_sort = (
-        (f' aria-sort="{"descending" if descending else "ascending"}"')
-        if current
-        else ""
-    )
+    aria_sort = (f' aria-sort="{"descending" if descending else "ascending"}"') if current else ""
     href = (
-        f"{base}&sort={key}:{direction}"
-        if current or direction == "desc"
-        else f"{base}&sort={key}"
+        f"{base}&sort={key}:{direction}" if current or direction == "desc" else f"{base}&sort={key}"
     )
     return (
         f'<th scope="col"{aria_sort}><a href="{href}">'

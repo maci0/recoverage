@@ -7830,7 +7830,7 @@ class TestHexDumpRenderer:
 
 _TOML_SEEDS: tuple[bytes, ...] = (
     b"version = 1\n",
-    b"[sections.\".text\"]\nva = 4096\n",
+    b'[sections.".text"]\nva = 4096\n',
     b"",
     b"a = 1\n",
     b"[",
@@ -7839,7 +7839,7 @@ _TOML_SEEDS: tuple[bytes, ...] = (
 
 _TOML_TOKENS: tuple[bytes, ...] = (
     b"version = 1\n",
-    b"[sections.\".text\"]\n",
+    b'[sections.".text"]\n',
     b"a = [",
     b"\xff",
 )
@@ -7930,9 +7930,7 @@ _TRUSTED_TOKENS: tuple[bytes, ...] = (
 class TestTomlDocumentBytes:
     """A coverage TOML document never only raises CoverageTomlError."""
 
-    def test_parse_toml_never_escapes_except_as_coverage_toml_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parse_toml_never_escapes_except_as_coverage_toml_error(self, tmp_path: Path) -> None:
         from rebrew.coverage_toml import CoverageTomlError
 
         from recoverage import documents
@@ -8117,4 +8115,3 @@ class TestTrustedVerificationFold:
                 continue
             with pytest.raises(InvalidRequestError):
                 _verified_section_bytes(section, trusted)
-

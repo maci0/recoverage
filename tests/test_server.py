@@ -4137,9 +4137,7 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         PASS line instead of crashing before the verdict."""
         from recoverage.reporting import gate, section_verdict
 
-        stats = [
-            ("t", {"sections": {".text": {"covered_bytes": 10**400, "total_bytes": 1}}})
-        ]
+        stats = [("t", {"sections": {".text": {"covered_bytes": 10**400, "total_bytes": 1}}})]
         out = gate(stats, min_coverage=50.0)
         [verdict] = out.verdicts
         assert verdict.status == "PASS"
@@ -6181,7 +6179,7 @@ class TestSpaLayoutAndFeedback:
         assert "onFailure: flashPersistent" in app
 
     def test_an_empty_target_offers_regenerate_in_place(self) -> None:
-        """"Use Regenerate in the topbar" is a dead end on a narrow viewport.
+        """ "Use Regenerate in the topbar" is a dead end on a narrow viewport.
 
         The topbar wraps into a block and the button the copy names is
         off-screen; the empty state itself now carries the same action,
@@ -6784,9 +6782,7 @@ class TestClockSeam:
         assert status.startswith("200"), status
         assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
 
-    def test_wait_event_ends_on_the_patched_clock_not_real_time(
-        self, monkeypatch: Any
-    ) -> None:
+    def test_wait_event_ends_on_the_patched_clock_not_real_time(self, monkeypatch: Any) -> None:
         """A bounded wait ends when the CLOCK passes its deadline.
 
         ``wait_event`` is the seam ``api._await_build_event`` parks on; a
@@ -7628,7 +7624,11 @@ class TestSpaFirstPaint:
         # only those three are named here.
         for marker in (
             "No coverage available",
-            'No coverage data for <span className="font-mono">{target}</span>\n        </p>\n        <p className="m-0 max-w-empty">',
+            (
+                'No coverage data for <span className="font-mono">{target}</span>\n'
+                "        </p>\n"
+                '        <p className="m-0 max-w-empty">'
+            ),
             "No blocks in",
         ):
             assert marker in app, f"an empty stack lost its palette-measure read: {marker[:32]}"

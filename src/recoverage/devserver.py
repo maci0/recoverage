@@ -27,7 +27,7 @@ lazy import json
 lazy from collections.abc import Callable
 lazy from wsgiref.types import InputStream
 
-from recoverage import clock, config, metrics
+from recoverage import config, metrics
 
 if TYPE_CHECKING:
     # _typeshed ships with mypy, not with CPython: the annotations below are
