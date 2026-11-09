@@ -79,12 +79,13 @@ _CAPABILITY_MODULES = frozenset({"disasm"})
 
 #: What a capability module may reach up into.  ``server`` owns the DLL byte
 #: cache, the schema check and the compressor handles, so a capability that
-#: needs one of those reads it from there.
-_CAPABILITY_ALLOWED_UP = frozenset({"server"})
+#: needs one of those reads it from there.  ``metrics`` is a leaf (level 0)
+#: with no in-package deps, so reaching it is not an upward edge at all.
+_CAPABILITY_ALLOWED_UP = frozenset({"server", "metrics"})
 
 #: Names ``recoverage/__init__.py`` defines; every other ``from recoverage
 #: import X`` is a submodule import, not a name.
-_PACKAGE_EXPORTS = frozenset({"__version__", "RecoError", "app"})
+_PACKAGE_EXPORTS = frozenset({"__version__", "RecoError", "ConfigError", "app"})
 
 #: The public library surface lives in ``recoverage/__init__.py`` and reaches
 #: the composition root and the error base only lazily, through

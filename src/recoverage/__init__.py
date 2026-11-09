@@ -65,8 +65,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from recoverage.config import RecoError
+    from recoverage.config import ConfigError, RecoError
     from recoverage.webapp import app
+
+
+def __dir__() -> list[str]:
+    """Names the package exposes, including the lazy ones.
+
+    Without this, ``dir(recoverage)`` omits ``RecoError`` and ``app`` (they
+    are not in the module ``__dict__``), so tab-completion and
+    ``help(recoverage)`` do not surface the public library API.
+    """
+    return sorted({*globals(), *__all__})
 
 
 def __getattr__(name: str) -> object:
@@ -81,6 +91,10 @@ def __getattr__(name: str) -> object:
         from recoverage.config import RecoError
 
         return RecoError
+    if name == "ConfigError":
+        from recoverage.config import ConfigError
+
+        return ConfigError
     if name == "app":
         from recoverage.webapp import app
 
@@ -90,4 +104,4 @@ def __getattr__(name: str) -> object:
 
 __version__ = "8.9.0"
 
-__all__ = ["RecoError", "__version__", "app"]
+__all__ = ["ConfigError", "RecoError", "__version__", "app"]
