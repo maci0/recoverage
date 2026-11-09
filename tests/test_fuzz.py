@@ -6888,6 +6888,12 @@ class TestReportExportAndGate:
             assert reporting._coverage_meets(23, 40, 57.6) is False
             assert reporting._coverage_meets(0, 0, 0.0) is False
             assert reporting._coverage_meets(1, 0, 0.0) is False
+            # A non-finite threshold meets nothing rather than raising: the
+            # gate is a boolean verdict, and a NaN threshold (reachable via a
+            # JSON body the ops loader or a direct caller hands it) must not
+            # crash the comparison with Decimal InvalidOperation.
+            assert reporting._coverage_meets(50, 100, float("nan")) is False
+            assert reporting._coverage_meets(50, 100, float("inf")) is False
 
         _fuzz(
             _REPORT_SEEDS,

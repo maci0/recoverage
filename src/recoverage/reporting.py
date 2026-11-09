@@ -338,6 +338,12 @@ def _coverage_meets(covered: int, total: int, min_coverage: float) -> bool:
     """
     if total <= 0:
         return False
+    # A non-finite threshold meets nothing: NaN comparisons raise
+    # InvalidOperation in Decimal, and inf would compare as a real number.
+    import math
+
+    if not math.isfinite(min_coverage):
+        return False
     # Exact rational comparison: min_coverage is a percentage (float from CLI/ops).
     # Use Decimal(repr(min_coverage)) to recover the intended decimal text;
     # covered/total are ints, so Decimal keeps the cross-multiplication exact.
