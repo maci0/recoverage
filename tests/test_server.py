@@ -5273,7 +5273,8 @@ class TestSpaLocaleFormatting:
         """
         fmt = _web("lib/format.ts")
         body = fmt.split("export function percentLabel", 1)[1].split("\n}", 1)[0]
-        assert "percent1(percentage)" in body
+        assert 'style: "percent"' in body
+        assert "Math.floor(" in body
         assert "isolate(" in body
         similarity = fmt.split("export function similarityPct", 1)[1].split("\n}", 1)[0]
         assert "percentLabel(fraction * 100)" in similarity

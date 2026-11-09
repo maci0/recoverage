@@ -124,19 +124,40 @@ export function percent1(percentage: number): string {
 
 /** A percentage carrying its own sign, as one directional run.
  *
- * The sign is a bidi NEUTRAL, and the digits it sits against are not Latin:
- * `toLocaleString` spells them in the reader's script (Arabic-Indic digits for
- * an Arabic reader, a comma decimal for a German one), so the one character
- * that decides which end of the figure the run reads from has no script of its
- * own. Left alone in a sentence, a reader whose text runs right to left saw the
- * `%` travel to the other side of the number, and a figure stood in a cell did
- * the same beside its label. The isolate keeps number and sign together and
- * hands the surrounding sentence its own direction, which is the half
- * `dir="auto"` cannot cover: it applies to a value standing alone, and every
- * percentage the dashboard prints is interpolated into words the page owns
- * ("NN.N% covered", "similarity NN.N%"). */
+ * The digits it sits against are not Latin: `toLocaleString` spells them in
+ * the reader's script (Arabic-Indic digits for an Arabic reader, a comma
+ * decimal for a German one), so the sign's placement has no script of its
+ * own. `Intl.NumberFormat` with `style: "percent"` spells the sign the way
+ * the reader's locale spells it: a separate glyph and a space for a French
+ * or German reader (`"99,9 %"` with a non-breaking space), a different glyph
+ * again for Arabic (`"٪"`), rather than a bare `%` appended to a figure the
+ * locale formats already. Appending the sign and isolating the pair keeps the
+ * number and the sign together as one run; the locale's own percent form is
+ * what keeps its placement right inside that run, and the isolate hands the
+ * surrounding sentence its own direction, which is the half `dir="auto"`
+ * cannot cover: it applies to a value standing alone, and every percentage
+ * the dashboard prints is interpolated into words the page owns ("NN.N%
+ * covered", "similarity NN.N%"). */
 export function percentLabel(percentage: number): string {
-  return isolate(`${percent1(percentage)}%`);
+  if (!Number.isFinite(percentage)) {
+    // Same fallback as percent1: the zero it writes, with the sign the
+    // locale spells, so the column stays numeric.
+    return isolate(
+      (0).toLocaleString(undefined, {
+        style: "percent",
+        minimumFractionDigits: PERCENT_DECIMALS,
+        maximumFractionDigits: PERCENT_DECIMALS,
+      }),
+    );
+  }
+  const floored = Math.floor(percentage * PERCENT_SCALE + PERCENT_SLACK) / PERCENT_SCALE;
+  return isolate(
+    (floored / 100).toLocaleString(undefined, {
+      style: "percent",
+      minimumFractionDigits: PERCENT_DECIMALS,
+      maximumFractionDigits: PERCENT_DECIMALS,
+    }),
+  );
 }
 
 /** A count, grouped the way the reader's locale groups digits.
