@@ -69,6 +69,7 @@ a coverage document and a later backup would carry the earlier one.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import threading
@@ -76,7 +77,6 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PureWindowsPath
-lazy import contextlib
 lazy import hashlib
 lazy import io
 lazy import json
@@ -84,6 +84,7 @@ lazy import os
 lazy import shutil
 lazy import tarfile
 lazy import tempfile
+lazy from collections.abc import Iterator
 lazy from typing import Any, Final
 
 from recoverage.config import RecoError, json_depth_exceeds
@@ -126,8 +127,73 @@ _ARCHIVE_SUFFIX: Final = ".tar"
 #: ``write_backup`` reads the coverage documents and ``restore_backup`` replaces
 #: them; without coordination two in-process threads can interleave their reads
 #: or double-publish a restore, while ``_atomic_write`` already makes each
-#: individual file publish atomic.
+#: individual file publish atomic.  The in-process lock alone cannot see another
+#: process, so the critical sections below also take a cross-process advisory
+#: lock beside the coverage directory (mirroring ``regen._project_lock``): a
+#: cron retry and a CLI run over the same directory converge instead of
+#: interleaving reads/publish/prune, and a killed holder releases it because
+#: the lock is held on an open descriptor.
 _BACKUP_LOCK = threading.Lock()
+
+#: Name of the cross-process lock ``write_backup``/``restore_backup`` take
+#: inside the coverage directory.  It is a dot-file so neither the coverage
+#: glob nor a restore's doc removal ever treats it as a document.
+_BACKUP_LOCK_NAME: Final = ".recoverage-backup.lock"
+
+
+@contextlib.contextmanager
+def _backup_file_lock(db_dir: Path) -> Iterator[None]:
+    """Hold the cross-process advisory lock for *db_dir* (blocking).
+
+    Blocking (unlike the regen lock, which refuses): a backup/restore retry
+    that must converge cannot fail merely because a healthy sibling is
+    mid-write — it waits for that write, then finds the identical archive
+    its dedup check names.  The lock is the open descriptor, so a crash
+    releases it and the retry proceeds.
+    """
+    db_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = db_dir / _BACKUP_LOCK_NAME
+    handle = lock_path.open("a+")
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        else:
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    break
+                except OSError:
+                    import time
+
+                    time.sleep(0.05)  # device lock is poll-based on Windows
+        try:
+            yield
+        finally:
+            if os.name == "posix":
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            else:
+                import msvcrt
+
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+    finally:
+        handle.close()
+        # Best-effort cleanup: the lock file is not a document, but a stray
+        # per coverage directory breaks the restore no-op/rollback exact-
+        # contents invariant and a later prune.  Removing it after the
+        # advisory lock is released is safe: the in-process lock serializes
+        # this process, and a racing cross-process opener that already
+        # opened the old inode simply recreates one on its next run; a
+        # failed unlink (another holder raced us) leaves it for next time.
+        with contextlib.suppress(OSError):
+            lock_path.unlink()
+
 
 #: How many stamped archives to keep in the backup directory.  Unbounded
 #: growth is the silent failure mode of a nightly job: the volume fills
@@ -779,7 +845,7 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     the default is beside it: an archive inside the tree it archives shares
     its failure domain.
     """
-    with _BACKUP_LOCK:
+    with _BACKUP_LOCK, _backup_file_lock(db_dir):
         return _write_backup(db_dir, destination)
 
 
@@ -1303,7 +1369,7 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     archive's set, so a target deleted from the source or added by a bad
     build does not survive. Non-coverage files are untouched.
     """
-    with _BACKUP_LOCK:
+    with _BACKUP_LOCK, _backup_file_lock(db_dir):
         return _restore_backup(archive, db_dir, force=force)
 
 

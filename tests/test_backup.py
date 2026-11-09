@@ -268,6 +268,28 @@ class TestWriteBackup:
         assert again.path == first.path
         assert again.members == first.members
 
+    def test_two_concurrent_backups_converge_to_one_archive(self, db: Path, tmp_path: Path) -> None:
+        """A second execution under concurrent back-to-back runs creates no extra archive."""
+        import threading
+
+        out = tmp_path / "out"
+        out.mkdir()
+        barrier = threading.Barrier(2)
+        results: list[Path] = []
+
+        def run() -> None:
+            barrier.wait()
+            results.append(write_backup(db, out).path)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(results) == 2
+        assert results[0] == results[1]
+        assert len(list(out.glob("coverage-*.tar"))) == 1
+
 
 class TestVerifyBackup:
     """Restore runs this first, so every refusal is made before a write."""
