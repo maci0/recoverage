@@ -5145,6 +5145,61 @@ class TestDataPayloadMemo:
             api._DATA_CACHE.pop(key, None)
             api._DATA_CACHE_BUILDING.pop(key, None)
 
+    def test_a_dead_leader_claim_is_reclaimed_by_advancing_the_clock(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """The reclaim fires when the patched CLOCK passes the deadline.
+
+        The claim is live when the follower starts waiting (so ``_prune``
+        cannot take it) and the leader never sets its Event.  Advancing the
+        patched clock — not shrinking the production wait, not waiting out a
+        real ``_DATA_CACHE_BUILD_WAIT_SECONDS`` — ends the wait and reclaims
+        it.  That is the property a replay of the run turns on: the
+        follower's wait is the clock's read, so the same advance reclaims at
+        the same instant in every run, however long the OS scheduler parked
+        the thread.
+        """
+        import recoverage.api as api
+        from recoverage import clock
+
+        release = threading.Event()
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
+        api._clear_data_cache()
+
+        key = self._data_key()
+        dead = threading.Event()
+        now = [api.clock.monotonic()]
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        api._DATA_CACHE_BUILDING[key] = (
+            dead,
+            now[0] + api._DATA_CACHE_BUILD_WAIT_SECONDS,
+        )
+        outcome: list[Any] = []
+
+        def follower() -> None:
+            outcome.append(api._data_cache_checkout(key))
+
+        t = threading.Thread(target=follower)
+        try:
+            t.start()
+            t.join(timeout=0.3)
+            assert t.is_alive(), "a claim inside its deadline was reclaimed early"
+            assert open_calls == [], "follower read coverage despite an in-flight build"
+            now[0] += api._DATA_CACHE_BUILD_WAIT_SECONDS + 1.0
+            t.join(timeout=15)
+            assert not t.is_alive(), "advancing the clock never ended the follower's wait"
+            entry, owned = outcome[0]
+            assert entry is None, "served a payload from a leader that never published one"
+            assert owned is not None, "a reclaimed key must be handed to its new leader"
+            claim = api._DATA_CACHE_BUILDING.get(key)
+            assert claim is not None and claim[0] is owned
+            api._data_cache_build_done(key, owned)
+            assert api._DATA_CACHE_BUILDING == {}
+        finally:
+            dead.set()
+            api._DATA_CACHE.pop(key, None)
+            api._DATA_CACHE_BUILDING.pop(key, None)
+
     def test_a_claim_whose_leader_is_alive_is_not_reclaimed(
         self, tmp_path: Any, monkeypatch: Any
     ) -> None:

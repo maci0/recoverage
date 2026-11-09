@@ -372,19 +372,18 @@ def _await_build_event(event: threading.Event, deadline: float) -> bool:
     The bound comes from :func:`recoverage.clock.monotonic`, the seam every
     other elapsed-time read in the package uses, so the wait is answerable
     without the wall-clock seconds it used to park for: a test (or a
-    simulation driving one clock) reaches the expired-Event branch by advancing
-    the clock past *deadline* rather than by shrinking the production constant,
-    and a run replayed from its seed waits exactly as long as the first did.
+    simulation driving one clock) reaches the expired-Event branch by
+    advancing the clock past *deadline* rather than by shrinking the
+    production constant, and a run replayed from its seed waits exactly as
+    long as the first did.  The wait itself is :func:`clock.wait_event`, the
+    same seam: an ``Event.wait(timeout=)`` takes a real duration, so a
+    patched clock's deadline was never reached and a dead leader's claim was
+    reclaimed only after real seconds had passed.
 
     A patched clock must advance, or a leader that never comes back never ends
     the wait: real time advances on its own and this does not.
     """
-    while True:
-        remaining = deadline - clock.monotonic()
-        if remaining <= 0:
-            return event.is_set()
-        if event.wait(timeout=min(remaining, _DATA_BUILD_WAIT_SLICE_SECONDS)):
-            return True
+    return clock.wait_event(event, deadline, _DATA_BUILD_WAIT_SLICE_SECONDS)
 
 
 def _prune_stale_claims(now: float) -> None:

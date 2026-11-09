@@ -24,6 +24,13 @@ loop wakes the thread every 50 ms for the whole delay — 12,000 wakeups for a
 ten-minute timer — and ``cancel()`` then has to wait for the next tick, which
 is why the slice and the cancel latency were the same number.  One wait means
 one sleep per timer and a cancel that lands at the next scheduling point.
+
+A bounded wait on an event is on the seam too: :func:`wait_event` ends on the
+same clock a deadline is read from, and parks in slices no longer than
+*quantum*, so a patched clock advances the wait without real seconds passing.
+The quantum only bounds how late a wake is noticed; a set event still wakes at
+once.  Callers that take a small *quantum*, or already shorten their own
+wait, keep their own loop.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from collections.abc import Callable
 from typing import Any
 lazy import time
 
-__all__ = ["Timer", "monotonic", "sleep", "wall_time"]
+__all__ = ["Timer", "monotonic", "sleep", "wait_event", "wall_time"]
 
 
 def monotonic() -> float:
@@ -54,6 +61,30 @@ def sleep(seconds: float) -> None:
     same attempts in the same order as a production run without waiting for it.
     """
     time.sleep(seconds)
+
+
+def wait_event(event: threading.Event, deadline: float, quantum: float = 0.05) -> bool:
+    """Wait for *event* to be set, but no later than *deadline* on this clock.
+
+    :func:`threading.Event.wait` takes a real duration, so a caller bounded
+    by :func:`monotonic` parked on real seconds, and a patched clock's
+    deadline was never reached: a stale claim was reclaimed only after real
+    time had passed, and a run replayed from its seed waited however long the
+    wall clock decided.  This reads the same clock as the deadline and parks
+    in slices no longer than *quantum* between reads, so advancing the
+    patched clock ends the wait at the same simulated instant in every run.
+    A set event still wakes the wait at once, on the first slice it lands in.
+
+    Returns whether the event was set.  A patched clock that never advances
+    never ends the wait, the same caveat every clock-bounded loop carries:
+    real time advances on its own and a patched read does not.
+    """
+    while True:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return event.is_set()
+        if event.wait(timeout=min(remaining, max(quantum, 0.0))):
+            return True
 
 
 class Timer(threading.Thread):
