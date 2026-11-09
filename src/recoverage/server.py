@@ -359,8 +359,10 @@ def _authority_of(value: str) -> str:
     Scheme-independent on purpose: a dashboard behind a TLS-terminating proxy
     is reached as ``Origin: https://box`` with ``Host: box``, and the question
     this answers is which service the page came from, not which scheme it used
-    to get here.  A default port collapses away on both sides so
-    ``http://box:80`` and ``box`` name one authority.
+    to get here.  Port 80 collapses for http (and bare, scheme-defaulting to
+    http) and 443 for https, so ``http://box:80`` and ``box`` name one
+    authority, while ``http://box:443`` keeps its port: collapsing both ports
+    on both sides would conflate two different services on one host.
     """
     if _hostname_of(value) == "":
         return ""
@@ -370,7 +372,8 @@ def _authority_of(value: str) -> str:
         port = parsed.port
     except ValueError:
         return ""
-    if port in (None, 80, 443):
+    scheme = parsed.scheme or "http"
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
         port = None
     host_part = f"[{host}]" if ":" in host else host
     return f"{host_part}:{port}" if port else host_part

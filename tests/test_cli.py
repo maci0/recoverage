@@ -1109,6 +1109,14 @@ class TestExportCsvFormulaInjection:
         sec_col = rows[0].index("section")
         assert rows[1][sec_col] == f"'{prefix}evil"
 
+    @pytest.mark.parametrize("prefix", [" ", "  ", "\n"])
+    def test_leading_whitespace_formula_leads_are_escaped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix: str
+    ) -> None:
+        rows = self._export_rows(tmp_path, monkeypatch, f"{prefix}=evil")
+        sec_col = rows[0].index("section")
+        assert rows[1][sec_col] == f"'{prefix}=evil"
+
     def test_normal_names_pass_through_untouched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

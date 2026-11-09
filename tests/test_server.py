@@ -937,6 +937,10 @@ class TestTruncateText:
         assert truncate_text("hello world", 5) == "hello"
         assert truncate_text("short", 10) == "short"
 
+    def test_a_negative_limit_returns_empty(self) -> None:
+        assert truncate_text("hello", -1) == ""
+        assert truncate_text("hello", -5) == ""
+
 
 class TestSearchColumnGuards:
     """A skipped address column must be one the term could not have matched.
@@ -6797,6 +6801,18 @@ class TestOriginIsThisDashboard:
     )
     def test_same_authority_accepted(self, origin: str, host: str) -> None:
         assert origin_is_this_dashboard(origin, host)
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://box:443", "box"),
+            ("http://box:443", "box:80"),
+            ("https://box:80", "box"),
+            ("https://box:80", "box:443"),
+        ],
+    )
+    def test_non_default_port_is_not_collapsed(self, origin: str, host: str) -> None:
+        assert not origin_is_this_dashboard(origin, host)
 
     @pytest.mark.parametrize(
         ("origin", "host"),

@@ -96,6 +96,8 @@ def truncate_text(value: str, limit: int) -> str:
     it.  A combining mark at the cut is not an orphan — its base is before
     it — so it stays.  One place, so a cap cannot be spelled two ways.
     """
+    if limit < 0:
+        return ""
     if len(value) <= limit:
         return value
     cut = value[:limit]
@@ -198,8 +200,11 @@ def csv_safe(value: Any) -> Any:
     through untouched.  A string that merely looks numeric is prefixed like any
     other, because ``-`` and ``+`` are formula prefixes too.
     """
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
-        return f"'{value}"
+    if isinstance(value, str):
+        if value.startswith(_CSV_FORMULA_PREFIXES):
+            return f"'{value}"
+        if value.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@"):
+            return f"'{value}"
     return value
 
 
