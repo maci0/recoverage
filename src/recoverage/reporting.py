@@ -135,8 +135,26 @@ def coverage_pct(covered: int, total: int) -> float:
     per-section ``coverage_pct`` are the same quantity, so they take the same
     rounding, from here (rebrew's ``floor_pct``) rather than each one calling
     ``round``.  A *total* of 0 has no ratio and answers 0.0.
+
+    Ordinary ints take the integer spelling, ``floor(100 * covered / total * 100) / 100``,
+    because ``floor_pct`` converts the counts to float first and an int wider
+    than a float (a document byte count of 10**400, spelled digit for digit)
+    overflows that conversion before the guard inside ``floor_pct`` can run.
+    The integer spelling is the same floor, with no float error to absorb:
+    29 of 100 floors to 29.0 rather than the 28.99 a float undershoot gave.
+    A percentage past the float range keeps ``floor_pct``'s largest-finite
+    answer instead of raising, and a non-int caller keeps the ``floor_pct``
+    path unchanged.
     """
-    return floor_pct(covered, total, 2)
+    if type(covered) is not int or type(total) is not int:
+        return floor_pct(covered, total, 2)
+    if covered <= 0 or total <= 0:
+        return 0.0
+    floored = covered * 10_000 // total
+    try:
+        return float(floored) / 100.0
+    except OverflowError:
+        return float(10**6)
 
 
 def pct_1dp(value: float) -> float:
@@ -459,7 +477,18 @@ def gate(
             # total), i.e. an untracked section whose verdict never reads pct,
             # so no fallback value can reach a comparison.
             total_bytes = sec.get("total_bytes") or 0
-            pct = covered / total_bytes * 100 if total_bytes else 0.0
+            try:
+                pct = covered / total_bytes * 100 if total_bytes else 0.0
+            except OverflowError:
+                # A byte count wider than a float (10**400, spelled digit for
+                # digit in the document) overflows the division before the
+                # verdict can read it.  The ratio is honestly past the float
+                # range, which can only mean covered far exceeds total, so
+                # answer the largest finite percent the display caps at and
+                # let _coverage_meets, which compares in Decimal, decide.
+                # Infinity would floor to 0.0 through floor_pct's finite
+                # guard and quote a PASS as 0.00%.
+                pct = float(10**6) if covered > 0 else 0.0
             verdict = section_verdict(
                 pct,
                 untracked,

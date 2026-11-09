@@ -4062,6 +4062,72 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         assert health["db"]["unreadable"] == ["coverage-BROKEN.toml"]
         assert health["status"] == "degraded"
 
+    def test_a_byte_count_wider_than_a_float_is_unreadable_not_a_500(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cell size of 10**400 overflows the percentage fold rebrew runs
+        while building the snapshot, and that OverflowError must file as
+        unreadable (503) rather than escape as a 500 on every route."""
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        big = "1" + "0" * 400
+        (directory / "coverage-BROKEN.toml").write_text(
+            "version = 1\n"
+            'target = "BROKEN"\n'
+            "[metadata]\npaths = {}\n"
+            '[sections.".text"]\n'
+            "va = 0\nsize = 10\nfileOffset = 0\nunitBytes = 1\ncolumns = 1\n"
+            "cells = [{start = 0, end = "
+            + big
+            + ', span = 1, state = "exact", functions = [], label = "", '
+            'parent_function = ""}]\n',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(CoverageTomlError):
+            srv.coverage_snapshots()
+
+        status, _, body = wsgi_get("/api/targets/BROKEN/stats")
+        assert status.startswith("503"), status
+        assert json.loads(body)["code"] == "db_unavailable"
+
+    def test_a_byte_count_comparison_group_answers_a_wide_int(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The floored percentage over two 10**400 counts is 100.0, not an
+        OverflowError out of the float conversion the fold path takes."""
+        from recoverage.reporting import coverage_pct
+
+        assert coverage_pct(10**400, 10**400) == 100.0
+        assert coverage_pct(10**400, 1) == 1000000.0
+        assert coverage_pct(1, 10**400) == 0.0
+        assert coverage_pct(29, 100) == 29.0
+        assert coverage_pct(999_997, 1_000_000) == 99.99
+
+    def test_a_gate_with_a_wide_int_quotes_its_capped_percent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A covered count wider than a float quotes the display cap on its
+        PASS line instead of crashing before the verdict."""
+        from recoverage.reporting import gate, section_verdict
+
+        stats = [
+            ("t", {"sections": {".text": {"covered_bytes": 10**400, "total_bytes": 1}}})
+        ]
+        out = gate(stats, min_coverage=50.0)
+        [verdict] = out.verdicts
+        assert verdict.status == "PASS"
+        assert verdict.human == "coverage 1000000.00% >= 50.00%"
+        assert out.passed is True
+        verdict = section_verdict(
+            0.0, False, False, 50.0, target="t", section=".text", covered=0, total=100
+        )
+        assert verdict.status == "FAIL"
+
     def test_fixing_the_document_moves_the_target_list_etag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

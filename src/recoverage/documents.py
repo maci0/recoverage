@@ -430,7 +430,19 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
         else:
             metrics.CACHES.hit(metrics.DOCUMENT_CACHE)
             return _Doc(stat, digest, snapshot)
-    return _Doc(stat, digest, snapshot_from_document(path, _parse_toml(path, data, digest), target))
+    parsed = _parse_toml(path, data, digest)
+    try:
+        return _Doc(stat, digest, snapshot_from_document(path, parsed, target))
+    except CoverageTomlError:
+        raise
+    except ArithmeticError as exc:
+        # A document integer wider than a float (a cell size of 10**400, spelled
+        # out digit for digit in the TOML) overflows the percentage fold rebrew
+        # runs while building the snapshot, and that OverflowError is not a shape
+        # violation: escaping here it misses _rebuild's unreadable arm, which
+        # only files CoverageTomlError, and 500s every snapshot-keyed route
+        # instead of answering 503 for one bad file.
+        raise CoverageTomlError(f"{path}: {exc}") from exc
 
 
 def _project_view(source: Path) -> ProjectCoverageView | None:
