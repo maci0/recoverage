@@ -2051,21 +2051,6 @@ def _va_matches_folded(columns: tuple[str, str] | None, needle: str, match_hex: 
     return needle in columns[0] or needle in columns[1]
 
 
-def _columns_match(columns: tuple[str, str, str], needle: str) -> bool:
-    """Whether *needle* occurs in any of the row's three FOLDED name columns.
-
-    The shared definition, :func:`server.folded_columns_match`, under the name
-    this module's three call sites read it by.  It was a second copy here: the
-    same three substring tests over the same three folded columns of the same
-    frozen rows, differing only in the order the arms were tried (all three are
-    ``in`` tests, so the order cannot change the answer), and the API function
-    list carried a third.  One definition in :mod:`server` is where the folded
-    columns are built, so all three surfaces read the predicate beside the
-    table it takes.
-    """
-    return folded_columns_match(columns, needle)
-
-
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
     """Names the grid should highlight for *search_query*.
 
@@ -2115,7 +2100,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         (
             fn
             for fn in coverage.functions
-            if _columns_match(folded_fns[id(fn)], needle)
+            if folded_columns_match(folded_fns[id(fn)], needle)
             or _va_matches_folded(
                 folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
             )
@@ -2131,7 +2116,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         (
             gl
             for gl in coverage.globals
-            if _columns_match(folded_gls[id(gl)], needle)
+            if folded_columns_match(folded_gls[id(gl)], needle)
             or _va_matches_folded(
                 folded_gl_vas[id(gl)] if folded_gl_vas is not None else None, needle, match_hex
             )
@@ -3024,7 +3009,7 @@ def _render_function_list(
         rows = [
             fn
             for fn in rows
-            if _columns_match(folded[id(fn)], needle)
+            if folded_columns_match(folded[id(fn)], needle)
             or _va_matches_folded(
                 folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
             )

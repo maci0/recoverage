@@ -1004,18 +1004,9 @@ class TestSearchColumnGuards:
         import recoverage.potato as potato
 
         assert api._server.folded_columns_match is folded_columns_match
-        code = [
-            line
-            for line in inspect.getsource(potato._columns_match).splitlines()
-            if not line.lstrip().startswith(("#", '"', "'"))
-        ]
-        assert not any("needle in columns" in line for line in code), (
-            "potato._columns_match re-spells the three tests instead of delegating"
-        )
-        delegates = [line.strip() for line in code]
-        assert "return folded_columns_match(columns, needle)" in delegates, (
-            "potato._columns_match no longer delegates to the shared predicate"
-        )
+        assert potato.folded_columns_match is folded_columns_match
+        assert inspect.getsource(potato._search_functions).count("folded_columns_match") == 2
+        assert "folded_columns_match" in inspect.getsource(potato._render_function_list)
 
 
 class TestSnapshotVaIndices:

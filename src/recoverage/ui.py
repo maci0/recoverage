@@ -700,6 +700,18 @@ def _not_modified(etag: str) -> HTTPResponse:
     )
 
 
+def _unreadable_asset(filename: str, exc: OSError) -> HTTPResponse:
+    # Missing/unreadable asset: log it and let bottle produce the 404, don't 500.
+    _log.warning(
+        "Static asset %s unreadable: %s: %s",
+        _server._log_safe(filename),
+        type(exc).__name__,
+        _server._log_safe(str(exc)),
+        extra=_server.request_log_fields(404),
+    )
+    return static_file(filename, root=str(_assets_dir()))
+
+
 @app.get(
     "/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg|highlight\\.js"
     "|archivo\\.woff2|jetbrains-mono\\.woff2)>"
@@ -728,15 +740,7 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
         try:
             identity_bytes = (_assets_dir() / filename).read_bytes()
         except OSError as exc:
-            # Missing/unreadable asset: let bottle produce the 404, don't 500.
-            _log.warning(
-                "Static asset %s unreadable: %s: %s",
-                _server._log_safe(filename),
-                type(exc).__name__,
-                _server._log_safe(str(exc)),
-                extra=_server.request_log_fields(404),
-            )
-            return static_file(filename, root=str(_assets_dir()))
+            return _unreadable_asset(filename, exc)
         etag = _asset_etag(filename, "identity", identity_bytes)
         if _if_none_match_matches(_header("If-None-Match", ""), etag):
             return _not_modified(etag)
@@ -761,15 +765,7 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
         try:
             raw = path.read_bytes()
         except OSError as exc:
-            # Missing/unreadable asset: let bottle produce the 404, don't 500.
-            _log.warning(
-                "Static asset %s unreadable: %s: %s",
-                _server._log_safe(filename),
-                type(exc).__name__,
-                _server._log_safe(str(exc)),
-                extra=_server.request_log_fields(404),
-            )
-            return static_file(filename, root=str(_assets_dir()))
+            return _unreadable_asset(filename, exc)
         body, encoding = compress_static_variants(raw, accept_encoding)
         # A racing thread may already have filled this key; keep whichever
         # landed first so every client sees one body under one ETag.
