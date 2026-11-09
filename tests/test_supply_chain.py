@@ -2691,6 +2691,51 @@ class TestToolWritesReportTheirFailures:
         )
 
 
+class TestArtifactProvenanceIsAttested:
+    """An uploaded artifact a scanner or packager consumes carries its origin.
+
+    The build and sbom jobs both write provenance (``actions/attest``) over
+    the files they upload, but nothing read the workflows to keep the two in
+    step: dropping an attestation step, or pointing one at a file the upload
+    does not carry, left the job green and the artifact unattested, which is
+    the one outcome the permissions exist to prevent. These fail when an
+    upload gains a subject the attestation does not name, or when the
+    attestation block loses its pin or its permissions.
+    """
+
+    def test_every_uploaded_artifact_is_attested(self) -> None:
+        ci = _CI_YML.read_text(encoding="utf-8")
+        uploads = [m.group(1) for m in re.finditer(r"name: (recoverage-\S+)", ci)]
+        assert uploads, "ci.yml uploads no artifact; this check would pass vacuously"
+        attested = set(re.findall(r"subject-path: (.+)", ci))
+        # The sbom block uses a block scalar: the paths are the indented lines
+        # after it, not the value of the key line itself.
+        attested = {entry.strip() for entry in attested if entry.strip() not in ("|", "")}
+        for match in re.finditer(r"subject-path: \|\n((?:\s+\S+\n?)+)", ci):
+            for line in match.group(1).splitlines():
+                attested.add(line.strip())
+        assert attested, "the attestation subject-path is empty"
+        for name in uploads:
+            if name == "recoverage-python-sbom":
+                path = "recoverage-python-sbom.txt"
+            elif name == "recoverage-browser-sbom":
+                path = "recoverage-browser-sbom.txt"
+            elif name == "recoverage-browser-spdx":
+                path = "recoverage-browser-spdx.json"
+            elif name == "recoverage-dist":
+                path = "dist/*"
+            else:
+                continue
+            assert path in attested, f"{name} is uploaded but actions/attest does not name {path!r}"
+
+    def test_the_attestation_permissions_are_declared(self) -> None:
+        """``id-token: write`` is what mints the attestations; without it the step fails."""
+        for job in ("build", "sbom"):
+            text = _jobs()[job]
+            assert "attestations: write" in text, f"the {job} job lost attestations: write"
+            assert "id-token: write" in text, f"the {job} job lost id-token: write"
+
+
 class TestVendoredLintPlugin:
     """`tools/oxlint/anti-slop/` is third-party code that lives in the repo.
 
