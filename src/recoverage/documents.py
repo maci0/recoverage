@@ -393,6 +393,13 @@ def _parse_toml(path: Path, data: bytes, digest: str) -> dict[str, Any]:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise CoverageTomlError(f"{path}: malformed TOML ({exc})") from exc
+    except RecursionError as exc:
+        # Deeply-nested TOML (``a = [[[[...]]]]``) makes ``tomllib`` recurse
+        # to Python's limit and raise ``RecursionError``, not ``TOMLDecodeError``.
+        # Without this arm it escapes ``_rebuild``'s ``CoverageTomlError``
+        # handler and 500s every snapshot-keyed route instead of 503 for one
+        # bad file.  Same guard backup.py holds on its own ``tomllib.loads``.
+        raise CoverageTomlError(f"{path}: malformed TOML ({exc})") from exc
     _write_cached(path, digest, doc)
     return doc
 

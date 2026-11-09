@@ -7809,3 +7809,70 @@ class TestHexDumpRenderer:
             num_tokens=_NUM_TOKENS,
             label="TestHexDumpRenderer.test_every_byte_renders_once_at_its_offset",
         )
+
+
+# ── the TOML document parser ──────────────────────────────────────────
+#
+# ``documents._parse_toml`` is the one place untrusted TOML bytes cross
+# ``tomllib.loads`` and become the parsed dict every later consumer trusts.
+# A malformed document must reach the caller as ``CoverageTomlError`` (the
+# 503 ``db_unavailable`` contract), never as a bare ``RecursionError`` or
+# ``TOMLDecodeError`` escaping one level up.  Both malformed-TOML and
+# deeply-nested TOML hit this because ``tomllib`` raises the former for
+# bad syntax and the latter for ``a = [[[[...]]]]`` recursion past
+# Python's limit -- two distinct exceptions where the caller only handles
+# one is the crash-before-503 shape ``TestCoverageDocumentContents`` already
+# holds against the whole-directory path.
+#
+# The oracle is ``tomllib.loads`` itself: whatever it accepts, ``_parse_toml``
+# returns the same dict; whatever it refuses, ``_parse_toml`` refuses with
+# ``CoverageTomlError`` and never a sibling exception.
+
+_TOML_SEEDS: tuple[bytes, ...] = (
+    b"version = 1\n",
+    b"[sections.\".text\"]\nva = 4096\n",
+    b"",
+    b"a = 1\n",
+    b"[",
+    b"\xff\xfe not utf-8",
+)
+
+_TOML_TOKENS: tuple[bytes, ...] = (
+    b"version = 1\n",
+    b"[sections.\".text\"]\n",
+    b"a = [",
+    b"\xff",
+)
+
+
+class TestTomlDocumentBytes:
+    """A coverage TOML document never only raises CoverageTomlError."""
+
+    def test_parse_toml_never_escapes_except_as_coverage_toml_error(
+        self, tmp_path: Path
+    ) -> None:
+        from rebrew.coverage_toml import CoverageTomlError
+
+        from recoverage import documents
+
+        path = tmp_path / "coverage-GAME.toml"
+
+        def check(data: bytes) -> None:
+            try:
+                doc = documents._parse_toml(path, data, "a" * 64)
+            except CoverageTomlError:
+                return
+            except BaseException as exc:
+                raise AssertionError(
+                    f"{type(exc).__name__} escaped _parse_toml on {data[:60]!r}: {exc}"
+                ) from exc
+            assert isinstance(doc, dict), f"{data[:60]!r}: returned non-dict"
+
+        _fuzz(
+            list(_TOML_SEEDS),
+            check,
+            iterations=200,
+            struct_tokens=_TOML_TOKENS,
+            num_tokens=_NUM_TOKENS,
+            label="TestTomlDocumentBytes.test_parse_toml_never_escapes_except_as_coverage_toml_error",
+        )

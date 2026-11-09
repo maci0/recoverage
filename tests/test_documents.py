@@ -345,3 +345,15 @@ def test_an_unreadable_document_is_reported_by_name_and_reason(db: Path) -> None
 
     (db / "coverage-BROKEN.toml").unlink()
     assert documents.unreadable(db) == ()
+
+
+def test_a_deeply_nested_document_is_reported_unreadable_not_a_crash(db: Path) -> None:
+    """Deeply-nested TOML is a malformed document, not a 500."""
+    depth = 600
+    (db / "coverage-BROKEN.toml").write_bytes(b"a = " + b"[" * depth + b"]" * depth + b"\n")
+
+    assert sorted(documents.load_all(db)) == ["GAME", "TOOL"]
+    [(name, target, reason)] = documents.unreadable(db)
+    assert (name, target) == ("coverage-BROKEN.toml", "BROKEN")
+    assert reason.startswith("malformed TOML (")
+    assert str(db) not in reason
