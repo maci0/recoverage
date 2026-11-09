@@ -798,6 +798,56 @@ class TestStats:
         assert snap["latency_window"] == 6
         assert snap["p50_ms"] == 4.0
 
+    def test_status_bucket_names_each_class(self) -> None:
+        """The one function ``finish`` and ``reclassify`` share.
+
+        A request counted under one spelling and moved under another stops
+        reconciling, so the bucket for each class is pinned here: 2xx/3xx/4xx/
+        5xx at their boundaries, 199/600 at the edges, and 99 (which floors
+        to "0xx") — a reclassification into any of these has to land in the
+        same bucket the finish filed it under.
+        """
+        for status, bucket in (
+            (99, "0xx"),
+            (100, "1xx"),
+            (199, "1xx"),
+            (200, "2xx"),
+            (302, "3xx"),
+            (399, "3xx"),
+            (400, "4xx"),
+            (404, "4xx"),
+            (499, "4xx"),
+            (500, "5xx"),
+            (503, "5xx"),
+            (599, "5xx"),
+            (600, "6xx"),
+        ):
+            assert metrics.status_bucket(status) == bucket, status
+
+    def test_quantile_clamps_out_of_range_fractions(self) -> None:
+        """A fraction outside [0, 1] is clamped, not extrapolated.
+
+        ``_quantile`` is the one place the p50/p95 share, so a fraction of
+        -1 or 2 landing on a sample outside the window would silently move
+        both figures at once; the clamp is pinned here against the values
+        the snapshot actually reports.
+        """
+        import math
+        from collections import deque
+
+        window = deque([1.0, 2.0, 3.0, 4.0])
+        assert metrics._quantile(window, -1.0) == metrics._quantile(window, 0.0) == 1.0
+        assert metrics._quantile(window, 2.0) == metrics._quantile(window, 1.0) == 4.0
+        assert metrics._quantile(deque(), 0.95) == 0.0
+        assert metrics._quantile(window, math.inf) == 0.0
+        assert metrics._quantile(window, math.nan) == 0.0
+        # The reported quantiles are the clamped ones: p95 over a skewed
+        # window is the max, not an extrapolation past it.
+        metrics.REQUESTS.finish("/api/targets", 200, 1.0)
+        metrics.REQUESTS.finish("/api/targets", 200, 100.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["p95_ms"] == 100.0
+
     def test_the_slow_route_is_named_by_its_own_p95(self) -> None:
         """A process-wide p95 is only half a diagnosis.
 

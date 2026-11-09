@@ -83,7 +83,20 @@ def test_text_section_cells(page: Any):
     page.goto(f"{BASE_URL}/")
     page.wait_for_selector(".grid-canvas")
     page.locator(".tab-btn", has_text=".text").click()
-    page.wait_for_timeout(500)  # wait for render
+    # Wait for the canvas to be painted, not a fixed 500ms: a sleeping
+    # wait passed on a fast machine and failed on a loaded one, and the
+    # paint check below is the real assertion either way.
+    expect(page.locator(".grid-canvas")).to_be_visible(timeout=15000)
+    page.wait_for_function(
+        """() => {
+          const c = document.querySelector('.grid-canvas');
+          if (!c) return false;
+          const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+          for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true;
+          return false;
+        }""",
+        timeout=15000,
+    )
     canvas = page.locator(".grid-canvas")
     box = canvas.bounding_box()
     assert box is not None and box["width"] > 50 and box["height"] > 5
@@ -102,27 +115,57 @@ def test_text_section_cells(page: Any):
     assert lit > 0, "the coverage map painted nothing"
 
     # Potato UI still paints one <td> per merged cell.  The count is the
-    # section's cell count read back from the API, not a magic number: the
-    # synthetic sample database carries a handful of cells, so a hard-coded
-    # threshold asserted a scale this fixture never had and failed on every
-    # run.  Comparing against the data is the invariant the test names.
+    # section's merged cell count read back from the API, not a magic
+    # number: the synthetic sample database carries a handful of cells, so
+    # a hard-coded threshold asserted a scale this fixture never had and
+    # failed on every run.  The API serves the unmerged cells, so the
+    # expected count is the unmerged total folded by the merge rule
+    # (adjacent cells with identical state+functions in the same row
+    # collapse to one `td`); `>=` let a doubling regression pass, and the
+    # count itself is the invariant the test names.
     page.goto(f"{BASE_URL}/potato?section=.text")
-    pt_cells = page.locator("#grid td[bgcolor]").count()
-    cell_count = page.evaluate(
+    # The grid carries a sizing row of `grid_columns` background `td`s
+    # plus a trailing filler `td` when the last row is short, so the data
+    # cells are the `td`s that hold a link.
+    pt_cells = page.locator("#grid td a").count()
+    expected_cells = page.evaluate(
         """async (base) => {
             const targets = await (await fetch(`${base}/api/targets`)).json();
             const target = targets.targets?.[0]?.id;
-            if (!target) return -1;
+            if (!target) return null;
             const slice = await (await fetch(
                 `${base}/api/targets/${encodeURIComponent(target)}/data?section=.text`
             )).json();
-            return slice.sections?.[".text"]?.cells?.length ?? -1;
+            const cells = slice.sections?.[".text"]?.cells ?? null;
+            if (!cells) return null;
+            const section = slice.sections[".text"];
+            const cols = Math.min(section.columns || 1, 40);
+            const spanOf = (c) => Math.min(256, Math.max(1, c.span ?? 1));
+            let merged = 0, accCol = 0, accState = null, accFns = null;
+            for (const c of cells) {
+                const span = spanOf(c);
+                const state = c.state ?? "none";
+                const fns = c.functions ?? [];
+                if (merged > 0 && state !== "none" && state === accState
+                    && JSON.stringify(fns) === JSON.stringify(accFns)
+                    && accCol + span <= cols) {
+                    accCol += span;
+                    continue;
+                }
+                merged += 1;
+                accState = state;
+                accFns = fns;
+                accCol = span > cols ? span : span;
+            }
+            return merged;
         }""",
         BASE_URL,
     )
-    assert cell_count > 0, "the sample database has no .text cells to compare against"
-    assert pt_cells >= cell_count, (
-        f"potato painted {pt_cells} cells for a section holding {cell_count}"
+    assert expected_cells is not None and expected_cells > 0, (
+        "the sample database has no .text cells to compare against"
+    )
+    assert pt_cells == expected_cells, (
+        f"potato painted {pt_cells} cells for a section holding {expected_cells} merged cells"
     )
 
 
@@ -167,7 +210,17 @@ def test_asm_pane_renders_disassembly(page: Any):
     page.goto(f"{BASE_URL}/?section=.text")
     page.wait_for_selector(".grid-canvas")
     page.locator(".tab-btn", has_text=".text").click()
-    page.wait_for_timeout(500)
+    expect(page.locator(".grid-canvas")).to_be_visible(timeout=15000)
+    page.wait_for_function(
+        """() => {
+          const c = document.querySelector('.grid-canvas');
+          if (!c) return false;
+          const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+          for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true;
+          return false;
+        }""",
+        timeout=15000,
+    )
 
     canvas = page.locator(".grid-canvas")
     box = canvas.bounding_box()
@@ -438,7 +491,15 @@ def test_phone_load_holds_its_layout(page: Any):
     page.goto(f"{BASE_URL}/")
     page.wait_for_selector(".grid-canvas")
     page.wait_for_selector(".stats b")
-    page.wait_for_timeout(500)
+    # CLS is a load-time measure: once the map and the stats have painted
+    # and one frame has settled, any shift that was going to happen has
+    # happened.  A fixed 500ms sleep passed on a fast machine and flaked
+    # on a loaded one; waiting for the load event plus a settled frame
+    # is the deterministic version of the same wait.
+    page.wait_for_load_state("load")
+    page.evaluate(
+        """() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"""
+    )
 
     assert page.evaluate("window.__emptyStateSeen") is False
     assert page.evaluate("window.__cls") < GOOD_CLS
