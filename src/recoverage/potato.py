@@ -1087,7 +1087,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                them on the image clipped mid-word on narrow screens, because
                the text width is fixed while the image shrinks. -->
           <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
-            <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
+            <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt="" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress['coverage_pct_1dp']}}" aria-valuetext="{{'{:.1f}'.format(progress['coverage_pct_1dp'])}}% covered, {{'{:,}'.format(progress['sec_size'])}} bytes, {{progress['matched_fn']}}/{{progress['total_fn']}} functions matched"></td>
           </tr><tr>
             <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{"{:,}".format(progress['sec_size'])}}</b> B &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> functions matched &middot; <b>{{"{:.1f}".format(progress['coverage_pct_1dp'])}}%</b> covered</font></td>
           </tr></table>

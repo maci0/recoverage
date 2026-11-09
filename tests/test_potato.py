@@ -4928,6 +4928,20 @@ class TestRenderedPageNamesAndStates:
         html = self._render(tmp_path, monkeypatch, "")
         assert "press Enter" in html
 
+    def test_progress_bar_exposes_its_value_to_assistive_technology(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bar is an image with empty alt: without a progressbar role a
+        screen reader announces nothing for the coverage figure (WCAG 4.1.2,
+        1.1.1).  The value the sighted reader reads in the line below the
+        bar must be the value the widget carries."""
+        html = self._render(tmp_path, monkeypatch, "")
+        assert 'role="progressbar"' in html
+        assert 'aria-valuemin="0"' in html
+        assert 'aria-valuemax="100"' in html
+        assert 'aria-valuenow="100.0"' in html
+        assert "% covered" in html.split('role="progressbar"')[1][:400]
+
     def test_page_declares_its_language(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """A wrong voice on every control: no lang means no speech synthesiser."""
         html = self._render(tmp_path, monkeypatch, "")
