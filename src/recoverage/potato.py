@@ -19,7 +19,7 @@ lazy import struct
 lazy import textwrap
 lazy import unicodedata
 lazy from collections.abc import Callable, Iterable, Mapping, Sequence
-lazy from heapq import nsmallest
+lazy from heapq import nlargest, nsmallest
 lazy from html import escape as _html_escape
 lazy from pathlib import Path
 lazy from urllib.parse import ParseResult, parse_qs, urlparse
@@ -2951,17 +2951,37 @@ def _order_key(field: str) -> Callable[[Function], Any]:
     return lambda fn: (column(fn), fn.va)
 
 
-def _sort_header(key: str, label: str, base: str, active: str) -> str:
+def _sort_header(
+    key: str,
+    label: str,
+    base: str,
+    active: str,
+    descending: bool = False,
+) -> str:
     """One sortable column header, with ``aria-sort`` on the active column.
 
     ``aria-sort`` belongs on the ``<th>`` (WCAG 1.3.1): the link alone cannot
     say which column ordered the rows, so a screen-reader user reading the
-    table had no programmatic way to know.
+    table had no programmatic way to know.  Clicking the column the list is
+    already sorted by flips the direction rather than re-sorting identically;
+    the current column carries its arrow.
     """
-    aria_sort = ' aria-sort="ascending"' if key == active else ""
+    current = key == active
+    direction = "desc" if current and not descending else "asc"
+    arrow = (" &darr;" if descending else " &uarr;") if current else ""
+    aria_sort = (
+        (f' aria-sort="{"descending" if descending else "ascending"}"')
+        if current
+        else ""
+    )
+    href = (
+        f"{base}&sort={key}:{direction}"
+        if current or direction == "desc"
+        else f"{base}&sort={key}"
+    )
     return (
-        f'<th scope="col"{aria_sort}><a href="{base}&sort={key}">'
-        f'<font color="{MUTED_COLOR}">{label}</font></a></th>'
+        f'<th scope="col"{aria_sort}><a href="{href}">'
+        f'<font color="{MUTED_COLOR}">{label}{arrow}</font></a></th>'
     )
 
 
@@ -2981,7 +3001,13 @@ def _render_function_list(
     matched and still read "0 matches" on this one was the branch that never
     filled it in.
     """
-    order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
+    # `?sort=field:dir` mirrors the API list: a bare field is ascending,
+    # `:desc` is its reverse. An unknown field or direction falls back to the
+    # default (`va` ascending) rather than refusing, which is Potato's own
+    # rule for a column it does not carry.
+    raw_field, _, raw_dir = sort_key.partition(":")
+    order_by = raw_field if raw_field in FUNCTION_LIST_COLUMNS else "va"
+    descending = order_by == raw_field and raw_dir.lower() == "desc"
 
     # `active_filters` rides along through every link below for the reason
     # `status_filter` does: the filter pills are drawn on this view too (they
@@ -3037,9 +3063,10 @@ def _render_function_list(
     truncated = total > _SEARCH_ROW_LIMIT
     order_key = _order_key(order_by)
     if truncated:
-        rows = nsmallest(_SEARCH_ROW_LIMIT, rows, key=order_key)
+        select = nlargest if descending else nsmallest
+        rows = select(_SEARCH_ROW_LIMIT, rows, key=order_key)
     else:
-        rows.sort(key=order_key)
+        rows.sort(key=order_key, reverse=descending)
     count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
     # `?status=` narrows this list and nothing else on the page says so: the
     # header count and the search box both read as if the list were the whole
@@ -3094,10 +3121,10 @@ def _render_function_list(
             # screen-reader user cannot tell which header ordered the rows.
             + "".join(
                 [
-                    _sort_header("name", "Name", base, order_by),
-                    _sort_header("va", "VA", base, order_by),
-                    _sort_header("size", "Size", base, order_by),
-                    _sort_header("status", "Status", base, order_by),
+                    _sort_header("name", "Name", base, order_by, descending),
+                    _sort_header("va", "VA", base, order_by, descending),
+                    _sort_header("size", "Size", base, order_by, descending),
+                    _sort_header("status", "Status", base, order_by, descending),
                     f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th>',
                 ]
             )
