@@ -794,25 +794,28 @@ def _rejoin_combining(wrapped: list[str]) -> list[str]:
     on one was left on its own line — a ZWJ that started a line joins
     nothing, an emoji modifier that started one re-colours the wrong glyph.
     A piece is rejoined when its first character is a combining mark, a
-    format character, or a modifier symbol; the last covers skin tones, the
-    middle covers ZWJ/ZWNJ. Two further joins cover the cases where the
-    piece itself opens on a base character: it follows a trailing ZWJ
+    format character, a modifier symbol, or a second Regional Indicator:
+    a flag is two So code points with no mark between them, and a line that
+    ends on an odd number of Regional Indicators leaves the next one its
+    pair, so it rejoins that line rather than rendering as a letter. It also
+    rejoins when it opens on a base character following a trailing ZWJ
     (the joiner-mediated half of an emoji sequence, where the cut landed
-    after the joiner rather than before it), and it opens on a regional
-    indicator while the previous line ends on an odd run of them (the
-    second half of a flag, two So code points with no mark between them).
+    after the joiner rather than before it).
     """
     out: list[str] = []
     for piece in wrapped:
-        if out and piece and (_is_continuation(piece[0]) or _continues_previous(out[-1], piece[0])):
+        if not out:
+            out.append(piece)
+            continue
+        if piece and _is_continuation(piece[0], out[-1]):
             out[-1] += piece
         else:
             out.append(piece)
     return out
 
 
-def _continues_previous(previous: str, char: str) -> bool:
-    """Whether *char* continues the grapheme *previous* ended with.
+def _is_continuation(char: str, previous: str = "") -> bool:
+    """Whether *char* continues the grapheme the previous line ended.
 
     A base character after a trailing ZWJ is joined to it by the joiner
     itself, and a regional indicator after an odd run of regional
@@ -823,26 +826,26 @@ def _continues_previous(previous: str, char: str) -> bool:
     """
     if previous.endswith("\u200d"):
         return True
-    if not "\U0001f1e6" <= char <= "\U0001f1ff":
-        return False
-    trailing = 0
-    for prior in reversed(previous):
-        if "\U0001f1e6" <= prior <= "\U0001f1ff":
-            trailing += 1
-        else:
-            break
-    return trailing % 2 == 1
-
-
-def _is_continuation(char: str) -> bool:
-    """Whether *char* continues the grapheme the previous line ended."""
     if unicodedata.combining(char):
         return True
     category = unicodedata.category(char)
     if category in ("Cf", "Mn", "Me", "Mc"):
         return True
     # Emoji modifiers (skin tones) are Sk; they recolour the preceding emoji.
-    return category == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff"
+    if category == "Sk" and "\U0001f3fb" <= char <= "\U0001f3ff":
+        return True
+    # A Regional Indicator pairs with the one before it: a flag is two So
+    # code points with no mark between them, so a second RI rejoins a line
+    # that ends on an odd number of them.
+    if 0x1F1E6 <= ord(char) <= 0x1F1FF:
+        trailing = 0
+        for prev in reversed(previous):
+            if 0x1F1E6 <= ord(prev) <= 0x1F1FF:
+                trailing += 1
+            else:
+                break
+        return trailing % 2 == 1
+    return False
 
 
 def _esc(text: object) -> str:
