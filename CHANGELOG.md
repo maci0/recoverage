@@ -54,7 +54,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - `recoverage.status_colors.LIGHT`, the unused light-ground status palette, and the unused entries of `TERMINAL` (`reloc`, `proven`, `library`, `stub`) and `RICH_STYLES` (the `bold <color>` / `<color> bold` aliases); the statuses `TERMINAL` and `RICH_STYLES` still name are unchanged.
-- `recoverage.server::parse_ascii_int` and `recoverage.server::strip_sign`, moved to `recoverage.config` (same names, same behaviour); import from `recoverage.config`. `recoverage.server::coverage_pct` and `recoverage.server::pct_1dp` moved the same way to `recoverage.reporting`; import from `recoverage.reporting`.
+- `recoverage.server::parse_ascii_int` and `recoverage.server::strip_sign`, moved to `recoverage.config` (same names, same behaviour); import from `recoverage.config`. `recoverage.server::coverage_pct`, `recoverage.server::pct_1dp` and `recoverage.server::truncate_text` moved the same way to `recoverage.reporting`; import from `recoverage.reporting`.
 
 ## [8.9.0] - 2026-11-04
 
