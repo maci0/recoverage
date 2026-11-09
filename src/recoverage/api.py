@@ -2306,7 +2306,7 @@ def _revalidate_headers(etag: str | None) -> dict[str, str]:
 def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     """Paginated function listing with optional filters."""
     target = path_param(target)
-    status_filter = query_param("status").strip() or None
+    status_filter = _server.strip_ascii_whitespace(query_param("status")) or None
     if status_filter is not None and status_filter not in _FUNCTION_STATUSES:
         # Same contract as /asm's ?format=: an enum the server does not have is
         # a rejected query, not a silent empty page.  Without it a typo
@@ -2330,7 +2330,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
                 "detail": f"max {_MAX_SEARCH_CHARS} characters",
             },
         )
-    sort_param = query_param("sort", "va").strip()  # field:dir
+    sort_param = _server.strip_ascii_whitespace(query_param("sort", "va")).strip()  # field:dir
     try:
         limit = min(
             max(_page_int(query_param("limit", str(_DEFAULT_PAGE_LIMIT))), 1),
