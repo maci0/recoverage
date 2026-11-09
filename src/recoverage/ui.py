@@ -375,7 +375,7 @@ def _target_file_snapshot(target: str) -> CoverageSnapshot:
     """
     try:
         known = _server.resolve_targets()
-        if not any(_server.target_key(row["id"]) == _server.target_key(target) for row in known):
+        if _server.target_key(target) not in {_server.target_key(row["id"]) for row in known}:
             raise _server._json_err(
                 404, {"error": "Not found", "detail": f"unknown target {target!r}"}
             )

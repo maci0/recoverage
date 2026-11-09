@@ -874,7 +874,11 @@ def _require_target(target: str, targets: Sequence[Mapping[str, str]]) -> HTTPRe
     disk.
     """
     wanted = _server.target_key(target)
-    if any(_server.target_key(str(t.get("id", ""))) == wanted for t in targets):
+    # Folded keys of the resolved list, built once per call: the walk is
+    # O(n) NFC+casefold either way, but a set lookup replaces a linear chain
+    # of folds-and-compares with one build plus O(1) probe, and lets the
+    # caller pre-build when it holds several targets.
+    if wanted in {_server.target_key(str(t.get("id", ""))) for t in targets}:
         return None
     return _target_not_found(target)
 

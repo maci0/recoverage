@@ -3372,10 +3372,16 @@ def _folded_va_table(rows: Sequence[Any]) -> Mapping[int, tuple[str, str]]:
     out: dict[int, tuple[str, str]] = {}
     for row in rows:
         va = int(getattr(row, "va", 0))
-        out[id(row)] = (
-            fold_text(hex_addr(va)) or "",
-            fold_text(hex_addr(va, 0)) or "",
-        )
+        # hex_addr is pure hex digits plus '0x': NFC and casefold are
+        # identity on this alphabet (digits, a-f, x), so fold_text would
+        # only re-allocate the same string. Spell directly.
+        padded = f"0x{va & 0xFFFFFFFFFFFFFFFF:08x}" if va >= 0 else hex_addr(va)
+        bare = f"0x{va:x}" if va >= 0 else hex_addr(va, 0)
+        # For va >= 2**64 the mask would truncate; keep those on the helper.
+        if va >= 1 << 64:
+            padded = hex_addr(va)
+            bare = hex_addr(va, 0)
+        out[id(row)] = (padded, bare)
     return out
 
 
