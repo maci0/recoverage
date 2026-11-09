@@ -1031,7 +1031,11 @@ export function App() {
    * move twice. Hold the map and stacked details until the summary settles,
    * including when cells arrive before stats. Summary errors release the map. */
   const holdMapArea =
-    !blank && target !== "" && coverage.stats === null && coverage.statsError === null;
+    !blank &&
+    active !== null &&
+    target !== "" &&
+    coverage.stats === null &&
+    coverage.statsError === null;
 
   return (
     <>

@@ -358,6 +358,7 @@ function readersClockAgreesWith(parsed: Date, literal: NaiveStamp): boolean {
  * flooring exists to keep off the page. Both surfaces now refuse it. */
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the boundary is exactly "whatever the coverage document carried", and the declared type is the caller's assumption, not this one
 export function similarityPct(fraction: unknown): string | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary is exactly "a finite 0-1 fraction from the coverage document"; a string or boolean there is a document that cannot be scaled
   if (typeof fraction !== "number" || !Number.isFinite(fraction)) {
     return null;
   }

@@ -534,13 +534,13 @@ export function CoverageMap({
       clientX < rect.left ||
       clientX > rect.right
     ) {
-      wrap.title = "";
+      wrap.removeAttribute("title");
       wrap.style.cursor = "default";
       return;
     }
     const index = hitTest(state.geometry, clientX - rect.left, clientY - rect.top);
     if (index < 0) {
-      wrap.title = "";
+      wrap.removeAttribute("title");
       wrap.style.cursor = "default";
       return;
     }
@@ -635,7 +635,7 @@ export function CoverageMap({
         onPointerLeave={() => {
           const wrap = wrapRef.current;
           if (wrap !== null) {
-            wrap.title = "";
+            wrap.removeAttribute("title");
             wrap.style.cursor = "default";
           }
         }}

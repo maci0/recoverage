@@ -53,6 +53,14 @@ export function CopyButton({
     }
     void (async () => {
       try {
+        // `navigator.clipboard` is undefined on insecure origins and in
+        // some browsers; the guard reads as a Copy failed until the
+        // fallback below also refuses, so an absent API is not a safe
+        // copy that failed for the user.
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the Clipboard API is absent on a non-secure origin; the boundary is the presence of navigator.clipboard
+        if (typeof navigator === "undefined" || navigator.clipboard === undefined) {
+          throw new Error("Clipboard API unavailable");
+        }
         await navigator.clipboard.writeText(value);
         setFlashed("Copied");
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Copy failed")
