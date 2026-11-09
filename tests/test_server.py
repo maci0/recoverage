@@ -251,6 +251,22 @@ class TestBestEncoding:
     def test_various_real_world_headers(self, header: str, expected: str) -> None:
         assert _best_encoding(header) == expected
 
+    def test_qvalue_is_ascii_digits_only(self) -> None:
+        """A q-value in a non-ASCII digit spelling is not acceptable.
+
+        ``float()`` accepts every code point ``str.isdigit()`` calls a
+        digit (Arabic-Indic, fullwidth), so ``gzip;q=<Arabic-Indic 1>``
+        selected gzip for a header that names no valid qvalue in any
+        spelling RFC 9110 documents.  A byte count already holds the
+        query string to ASCII digits
+        (``test_byte_counts_reject_non_ascii_digits``); a q-value does
+        the same, and a value that is not an ASCII 0..1 qvalue refuses
+        the token the way ``q=nan`` does.
+        """
+        assert _best_encoding("gzip;q=\u0661") == ""
+        assert _best_encoding("gzip;q=\uff10.5") == ""
+        assert _best_encoding("gzip;q=\u0661, br") == "br"
+
 
 # ── compress_payload ───────────────────────────────────────────────
 

@@ -2514,6 +2514,15 @@ def request_is_https() -> bool:
     return request.environ.get("wsgi.url_scheme", "http").lower() == "https"
 
 
+#: An RFC 9110 qvalue in ASCII: ``0`` or ``1`` with an optional decimal
+#: fraction.  ``float()`` accepts every code point ``str.isdigit()`` calls a
+#: digit, so a q-value in another script's digits spelled a valid exclusion
+#: or acceptance in a spelling no client documents: the ASCII run is the
+#: number the grammar gives, which is the same rule every request-supplied
+#: integer in this package holds (``config._ASCII_INT``).
+_QVALUE: Final = re.compile(r"[01](?:\.[0-9]+)?")
+
+
 #: Every encoding this server can produce, most preferred first.  ONE list:
 #: :func:`_best_encoding` walks it in order, and the precompressed static path
 #: (:func:`static_variant_key`, :func:`compress_static_variants`) reads the same
@@ -2547,17 +2556,16 @@ def accepted_encodings(accept_encoding: str) -> frozenset[str]:
         q = 1.0
         for param in parts[1:]:
             if param.startswith("q="):
-                try:
-                    q = float(param[2:])
-                except ValueError:
-                    q = 0.0
-                # float() also parses "nan"/"inf", neither of which is a
-                # qvalue: nan slips past every comparison (min(1.0, nan) is
-                # 1.0, so the token reads as fully acceptable) and inf
-                # outranks every real exclusion beside it.  A q that is
-                # not a finite number in 0..1 is not acceptable at all.
-                if not math.isfinite(q) or not 0.0 <= q <= 1.0:
-                    q = 0.0
+                # The value is an ASCII qvalue, spelled out and parsed, not
+                # float()'s: float() also parses "nan"/"inf" (neither of
+                # which is a qvalue: nan slips past every comparison
+                # (min(1.0, nan) is 1.0, so the token reads as fully
+                # acceptable) and inf outranks every real exclusion beside
+                # it) and every digit str.isdigit() calls a digit, so
+                # gzip;q=<Arabic-Indic 1> selected gzip.  A q that is not
+                # a finite ASCII number in 0..1 is not acceptable at all.
+                spelling = param[2:]
+                q = float(spelling) if _QVALUE.fullmatch(spelling) else 0.0
         candidates[name] = min(candidates.get(name, 1.0), q)
     return frozenset(name for name in SUPPORTED_ENCODINGS if candidates.get(name, 0.0) > 0)
 
