@@ -49,6 +49,7 @@ from recoverage.server import (
     _snapshot_db_mtime,
     _target_filename,
     app,
+    canonical_fn_status,
     clear_target_cache,
     compress_payload,
     config_fingerprint,
@@ -740,7 +741,7 @@ def _filtered_functions(
     """
     rows = list(functions)
     if status_filter is not None:
-        rows = [fn for fn in rows if fn.status == status_filter]
+        rows = [fn for fn in rows if canonical_fn_status(fn) == status_filter]
     if search:
         needle = _server.fold_needle(search)
         # `str(va)` is built and folded per row, so a term holding a character
@@ -2436,7 +2437,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
                 "name": fn.name,
                 "vaStart": fn.vaStart,
                 "size": fn.size,
-                "status": fn.status,
+                "status": canonical_fn_status(fn),
                 "module": fn.module,
                 "symbol": fn.symbol,
                 "markerType": fn.markerType,

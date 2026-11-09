@@ -40,6 +40,7 @@ from rebrew.coverage_toml import (
     Global,
 )
 from rebrew.metadata.bindings import DATA_KINDS
+from rebrew.metadata.functions import canonical_status
 lazy import brotli
 lazy import zstandard as zstd
 lazy from rebrew.workspace import (
@@ -1512,6 +1513,37 @@ def _is_data_marker(fn: Any) -> bool:
     return fn.markerType in _DATA_MARKER_SET
 
 
+#: The canonical spelling of a function's STATUS, read off rebrew's own
+#: normalizer rather than a second spelling of the rule.
+#:
+#: rebrew's reader used to be the one place that decided what a status IS:
+#: its ``_derive_function_stats`` runs ``canonical_status`` (upper-case + trim
+#: + the ``NEAR_MATCH`` alias) before counting, and ``summary.totalFunctions``
+#: served in this package's ``/stats`` is that derivation.  Recaverage's own
+#: consumers — ``by_status``, the ``?status=`` filter on both function lists,
+#: and the wire ``status`` field — compared the RAW document spelling
+#: instead, so a hand-edited or legacy ``exact`` / `` near_match `` counted
+#: under its literal key in ``by_status``, was unreachable through
+#: ``?status=EXACT`` (which validates against the canonical vocabulary and
+#: 400s anything else), and disagreed with the ``EXACT`` bucket the same
+#: payload's ``summary`` reported.  One status field, two counting rules, in
+#: one response.
+#:
+#: The canonical spelling is therefore the only spelling this package reads,
+#: compares or serves.  Every consumer of ``Function.status`` goes through
+#: this helper, not through the attribute.
+def canonical_fn_status(fn: Function) -> str:
+    """The canonical STATUS of *fn* (``"UNKNOWN"`` for an absent one).
+
+    Never ``""``: an absent status is ``UNKNOWN``, the spelling the rest of the
+    package uses for it (rebrew's writer, its reader, and the ``?status=``
+    vocabulary alike).  A whitespace-only stored status folds the same way,
+    because ``canonical_status`` folds it to ``""`` and ``"" or`` here is the
+    ``UNKNOWN``.
+    """
+    return canonical_status(fn.status) or "UNKNOWN"
+
+
 #: Cell states folded into each BYTE bucket :func:`_section_summary` sums, read
 #: off rebrew's own fold rather than spelled out here.  The served cell COUNTS
 #: are rebrew's too (``Section.bucket_counts``, read by :func:`_bucket_row`);
@@ -1725,13 +1757,12 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
     def by_status_build() -> dict[str, int]:
         by_status: dict[str, int] = {}
         for fn in function_rows(snap):
-            # "UNKNOWN" is the spelling the rest of the package uses for an
-            # absent status: rebrew's writer canonicalizes to it
-            # (`rebrew.coverage_toml`), its reader derives these counts with the
-            # same default, and `api._FUNCTION_STATUSES` — the vocabulary
-            # `?status=` filters on — has no lowercase "unknown" in it, so a
-            # lowercase key here would be a bucket the API cannot select.
-            key = fn.status or "UNKNOWN"
+            # The canonical spelling, the same one rebrew's reader counts under
+            # and `api._FUNCTION_STATUSES` filters on: `canonical_fn_status`
+            # decides what a status IS, so a stored `exact` counts under `EXACT`
+            # and is selectable through `?status=EXACT`, instead of filing a
+            # bucket the same payload's `summary` reports differently.
+            key = canonical_fn_status(fn)
             by_status[key] = by_status.get(key, 0) + 1
         return by_status
 
@@ -3074,7 +3105,7 @@ def function_json(fn: Function) -> dict[str, Any]:
         "vaStart": fn.vaStart,
         "size": fn.size,
         "fileOffset": fn.fileOffset,
-        "status": fn.status,
+        "status": canonical_fn_status(fn),
         "module": fn.module,
         "cflags": _plain(fn.cflags),
         "symbol": fn.symbol,

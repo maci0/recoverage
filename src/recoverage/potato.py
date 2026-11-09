@@ -47,6 +47,7 @@ from recoverage.server import (
     _touch,
     app,
     binary_stamp,
+    canonical_fn_status,
     coverage_for,
     db_target_ids,
     fold_can_match_decimal,
@@ -3000,7 +3001,7 @@ def _render_function_list(
     # array.
     rows = list(function_rows(coverage))
     if status_filter:
-        rows = [fn for fn in rows if fn.status == status_filter]
+        rows = [fn for fn in rows if canonical_fn_status(fn) == status_filter]
     if search_query:
         # The same three folded name columns and the two folded address
         # spellings `_search_functions` selects on, through the same two
@@ -3146,7 +3147,8 @@ def _render_function_list(
             link_prefix += f"&status={fs_url_quote(status_filter)}"
         link_prefix += "&search="
         for fn in rows:
-            name, va, size, status, module = fn.name, fn.va, fn.size, fn.status, fn.module
+            name, va, size, module = fn.name, fn.va, fn.size, fn.module
+            status = canonical_fn_status(fn)
             st = status or "none"
             color = STATE_INK.get(st.lower(), TEXT_COLOR)
             name_link = link_prefix + fs_url_quote(name)

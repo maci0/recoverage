@@ -4524,7 +4524,46 @@ class TestDataMarkerFilter:
 
         _point_app_at_coverage(monkeypatch, self._doc(tmp_path))
         body = json.loads(api.handle_api_stats("GAME"))
-        assert body["functions_by_status"] == {"exact": 2}
+        assert body["functions_by_status"] == {"EXACT": 2}
+
+    def test_by_status_folds_a_lowercase_stored_status(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A hand-edited ``exact`` counts under ``EXACT``, beside the summary.
+
+        rebrew's reader canonicalizes the status before counting
+        (``_derive_function_stats`` via ``canonical_status``), so
+        ``summary`` — served beside ``functions_by_status`` in the same
+        response — already reports the row under ``EXACT``.  Filing it here
+        under its literal spelling made one payload answer "how many EXACT
+        functions" two ways, and the lowercase bucket was unreachable through
+        ``?status=EXACT`` (which validates against the canonical vocabulary),
+        so the count and the filter disagreed about the same row.  The stored
+        spellings this test exercises are the ones rebrew's own reader accepts:
+        lower-case, an alias and a padded one all fold to the same key.
+        """
+        import recoverage.api as api
+
+        directory = _game_coverage(
+            tmp_path,
+            functions=(
+                {"va": 0x1000, "name": "a", "status": "exact"},
+                {"va": 0x1010, "name": "b", "status": "NEAR_MATCH"},
+                {"va": 0x1020, "name": "c", "status": "  stub  "},
+                {"va": 0x1030, "name": "d", "status": ""},
+            ),
+        )
+        _point_app_at_coverage(monkeypatch, directory)
+        body = json.loads(api.handle_api_stats("GAME"))
+        assert body["functions_by_status"] == {
+            "EXACT": 1,
+            "NEAR_MATCHING": 1,
+            "STUB": 1,
+            "UNKNOWN": 1,
+        }
+        # The counts are selectable: every key is a valid ?status= value.
+        for key in body["functions_by_status"]:
+            assert key in api._FUNCTION_STATUSES, key
 
 
 class TestDataSectionBuckets:
