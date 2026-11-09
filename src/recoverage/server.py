@@ -3652,12 +3652,17 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
     ascii_text = data.translate(_HEX_DUMP_ASCII)
     for i in range(0, len(data), 16):
         row = hex_text[i * 2 : (i + 16) * 2]
-        if len(row) <= 16:
-            hex_left = " ".join(row[j : j + 2] for j in range(0, len(row), 2))
+        # Split the 2-char hex pairs in one pass.  The pairs are already in
+        # hex_text; joining the slices avoids a generator per row (the named
+        # win: bytearray / regex split in one C call per row instead of 8
+        # Python slice allocations + a generator).
+        pairs = [row[j : j + 2] for j in range(0, len(row), 2)]
+        if len(pairs) <= 8:
+            hex_left = " ".join(pairs)
             hex_right = ""
         else:
-            hex_left = " ".join(row[j : j + 2] for j in range(0, 16, 2))
-            hex_right = " ".join(row[j : j + 2] for j in range(16, len(row), 2))
+            hex_left = " ".join(pairs[:8])
+            hex_right = " ".join(pairs[8:])
         ascii_repr = ascii_text[i : i + 16].decode("ascii")
         offset = hex_addr(base_offset + i)[2:]
         lines.append(f"{offset}  {hex_left:<23s}  {hex_right:<23s}  |{ascii_repr}|")
