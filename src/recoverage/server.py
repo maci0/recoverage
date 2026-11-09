@@ -1199,7 +1199,6 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
                 type(exc).__name__,
                 _log_safe(str(exc)),
             )
-            )
             continue
         entries.append((path.name, st.st_mtime_ns, st.st_size))
     entries.sort()
