@@ -87,7 +87,7 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
     ),
     _command(
         "regen",
-        "Refresh the live project view without writing coverage files.",
+        "Refresh the live project view; the only file written is the regen lock.",
         "idempotent",
     ),
     _command(
@@ -97,7 +97,7 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
     ),
     _command(
         "restore",
-        "Put a verified backup back into the coverage directory.",
+        "Put a verified backup back into the selected portable snapshot directory.",
         "idempotent",
     ),
     _command(

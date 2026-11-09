@@ -237,7 +237,7 @@ document, or a coverage source holding no `coverage-*.toml`.
 
 ### `recoverage regen`
 
-Refresh the live project view immediately without generating files:
+Refresh the live project view immediately without writing coverage files:
 
 ```bash
 recoverage regen
@@ -248,7 +248,10 @@ same operation. Normal reads also detect input changes automatically. Portable
 snapshots are read-only, so unset `RECOVERAGE_SNAPSHOTS` to refresh a project.
 Status transitions are canonical metadata; refresh does not create history from
 what the dashboard happened to observe. The API retains its in-process admission
-and idempotency rules; there is no cross-process snapshot writer or lock.
+and idempotency rules; the run also takes a cross-process lock
+(``.recoverage-regen.lock`` beside ``rebrew-project.toml``), so a second
+process converges to a refusal instead of interleaving. The only file
+written is that lock file.
 
 ### `recoverage backup`
 
@@ -485,7 +488,7 @@ the worker could not classify.
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the live view or selected portable exports change (SPA auto-refresh) |
 | `/api/regen` | POST | Refresh the live project view (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
 
-A refresh derives a read-only view from the current project inputs. Send an `Idempotency-Key` header with the
+A refresh derives an in-memory view from the current project inputs. Send an `Idempotency-Key` header with the
 request and a repeat of that key is answered with the recorded result
 (`Idempotent-Replay: true`) instead of running the pipeline again; a repeat that
 lands while the first run is still going is answered `202` with
@@ -498,8 +501,9 @@ admits in that window, so a key is only ever dropped by its own age), and a
 failed or interrupted run is not remembered: retrying a failure retries for
 real.
 
-Admission and idempotency are local to this process. Independent processes read
-canonical project inputs without acquiring a shared snapshot writer lock.
+Admission and idempotency are local to this process. The run itself takes the
+cross-process regen lock (``regen.run_regen``), so independent processes
+serialize on that lock rather than interleaving.
 
 ### Query parameters
 
@@ -597,7 +601,7 @@ bounded whatever a caller asks for. The snapshot is taken before the reading
 request is filed, so it describes everything up to it. There is no metrics
 backend to configure: these numbers live in the process and reset with it.
 
-`regen` measures explicit read-only refresh: its duration, completion and
+`regen` measures explicit refresh: its duration, completion and
 failures are separate from ordinary request counts. Changed-input reads may also
 perform analysis without a POST refresh.
 `rejected` counts POSTs the cooldown or the run lock refused, which is a

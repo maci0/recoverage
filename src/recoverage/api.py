@@ -3048,8 +3048,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
 def handle_regen() -> bytes | HTTPResponse:
     """Refresh the project view without writing source, metadata or snapshots.
 
-    Expensive refreshes are admitted once per process. Independent processes
-    read the same canonical inputs and need no shared writer lock.
+    Expensive refreshes are admitted once per process, and the run itself
+    takes the same cross-process regen lock as the ``regen`` command
+    (``regen.run_regen``), so independent processes serialize on that lock
+    rather than interleaving.
 
     Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered by the pipeline itself, before the success line and
@@ -3234,7 +3236,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
 
 def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
-    """Run catalog analysis and coverage writing in-process. Caller holds _REGEN_LOCK.
+    """Run catalog analysis in-process. Caller holds _REGEN_LOCK.
 
     *key* is the request's ``Idempotency-Key`` (empty when the client sent
     none).  A run that COMPLETED is recorded under it HERE rather than by the

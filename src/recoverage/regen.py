@@ -1,13 +1,15 @@
-"""Explicitly refresh the live coverage view without generating files.
+"""Explicitly refresh the live coverage view without writing coverage files.
 
 ``POST /api/regen`` is serialized in-process by ``_REGEN_LOCK``; that lock
-cannot see another process. A ``recoverage regen`` cron job and a running
-``serve`` process can therefore run two pipelines at once over the same project
-unless both take a cross-process advisory lock. :func:`run_regen` takes that
-lock (``.recoverage-regen.lock`` beside ``rebrew-project.toml``) for the whole
-pipeline: a second execution converges to a refusal naming the holder instead
-of interleaving writes, and the lock is held on an open descriptor so a killed
-run releases it.
+cannot see another process, and ``recoverage regen``, ``serve --regen`` and
+``POST /api/regen`` all run :func:`run_regen`. It takes a cross-process
+advisory lock (``.recoverage-regen.lock`` beside ``rebrew-project.toml``) for
+the whole pipeline, so a cron job and a running ``serve`` process cannot run
+two pipelines over the same project at once: a second execution converges to
+a refusal naming the holder instead of interleaving, and the lock is held on
+an open descriptor so a killed run releases it. The only file written is that
+lock file; the refresh itself derives an in-memory view from canonical
+project inputs.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def _project_lock(root: Path) -> Iterator[None]:
 
 
 def run_regen(root: Path) -> None:
-    """Refresh canonical project inputs without writing any files."""
+    """Refresh canonical project inputs; sole file written is the regen lock."""
     from rebrew.coverage_project import ProjectCoverageError, load_project_coverage
 
     from recoverage.config import snapshot_override

@@ -1,7 +1,7 @@
 # Recovery runbook
 
 Recoverage normally reads live Rebrew project inputs. Its refresh operation
-writes no project files. Preserve source, configuration, inventories, layout
+writes no coverage files (the only file written is the cross-process regen lock). Preserve source, configuration, inventories, layout
 packages, function/data/type metadata and reference binaries through the project’s
 own version control and backups. `recoverage backup` never backs up that project.
 

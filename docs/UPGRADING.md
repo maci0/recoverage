@@ -55,7 +55,7 @@ Before retiring old exports, run `rebrew coverage import-history --snapshots db/
 --dry-run`, then repeat without `--dry-run`. Retain configured inventory JSON.
 `RECOVERAGE_DB` is removed, with no alias. Use `RECOVERAGE_SNAPSHOTS` only for
 portable exports created by `rebrew coverage export --output <directory>`.
-Refresh generates no files and refuses offline mode; backup/restore manage
+Refresh writes no coverage files (the only file written is the cross-process regen lock) and refuses offline mode; backup/restore manage
 portable exports only. Earlier release notes below describe historical layouts.
 
 ### Rebrew 4.1.0 and canonical metadata bindings are required

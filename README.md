@@ -112,7 +112,7 @@ recoverage serve
 The dashboard reads canonical metadata, binaries, sources and discovery inventory
 through Rebrew's shared live coverage model. No generated coverage files or
 `db_dir` setting is required. Input changes refresh the view automatically;
-`recoverage regen` explicitly refreshes it without writing files.
+`recoverage regen` explicitly refreshes it without writing coverage files (the only file written is the cross-process regen lock).
 
 For portable, offline viewing:
 

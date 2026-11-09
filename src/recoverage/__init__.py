@@ -18,8 +18,8 @@ Module map (dependencies point one way, left to right):
 - ``documents``   — immutable live views or portable documents read per file;
   portable TOML parses persist across restarts
 - ``backup``      — verified backup/restore of explicitly selected portable exports
-- ``regen``       — explicit read-only refresh of Rebrew's shared live project view
-  (no in-package deps)
+- ``regen``       — explicit refresh of Rebrew's shared live project view
+  (cross-process regen lock; no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,
   compression, stats, DLL cache, the ``is_plain_relative`` path-containment
   rule every route and the C-source reader share); defines ``app`` plus its

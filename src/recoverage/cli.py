@@ -519,7 +519,8 @@ def _use_utf8_stdout() -> None:
     ``replace``, not ``strict``: with the codec pinned to UTF-8 the only text
     this stream still cannot encode is a lone surrogate, which reaches Python
     from ``os.fsdecode`` reading a name the filesystem spelled in bytes outside
-    UTF-8 (a coverage directory on a mounted volume, or one extracted from an
+    UTF-8 (a portable snapshot directory on a mounted volume, or one extracted
+    from an
     archive with a mangled entry).  Strict made `recoverage config` raise on the
     banner line naming that directory, printing nothing at all; replace writes
     the one name as U+FFFD and the command runs.  No other character is
@@ -532,7 +533,7 @@ def _use_utf8_stderr() -> None:
     """Make stderr carry a path the platform's code page cannot spell.
 
     The startup warnings embed the bind address, the CORS origins and the
-    coverage directory, and they are printed before `_configure_logging`
+    coverage source, and they are printed before `_configure_logging`
     installs the `backslashreplace` filter the log stream runs with, so a
     non-ASCII project path reached stderr unprotected there.  backslashreplace
     is the same choice `_configure_logging` makes: the warning stays readable
@@ -825,7 +826,7 @@ def _select_targets(target: str | None, known: list[str], *, json_output: bool) 
     The membership test folds both sides through ``server.target_key``: a
     ``--target`` typed in a different case from the document's own id names the
     same target on a case-insensitive filesystem, and a case-exact test would
-    exit 1 for a target the coverage directory holds.
+    exit 1 for a target the coverage source holds.
 
     What it returns on a fold is the id the DOCUMENT spells, not the one typed,
     because the caller looks that returned id up in the snapshot map
@@ -917,7 +918,7 @@ def _get_stats(
 
 
 def _run_regen(root: Path, *, json_output: bool = False) -> None:
-    """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
+    """Refresh the live project view by calling rebrew's pipeline in-process."""
     from rebrew.config import ConfigError as RebrewConfigError
 
     from recoverage import metrics
@@ -1517,7 +1518,7 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
 
 
 def _snapshot_warnings(db: Path | None) -> list[str]:
-    """The coverage directory this process will read nothing from, as warnings.
+    """The coverage source this process will read nothing from, as warnings.
 
     Not fatal, and deliberately not the same rule as
     :func:`config.check_snapshot_override`: a directory that does not exist yet is a
@@ -1793,8 +1794,8 @@ def serve(
     )
     from recoverage.webapp import app as bottle_app
 
-    # The banner echoes the assets and coverage directories, and the warnings
-    # below quote the bind address, the origins and the coverage directory, all
+    # The banner echoes the assets and coverage source, and the warnings
+    # below quote the bind address, the origins and the coverage source, all
     # before _configure_logging installs the log stream's own codec. A project
     # under a non-ASCII path is a name a Windows code page cannot spell, so pin
     # both streams before anything prints rather than after.
@@ -1902,7 +1903,7 @@ def serve(
         max_connections=resolved.max_connections,
         client_timeout_seconds=resolved.client_timeout,
     )
-    # The coverage directory is resolved now, so a bad one still fails before
+    # The coverage source is resolved now, so a bad one still fails before
     # the bind; the banner itself waits for the listener (devserver.on_listening).
     coverage = coverage_source_or_exit()
     on_listening(
@@ -2046,7 +2047,7 @@ def stats(
 ) -> None:
     """Print coverage stats as a table (or JSON with --json).
 
-    Exits 1 when the coverage directory holds no document, or when --target
+    Exits 1 when the coverage source holds no document, or when --target
     names a target no build has written. Text mode writes that error to
     stderr. JSON mode writes one stderr line, ``{"error":{"kind","message","hint"}}``.
     A JSON success is ``{"items","total"}``.
@@ -2155,7 +2156,7 @@ def export(
     document spells it. Markdown cells escape pipes and newlines.
 
     The rows are the only thing on stdout, so a redirect or a pipe gets
-    clean data. Exits 1 when the coverage directory holds no document or
+    clean data. Exits 1 when the coverage source holds no document or
     --target names a target no build has written, and the report goes to
     stderr (as one JSON error object under --format json).
 
@@ -2431,11 +2432,13 @@ def regen(
         False, "--json", help="Errors on stderr are a single JSON object"
     ),
 ) -> None:
-    """Refresh the live project view without generating files.
+    """Refresh the live project view without writing coverage files.
 
     Progress and errors go to stderr. Portable snapshots are read-only;
-    unset RECOVERAGE_SNAPSHOTS to refresh a project. Exits 1 when the
-    refresh fails. With --json, a successful refresh writes
+    unset RECOVERAGE_SNAPSHOTS to refresh a project. The run takes the
+    cross-process regen lock (``.recoverage-regen.lock`` beside
+    ``rebrew-project.toml``); the only file written is that lock file.
+    Exits 1 when the refresh fails. With --json, a successful refresh writes
     {"status":"ok"} to stdout and errors use the stderr envelope.
     """
     from recoverage.server import _project_dir
@@ -2459,7 +2462,8 @@ def backup(
         metavar="PATH",
         help="Archive path, or a directory for the stamped default name (an existing "
         "one, or any path ending in /). "
-        "Defaults to $RECOVERAGE_BACKUP_DIR, else a backups/ beside the coverage directory.",
+        "Defaults to $RECOVERAGE_BACKUP_DIR, else a backups/ beside the portable snapshot "
+        "directory.",
     ),
     as_json: bool = typer.Option(
         False, "--json", help="Emit the verified archive description as a JSON object"
@@ -2524,7 +2528,7 @@ def backup(
     if as_json:
         typer.echo(_archive_json(info))
         return
-    # The member name is a filename out of the coverage directory and can
+    # The member name is a filename out of the portable snapshot directory and can
     # carry markup characters, so it goes through escape() like every other
     # value out of a document that reaches a Rich surface.
     table = Table(show_header=True, header_style="bold", box=box.SIMPLE_HEAD)
@@ -2560,12 +2564,12 @@ def restore(
     ),
     no_color: bool = _no_color_option(),
 ) -> None:
-    """Put a verified backup's documents back into the coverage directory.
+    """Put a verified backup's documents back into the portable snapshot directory.
 
     The archive is verified in full (every member read, its size and digest
     checked against the manifest) before the first document is written, and
     each document then lands through an atomic replace. A restore therefore
-    either completes or leaves the coverage directory exactly as it was; half a
+    either completes or leaves the portable snapshot directory exactly as it was; half a
     restore is a dashboard that reads healthy and shows half a project.
 
     Refuses to overwrite a document that differs from the one in the archive
@@ -2635,7 +2639,7 @@ def verify(
     names the member when any size or digest disagrees, and exits 0 only
     when the archive is one a restore could load. It writes nothing and
     needs no ``RECOVERAGE_SNAPSHOTS`` selection, because it does not touch
-    the coverage directory.
+    the portable snapshot directory.
     """
     from recoverage.backup import BackupError, verify_archive_command
 

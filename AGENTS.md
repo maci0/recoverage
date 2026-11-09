@@ -11,7 +11,7 @@ metadata, link evidence and durable status history feed one immutable model.
 `RECOVERAGE_SNAPSHOTS` explicitly selects portable/offline exports written by
 `rebrew coverage export --output <directory>`. Only portable mode uses the document
 parse cache and backup/restore. `regen` and `serve --regen` refresh live views
-without writing files; portable exports are read-only. For live services, set the
+without writing coverage files; portable exports are read-only. For live services, set the
 working directory inside the project. Metadata writes always use Rebrew owners;
 never hand-edit managed stores or restore snapshots over canonical metadata.
 
@@ -253,7 +253,7 @@ uv run recoverage serve --regen     # refresh live project inputs first
 uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
 uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener (same gate as serve)
-uv run recoverage regen             # refresh the live view without generating files
+uv run recoverage regen             # refresh the live view without writing coverage files
 RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage backup
 RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage restore ARCHIVE
 uv run recoverage verify ARCHIVE  # check backup vs manifest, no restore
@@ -462,7 +462,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone). `?size=` is capped at `_MAX_SLICE_SIZE` AND at what the section holds from `?va=`, so a va at the section's tail cannot read the next section's bytes |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`; `?size=` is capped at `_MAX_SLICE_SIZE` and at what the section holds from `?offset=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the live view or selected portable exports change (SPA auto-refresh) |
-| `/api/regen` | POST | Refresh live project inputs (localhost only, cooldown/single-flight and optional `Idempotency-Key` replay); refuses portable mode and writes no files |
+| `/api/regen` | POST | Refresh live project inputs (localhost only, cooldown/single-flight and optional `Idempotency-Key` replay); refuses portable mode and writes no coverage files |
 
 Search folds both sides the same way in Python: `server.fold_text` is NFC
 composition plus `str.casefold`, and `server.fold_match` is the substring test
@@ -519,7 +519,7 @@ simpler and strictly wider.
    The shared catalog derives functions/data/grid cells directly from canonical
    inputs. Input versions invalidate cached views; failures remain target-scoped.
    Comparison history is stored atomically with STATUS in function metadata.
-   `regen` / `POST /api/regen` force a read-only refresh and generate no files.
+   `regen` / `POST /api/regen` force a refresh and write no coverage files (the only file written is the cross-process regen lock).
 2. `RECOVERAGE_SNAPSHOTS` selects portable exports explicitly; only this mode
    uses TOML parse persistence and backup/restore. No compiler is needed to read
    either mode. Export directories are caller-selected, never project config.
@@ -1426,8 +1426,10 @@ explicit upstream development only; it is never the default package source.
   through `_checked_port` and `--min-coverage` through `_checked_min_coverage`;
   a new numeric flag parses its own text the same way.
 - `RECOVERAGE_SNAPSHOTS` selects read-only portable exports. Refresh refuses this
-  mode with a clear error. Live refresh writes no files and needs no cross-process
-  writer lock; the live reader serializes rebuilds per project in this process.
+  mode with a clear error. Live refresh writes no coverage files (the only
+  file written is the cross-process regen lock, `.recoverage-regen.lock` beside
+  `rebrew-project.toml`); the live reader serializes rebuilds per project in
+  this process and the lock serializes them across processes.
 - A setting whose value is only meaningful in a narrower form is REJECTED
   there, never dropped: `cli._allowed_origins` refuses a CORS origin that is
   not one a browser could send, and the refusal is a `ConfigError` from inside
@@ -1673,9 +1675,10 @@ explicit upstream development only; it is never the default package source.
   only after the predecessor released, and the cooldown cannot catch that
   window either (it counts from the previous run's START, and a regen runs for
   minutes). Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
-  Cross-process refreshes only read canonical inputs; no export writer or
-  advisory snapshot lock runs. The API's in-process admission and idempotency
-  ledger still prevent duplicate expensive refresh work from the same service.
+  Cross-process refreshes take the advisory regen lock (``regen.run_regen``)
+  and only read canonical inputs; no export writer runs. The API's in-process
+  admission and idempotency ledger still prevent duplicate expensive refresh
+  work from the same service.
   The other in-flight marker, the `/data`
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline

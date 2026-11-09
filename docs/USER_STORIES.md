@@ -28,7 +28,7 @@ code: 2026-11-09.
 - `recoverage serve` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
 - Server finds the containing Rebrew project from the working directory and reads live canonical inputs. Target failures are reported explicitly beside healthy siblings.
-- `--regen` requests an immediate read without generating files. Ordinary reads detect changed inputs automatically. Explicit offline mode uses `RECOVERAGE_SNAPSHOTS` and refuses refresh.
+- `--regen` requests an immediate refresh without writing coverage files. Ordinary reads detect changed inputs automatically. Explicit offline mode uses `RECOVERAGE_SNAPSHOTS` and refuses refresh.
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
@@ -343,7 +343,7 @@ graph TD
 - Regenerate button in the topbar with a 5-second cooldown to prevent spam
 - The button reads *Regenerating...* and is disabled for the duration of the run, so the click is acknowledged where it was made and a repeat click is a no-op
 - The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
-- `POST /api/regen` refreshes the shared live view without writing files
+- `POST /api/regen` refreshes the shared live view without writing coverage files (the only file written is the cross-process regen lock)
 - The Regenerate button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes

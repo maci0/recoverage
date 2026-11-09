@@ -111,7 +111,7 @@ Retained object store (env:
 .BR RECOVERAGE_OPS_FILESTORE ).
 .TP
 .B regen
-Refresh the live project view without generating files. Progress and errors go to
+Refresh the live project view without writing coverage files. Progress and errors go to
 stderr. Portable snapshots are read-only; unset RECOVERAGE_SNAPSHOTS to refresh a
 project. Normal reads detect input changes automatically.
 .TP
@@ -297,7 +297,7 @@ cancels an exported
 Do not open a browser automatically.
 .TP
 .B \-\-regen
-Refresh the live project view before starting; writes no files.
+Refresh the live project view before starting; writes no coverage files (the only file written is the regen lock).
 .TP
 .B \-\-cors
 Enable CORS processing, for allowlisted origins only (env:
