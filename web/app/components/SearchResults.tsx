@@ -144,7 +144,7 @@ export function SearchResults(props: SearchResultsProps): ComponentChildren {
               {result.section === null ? null : (
                 <span
                   className={
-                    result.section === section ? "shrink-0 text-st-exact" : "shrink-0 text-text-faint"
+                    result.section === section ? "shrink-0 text-st-exact" : "shrink-0 text-text-muted"
                   }
                 >
                   {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
