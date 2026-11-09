@@ -1624,7 +1624,7 @@ def handle_api_health() -> bytes:
                 "pygments": HAS_PYGMENTS,
             },
             "targets_count": target_count,
-            "cors": _server.CORS_ENABLED,
+            "cors": _server.cors_enabled(),
             # The settings THIS process started with, so the answer to "what
             # is it running with" comes from the server rather than from a
             # shell that re-resolves the environment.  None in a process that

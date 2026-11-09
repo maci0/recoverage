@@ -88,18 +88,84 @@ app: Bottle = Bottle()
 HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 # CORS — configured once at startup by the CLI before the server starts
-# accepting requests.  Thread-safe: set before any worker threads exist.
-CORS_ENABLED = False
+# accepting requests.
+_SECUIRTY_LOCK = threading.Lock()
 
-# Origins allowed to read the API cross-origin (normalized scheme://host[:port]
-# from --cors-origin).  Empty = no cross-origin reads; the wildcard "*" is
-# never emitted.
+# (CORS enabled, allowlist, token, Host allowlist).  ONE immutable tuple,
+# replaced by a single assignment under ``_SECURITY_LOCK``, so a reader
+# taking the four separately (``CORS_ENABLED`` then the allowlist then the
+# token) cannot act on a torn configuration — CORS on with the previous
+# allowlist, or a token from one configuration with another's Host
+# allowlist.  ``configure_security`` is also the public WSGI-mount entry
+# point and may be re-called while serving.
+_SECURITY_POLICY: tuple[bool, tuple[str, ...], str, frozenset[str] | None] = (
+    False,
+    (),
+    "",
+    None,
+)
+
+
+def _security_snapshot() -> tuple[bool, tuple[str, ...], str, frozenset[str] | None]:
+    """The current (CORS enabled, origins, token, allowed hosts) as one tuple.
+
+    The origins and hosts are immutable tuples/frozensets, so a snapshot can
+    never be mutated by a later ``configure_security``.  Direct assignments
+    to the compatibility names (``CORS_ENABLED = ...``) are reconciled here:
+    a host or test that writes the old names is treated as configuring, and
+    the snapshot is republished from them so a reader never acts on a torn
+    configuration.
+    """
+    with _SECUIRTY_LOCK:
+        _reconcile_compat_names_locked()
+        return _SECURITY_POLICY
+
+
+def cors_enabled() -> bool:
+    """Whether CORS is enabled, read under the security lock."""
+    return _security_snapshot()[0]
+
+
+def cors_allowed_origins() -> tuple[str, ...]:
+    """The CORS allowlist, read under the security lock."""
+    return _security_snapshot()[1]
+
+
+def allowed_hosts() -> frozenset[str] | None:
+    """The Host allowlist, read under the security lock."""
+    return _security_snapshot()[3]
+
+
+# Compatibility views for the module-level policy names tests and WSGI hosts
+# read.  The authoritative state is the immutable ``_SECURITY_POLICY`` tuple
+# above; ``configure_security`` republishes these on every call so a host
+# reading the names sees the current configuration.
+CORS_ENABLED: bool = False
 CORS_ALLOWED_ORIGINS: list[str] = []
-
-# Expected Host-header hostnames.  Loopback binds validate the Host header
-# to defeat DNS rebinding (an attacker's domain resolving to 127.0.0.1);
-# None = remote bind (user opted in via --allow-remote) — skip validation.
 ALLOWED_HOSTS: set[str] | None = None
+_AUTH_TOKEN: str = ""
+_COMPAT_POLICY: tuple[bool, tuple[str, ...], str, frozenset[str] | None] | None = None
+
+
+def _reconcile_compat_names_locked() -> None:
+    """Republish ``_SECURITY_POLICY`` from the compatibility names if they changed.
+
+    A direct assignment (``srv.CORS_ENABLED = True``) is treated as a
+    configuration.  The caller holds ``_SECURITY_LOCK``; ``configure_security``
+    sets both the tuple and the names together, so the names and the tuple
+    agree and this is a no-op for it.
+    """
+    global _SECURITY_POLICY, _COMPAT_POLICY
+    compat: tuple[bool, tuple[str, ...], str, frozenset[str] | None] = (
+        CORS_ENABLED,
+        tuple(CORS_ALLOWED_ORIGINS),
+        _AUTH_TOKEN,
+        None if ALLOWED_HOSTS is None else frozenset(ALLOWED_HOSTS),
+    )
+    if compat != _COMPAT_POLICY:
+        _SECURITY_POLICY = compat
+        _COMPAT_POLICY = compat
+
 
 # Loopback hostnames, ONE definition shared by the CLI's --bind guard, the
 # regen endpoint's peer check and its no-Host fallback (see
@@ -147,8 +213,10 @@ def configure_security(
     CLI configures them through this function instead of assigning server
     module attributes by name (one of which is private), so this module owns
     both the storage and when/how it may change.  Call it once at startup,
-    BEFORE the WSGI server starts accepting requests — request worker threads
-    read these values without a lock.
+    BEFORE the WSGI server starts accepting requests.  It is also safe to
+    re-call while serving: the four values are published as one immutable
+    tuple under ``_SECURITY_LOCK``, and every request reads one snapshot,
+    so a re-configure cannot leave a request acting on a torn configuration.
 
     Validation is fail-fast, the same floor the CLI applies to its flags and
     the environment: an ``auth_token`` carrying whitespace or a control
@@ -175,14 +243,25 @@ def configure_security(
                 "browser could send (scheme://host[:port])"
             )
         normalized.append(candidate)
-    global CORS_ENABLED, CORS_ALLOWED_ORIGINS, _AUTH_TOKEN, ALLOWED_HOSTS
-    CORS_ENABLED = cors_enabled
-    # Only normalized origins reach storage: an unparsable stored value would
-    # match every unparsable request Origin and echo itself back as an
-    # allow-origin.
-    CORS_ALLOWED_ORIGINS = normalized
-    _AUTH_TOKEN = auth_token
-    ALLOWED_HOSTS = allowed_hosts
+    global _SECURITY_POLICY, _COMPAT_POLICY, CORS_ENABLED
+    global CORS_ALLOWED_ORIGINS, ALLOWED_HOSTS, _AUTH_TOKEN
+    # Only normalized origins reach storage: an unparsable stored value
+    # would match every unparsable request Origin and echo itself back as
+    # an allow-origin.  The four are published as one tuple so a reader
+    # cannot act on a torn configuration.
+    policy: tuple[bool, tuple[str, ...], str, frozenset[str] | None] = (
+        cors_enabled,
+        tuple(normalized),
+        auth_token,
+        None if allowed_hosts is None else frozenset(allowed_hosts),
+    )
+    with _SECUIRTY_LOCK:
+        _SECURITY_POLICY = policy
+        _COMPAT_POLICY = policy
+        CORS_ENABLED = cors_enabled
+        CORS_ALLOWED_ORIGINS = list(normalized)
+        ALLOWED_HOSTS = None if allowed_hosts is None else set(allowed_hosts)
+        _AUTH_TOKEN = auth_token
 
 
 # The settings the process started with, exactly as ``config.active_config``
@@ -3832,8 +3911,8 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse
 # (both / and /potato; every link on either page is relative, so the cookie is
 # what carries the credential past the first click).  There is no loopback
 # exemption, which is why --allow-remote pairs with --token rather than
-# replacing it.
-_AUTH_TOKEN: str = ""
+# replacing it.  The expected value lives in ``_SECURITY_POLICY`` beside the
+# CORS and Host policy, so a request acts on one configuration's token.
 
 
 # Deliberately does not echo the expected token.  It is also a page of this
@@ -3882,7 +3961,7 @@ _UNAUTHORIZED_HTML = (
 )
 
 
-def _auth_token_matches(provided: str) -> bool:
+def _auth_token_matches(provided: str, auth_token: str | None = None) -> bool:
     # Constant-time comparison: a plain == leaks the token one byte at a
     # time to a client measuring response latency on a network-reachable
     # server (--allow-remote).  Both sides are encoded because
@@ -3893,9 +3972,12 @@ def _auth_token_matches(provided: str) -> bool:
     # strict encode turns a wrong token into a 500 instead of a 401.
     # ``fs_text_bytes`` is the exact inverse of that decode, so it maps a
     # surrogate back to the byte it escaped and leaves valid text UTF-8.
-    return bool(_AUTH_TOKEN) and hmac.compare_digest(
-        fs_text_bytes(provided), fs_text_bytes(_AUTH_TOKEN)
-    )
+    # ``auth_token`` pins the expected value to the snapshot the caller took;
+    # without it the expected value is re-read, so a re-configure between
+    # the caller's snapshot and this read could compare against the next
+    # configuration's token.
+    expected = _security_snapshot()[2] if auth_token is None else auth_token
+    return bool(expected) and hmac.compare_digest(fs_text_bytes(provided), fs_text_bytes(expected))
 
 
 #: Name of the HttpOnly cookie the ``?token=`` share-link flow sets, and the one
@@ -3920,7 +4002,8 @@ def set_auth_cookie() -> None:
     or when the value does not match; the 401 itself is :func:`_require_auth`'s
     job, which runs first.
     """
-    if not _AUTH_TOKEN or not _auth_token_matches(query_param("token")):
+    _, _, auth_token, _ = _security_snapshot()
+    if not auth_token or not _auth_token_matches(query_param("token"), auth_token):
         return
     # A header the peer will not accept must not break the page it rides on —
     # but it must not be invisible either.  A dropped Set-Cookie leaves the
@@ -3937,10 +4020,11 @@ def set_auth_cookie() -> None:
     # stop the cookie from ever being stored, so it is a property of the
     # request, not a fixed spelling.
     secure = "; Secure" if request_is_https() else ""
+    auth_token = _security_snapshot()[2]
     try:
         response.set_header(
             "Set-Cookie",
-            f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict{secure}",
+            f"{AUTH_COOKIE_NAME}={auth_token}; Path=/; HttpOnly; SameSite=Strict{secure}",
         )
     except Exception:
         _log.warning(
@@ -4263,7 +4347,8 @@ def _require_auth() -> None:
     answer 429 to the operator, and one operator's traffic cannot reset
     another client's count.
     """
-    if not _AUTH_TOKEN or _is_cors_preflight() or _is_ungated_asset():
+    _, _, auth_token, _ = _security_snapshot()
+    if not auth_token or _is_cors_preflight() or _is_ungated_asset():
         return
 
     # The peer key for the throttle. REMOTE_ADDR is the socket peer here (the
@@ -4278,7 +4363,7 @@ def _require_auth() -> None:
         provided = query_param("token")
         if not provided:
             provided = request.get_cookie(AUTH_COOKIE_NAME, default="")
-    if _auth_token_matches(provided):
+    if _auth_token_matches(provided, auth_token):
         _clear_auth_failures(peer)
         return
 
@@ -4467,13 +4552,14 @@ def _log_request() -> None:
     (The method/path line for every request, with its status and duration,
     is emitted once by the after_request hook.)
     """
-    if ALLOWED_HOSTS is not None:
+    allowed = allowed_hosts()
+    if allowed is not None:
         # DNS-rebinding guard for loopback installs: the Host header must name
         # a loopback host.  Requests without a Host header (non-HTTP/1.1
         # clients, WSGI test harnesses) are left to the server's own address
         # handling.
         host = _header("Host", "")
-        if host and _hostname_of(host) not in ALLOWED_HOSTS:
+        if host and _hostname_of(host) not in allowed:
             # Audit trail: a rejected Host on a loopback bind is a
             # DNS-rebinding attempt signal; without it the 400 leaves no
             # trace for incident investigation.  %r escapes control
@@ -4593,7 +4679,8 @@ def _security_headers() -> None:
         # asserting a fact about the connection this response came in on.
         response.set_header("Strict-Transport-Security", f"max-age={HSTS_MAX_AGE_SECONDS}")
     origin = _header("Origin", "")
-    if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
+    cors_on, cors_origins, _, _ = _security_snapshot()
+    if cors_on and origin and _normalize_origin(origin) in cors_origins:
         response.set_header("Access-Control-Allow-Origin", origin)
         _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
