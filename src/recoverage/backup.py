@@ -889,7 +889,13 @@ def _write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     except BackupError:
         # A repeat at an explicit path holds identical bytes: its retry
         # converged, so verify the existing archive instead of refusing.
-        if destination.is_file() and destination.read_bytes() == blob:
+        try:
+            identical = destination.is_file() and destination.read_bytes() == blob
+        except OSError as exc:
+            raise BackupError(
+                f"cannot read existing backup {destination} to check a repeat: {exc}"
+            ) from exc
+        if identical:
             return verify_backup(destination)
         raise
     except OSError as exc:
