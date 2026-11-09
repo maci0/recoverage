@@ -895,7 +895,7 @@ class TestReproducibleBuild:
         field needs; validating against an older backend fails the build."""
         manifest = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         floor = next(
-            req.removeprefix("setuptools>=")
+            req.removeprefix("setuptools>=").split(",", 1)[0]
             for req in manifest["build-system"]["requires"]
             if req.startswith("setuptools")
         )
