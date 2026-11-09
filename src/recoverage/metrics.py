@@ -82,41 +82,6 @@ def status_bucket(status: int) -> str:
     return f"{status // 100}xx"
 
 
-#: How the quantile INDEX rounds, as a shift on the scaled position.  Half a
-#: sample rounds UP.  ``round`` does not: it is banker's rounding, so
-#: ``round(0.5 * 5)`` is 2 and a p50 over six timed requests reported the third
-#: sample where the median is the fourth.  The figures only move on a window
-#: whose length makes the scaled position land on exactly .5, which is why it
-#: survived: nothing in the suite asks for a quantile of an even-length window
-#: whose two middle samples differ.
-QUANTILE_ROUNDING_HALF: Final = 0.5
-
-
-def percentile(samples: list[float], fraction: float) -> float:
-    """The *fraction* quantile of the SORTED *samples*, a whole sample, no interpolation.
-
-    Zero samples answer 0.0 rather than raising: the snapshot is read while a
-    process may have served nothing yet, and a health probe that raises is a
-    probe that reports a fault the operator has to diagnose in the metrics
-    code.  A reported figure is a whole request an operator can then look for
-    in the slow-request log, so the position is floored to the nearest sample
-    rather than interpolated between two.
-
-    *fraction* is the share of the window the quantile sits at, clamped to
-    ``0.0..1.0`` so a caller that passes one outside it indexes the end rather
-    than raising or reading from the far end the other way.  A non-finite
-    share answers 0.0: ``min``/``max`` hand NaN straight back, and
-    ``math.floor`` on it raises ``ValueError`` out of a health snapshot.
-    """
-    if not samples:
-        return 0.0
-    if not math.isfinite(fraction):
-        return 0.0
-    share = min(max(fraction, 0.0), 1.0)
-    position = share * (len(samples) - 1) + QUANTILE_ROUNDING_HALF
-    return samples[min(len(samples) - 1, math.floor(position))]
-
-
 def _quantile(samples: deque[float], fraction: float) -> float:
     """Quantile of an unsorted window without sorting it."""
     if not samples:
@@ -124,7 +89,7 @@ def _quantile(samples: deque[float], fraction: float) -> float:
     if not math.isfinite(fraction):
         return 0.0
     share = min(max(fraction, 0.0), 1.0)
-    position = share * (len(samples) - 1) + QUANTILE_ROUNDING_HALF
+    position = share * (len(samples) - 1) + 0.5
     k = min(len(samples) - 1, math.floor(position)) + 1
     if k == len(samples):
         return float(max(samples))
