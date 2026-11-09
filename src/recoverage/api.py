@@ -691,7 +691,7 @@ def _filtered_functions(
     functions: Sequence[Function],
     status_filter: str | None,
     search: str | None,
-    folded: Mapping[int, tuple[str, str, str]] | None = None,
+    folded: Mapping[int, tuple[str, str, str, str]] | None = None,
     snapshot: CoverageSnapshot | None = None,
 ) -> list[Function]:
     """The functions the list endpoint would serve, before paging.
@@ -757,7 +757,7 @@ def _filtered_functions(
                 fn
                 for fn in rows
                 if _server.folded_columns_match(folded[id(fn)], needle)
-                or (match_decimal and fold_match_folded(str(fn.va), needle))
+                or (match_decimal and _server.folded_decimal_match(folded[id(fn)], needle))
                 or (
                     addresses is not None
                     and (needle in addresses[id(fn)][0] or needle in addresses[id(fn)][1])

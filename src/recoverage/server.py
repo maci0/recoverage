@@ -3293,8 +3293,8 @@ def _snapshot_index[IndexT](
 
 def folded_row_columns(
     snap: CoverageSnapshot, rows: Sequence[Any]
-) -> Mapping[int, tuple[str, str, str]]:
-    """``id(row) -> (folded name, folded symbol, folded vaStart)`` for *rows*.
+) -> Mapping[int, tuple[str, str, str, str]]:
+    """``id(row) -> (folded name, folded symbol, folded vaStart, folded decimal VA)`` for *rows*.
 
     Every server-side search compares the same three columns of every row
     through :func:`fold_match_folded`, which re-folds each one — an NFC
@@ -3314,17 +3314,20 @@ def folded_row_columns(
     list costs no second derivation.
     """
 
-    def build(source: Sequence[Any]) -> Mapping[int, tuple[str, str, str]]:
+    def build(source: Sequence[Any]) -> Mapping[int, tuple[str, str, str, str]]:
         # fold_text(None) is None and fold_text("") is "" — the `or ""` kept
         # here is not dead, it is what maps a NULL column to the empty string
         # no non-empty term matches (the COALESCE answer). Passing the
         # attribute through None first keeps that for a row that lacks the
-        # attribute entirely.
+        # attribute entirely. The decimal VA is folded once here too: the
+        # search loops used to build `str(va)` and fold it per row per
+        # keystroke, which is the same pure function of the frozen row.
         return {
             id(row): (
                 fold_text(getattr(row, "name", None)) or "",
                 fold_text(getattr(row, "symbol", None)) or "",
                 fold_text(getattr(row, "vaStart", None)) or "",
+                fold_text(str(getattr(row, "va", 0))) or "",
             )
             for row in source
         }
@@ -3388,8 +3391,8 @@ def globals_by_va(snap: CoverageSnapshot) -> Mapping[int, Global]:
     return _snapshot_index(snap, "globals_by_va", build)
 
 
-def folded_columns_match(columns: tuple[str, str, str], needle: str) -> bool:
-    """Whether *needle* occurs in any of a row's three FOLDED name columns.
+def folded_columns_match(columns: tuple[str, str, str, str], needle: str) -> bool:
+    """Whether *needle* occurs in any of a row's FOLDED name columns.
 
     The same three substring tests :func:`fold_match_folded` runs — over text
     folded once for the snapshot by :func:`folded_row_columns` instead of once
@@ -3406,6 +3409,19 @@ def folded_columns_match(columns: tuple[str, str, str], needle: str) -> bool:
     answer — only how many of them a row that misses has to pay.
     """
     return needle in columns[0] or needle in columns[1] or needle in columns[2]
+
+
+def folded_decimal_match(columns: tuple[str, str, str, str], needle: str) -> bool:
+    """Whether *needle* occurs in the row's folded decimal VA column.
+
+    The fourth column :func:`folded_row_columns` folds once per snapshot,
+    so the API function list no longer builds ``str(va)`` and folds it per
+    row per keystroke. Whether the arm runs at all is the caller's
+    :func:`fold_can_match_decimal` answer, not this predicate's: a term no
+    decimal spelling can hold cannot be a substring of one anyway, but
+    skipping the test is the guard that keeps a name search from paying it.
+    """
+    return needle in columns[3]
 
 
 def function_rows(snap: CoverageSnapshot) -> tuple[Any, ...]:
