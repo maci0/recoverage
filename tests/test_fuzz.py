@@ -71,6 +71,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -7609,4 +7610,202 @@ class TestCheckedNumericCliParsers:
             struct_tokens=self._NUM_TOKENS,
             num_tokens=self._NUM_TOKENS,
             label="TestCheckedNumericCliParsers.test_numeric_parsers_never_raise_except_exit_and_stay_finite",
+        )
+
+
+# ── the document-serialization choke point: ``server._plain`` ────────────
+#
+# ``_plain`` renders every value a coverage document carries into a served
+# payload (cells, functions, globals, summaries, search indexes).  It reaches
+# ``json.dumps`` only AFTER converting non-finite floats to ``null`` and
+# lone surrogates to U+FFFD; a raw non-finite or surrogate would make the
+# payload unusable to the SPA (``json.dumps`` writes NaN/Infinity, which no
+# JSON parser outside Python accepts) or crash the encoder outright.  The
+# unit suite pins a hand-written list of awkward values; that list is the
+# seed corpus here, and the pair assertion is the one the wire demands:
+# the result round-trips through ``json.dumps`` under ``allow_nan=False``
+# (the strict parser a non-Python client runs) AND through
+# ``json.loads``, so a conversion that leaks a non-finite float or a
+# surrogate into any spelling fails the round rather than the browser.
+
+_PLAIN_SEEDS: tuple[Any, ...] = (
+    "plain-name",
+    "combining e\u0301",
+    "a\ud800b\udfff",
+    "k\udcff",
+    "",
+    0,
+    -1,
+    2**64,
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    True,
+    None,
+    {"k\udcff": "v\udcff", "nested": [float("nan"), "x\ud800", 1]},
+    [float("inf"), {"a": [-0.0, "ok"]}],
+    {("a", "b"): "tuple-key"},
+    {1: "int-key", "k": "str-key"},
+    ["\ud800" * 8, float("-inf")],
+    {"deep": {"deeper": [{"leaf": "v\udc80"}]}},
+)
+
+
+_SURROGATE_WALK_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _plain_walk(value: Any) -> Any:
+    """The reference walk: mirror ``_plain`` in the test, independently."""
+    if isinstance(value, str):
+        return _SURROGATE_WALK_RE.sub("\ufffd", value)
+    if isinstance(value, dict):
+        return {_plain_walk_key(k): _plain_walk(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_walk(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _plain_walk_key(key: Any) -> Any:
+    if isinstance(key, str):
+        return _plain_walk(key)
+    if isinstance(key, (int, float)) and not isinstance(key, bool):
+        if isinstance(key, float) and not math.isfinite(key):
+            return repr(key)
+        return key
+    if key is None or isinstance(key, bool):
+        return key
+    return repr(_plain_walk(key))
+
+
+class TestPlainWireValue:
+    """A document value that reaches the wire survives JSON, or opts out of it."""
+
+    def test_never_raises_and_round_trips_strict_json(self) -> None:
+        import math
+
+        def check(value: Any) -> None:
+            try:
+                out = srv._plain(value)
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_plain raised {type(exc).__name__}: {exc} on {value!r}"
+                ) from exc
+
+            def walk(v: Any) -> None:
+                if isinstance(v, float):
+                    assert math.isfinite(v), f"non-finite {v!r} survived in {out!r}"
+                elif isinstance(v, str):
+                    assert not any(0xD800 <= ord(c) <= 0xDFFF for c in v), (
+                        f"lone surrogate survived in {v!r}"
+                    )
+                elif isinstance(v, dict):
+                    for k, val in v.items():
+                        walk(k)
+                        walk(val)
+                elif isinstance(v, (list, tuple)):
+                    for item in v:
+                        walk(item)
+
+            walk(out)
+            text = json.dumps(out, allow_nan=False)
+            assert json.loads(text) == out
+            assert _plain_walk(value) == out
+
+        # Thaw through _plain_walk first: a tuple key has no JSON spelling,
+        # and _plain renders it as a string, so the walk is the reference.
+        seed_values = [_plain_walk(v) for v in _PLAIN_SEEDS]
+        seeds = [json.dumps(v, default=str) for v in seed_values]
+
+        def check_bytes(data: bytes) -> None:
+            try:
+                value = json.loads(data.decode("utf-8", "replace"))
+            except Exception:
+                value = data.decode("utf-8", "replace")
+            check(value)
+
+        _fuzz(
+            [s.encode() for s in seeds],
+            check_bytes,
+            iterations=400,
+            struct_tokens=tuple(s.encode() for s in seeds),
+            num_tokens=_NUM_TOKENS,
+            label="TestPlainWireValue.test_never_raises_and_round_trips_strict_json",
+        )
+
+
+# ── the hex-dump renderer: ``server._format_hex_dump`` ─────────────────
+#
+# ``_format_hex_dump`` is the ONE renderer both ``/bytes`` (the ``hex``
+# payload) and Potato Mode's Original Bytes block print binary slices
+# through.  It is pure rendering of untrusted bytes: the input is a slice
+# of the binary under analysis at a caller-chosen offset, so every byte
+# value and every length arrives here.  A renderer that dropped a byte, or
+# printed one at a different offset than the buffer holds, shows the reader
+# bytes that are not the ones they selected.  The pair assertion is the
+# buffer itself: the hex column must be exactly ``raw_bytes.hex()`` and
+# the offsets must walk ``base_offset`` in steps of 16.
+
+_HEX_DUMP_SEEDS: tuple[bytes, ...] = (
+    b"",
+    b"\x00",
+    bytes(range(256)),
+    b"\xff" * 32,
+    b"\x90\xc3" * 20,
+    b"hello\x00world\n",
+)
+
+
+class TestHexDumpRenderer:
+    """Every byte renders once, at the offset the buffer names."""
+
+    def test_every_byte_renders_once_at_its_offset(self) -> None:
+        def check(data: bytes) -> None:
+            for max_bytes in (None, 0, 1, 16, 17, 256):
+                try:
+                    rendered = srv._format_hex_dump(data, 0x1000, max_bytes)
+                except BaseException as exc:
+                    raise AssertionError(
+                        f"_format_hex_dump raised {type(exc).__name__} on {len(data)} bytes: {exc}"
+                    ) from exc
+                if max_bytes is not None and len(data) > max_bytes:
+                    shown = data[:max_bytes]
+                elif max_bytes == 0:
+                    shown = b""
+                else:
+                    shown = data
+                lines = rendered.split("\n") if rendered else []
+                body = [ln for ln in lines if not ln.startswith("... (")]
+                assert len(body) == (len(shown) + 15) // 16, (
+                    f"{len(shown)} bytes rendered {len(body)} rows"
+                )
+                # The hex column is the buffer, byte for byte, row by row:
+                # row i covers bytes [16*i, 16*i+16) at offset base+16*i.
+                for i, ln in enumerate(body):
+                    assert ln[:8] == f"{0x1000 + i * 16:08x}", (
+                        f"row {i} opens {ln[:8]!r}, expected {0x1000 + i * 16:08x}"
+                    )
+                    row_bytes = shown[i * 16 : (i + 1) * 16]
+                    assert row_bytes.hex() in ln.replace(" ", ""), (
+                        f"row {i} hex is not {row_bytes.hex()!r} in {ln!r}"
+                    )
+                if max_bytes is not None and len(data) > max_bytes:
+                    assert lines[-1] == f"... ({len(data) - max_bytes} more bytes)"
+                # The ASCII gutter is the buffer's bytes with non-printables
+                # as '.', row by row, so a shifted byte fails here too.
+                for i, ln in enumerate(body):
+                    row_bytes = shown[i * 16 : (i + 1) * 16]
+                    row_gutter = "".join(chr(b) if 32 <= b < 127 else "." for b in row_bytes)
+                    assert f"|{row_gutter}|" in ln, (
+                        f"row {i} gutter is not {row_gutter!r} in {ln!r}"
+                    )
+
+        _fuzz(
+            list(_HEX_DUMP_SEEDS),
+            check,
+            iterations=400,
+            struct_tokens=_HEX_DUMP_SEEDS,
+            num_tokens=_NUM_TOKENS,
+            label="TestHexDumpRenderer.test_every_byte_renders_once_at_its_offset",
         )
