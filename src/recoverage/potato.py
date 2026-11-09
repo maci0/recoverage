@@ -1058,7 +1058,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table role="presentation" id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{MARK_ON_DARK_SVG}}" width="24" height="24" border="0" alt=""></td>
-          <td valign="middle" nowrap><h1><a href="/"><font face="{{SANS_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>recoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{SANS_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>recoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[Functions]</font></a>% if grid_nav_url:&nbsp;<a href="{{grid_nav_url}}"><font face="{{MONO_FONT}}" size="2" color="{{MUTED_COLOR}}">[Grid]</font></a>% end</td>
         </tr>
       </table>
     </td>
@@ -1087,7 +1087,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                them on the image clipped mid-word on narrow screens, because
                the text width is fixed while the image shrinks. -->
           <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
-            <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt="" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress['coverage_pct_1dp']}}" aria-valuetext="{{'{:.1f}'.format(progress['coverage_pct_1dp'])}}% covered, {{'{:,}'.format(progress['sec_size'])}} bytes, {{progress['matched_fn']}}/{{progress['total_fn']}} functions matched"></td>
+            <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt="" aria-hidden="true"><span role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress['coverage_pct_1dp']}}" aria-valuetext="{{'{:.1f}'.format(progress['coverage_pct_1dp'])}}% covered, {{'{:,}'.format(progress['sec_size'])}} bytes, {{progress['matched_fn']}}/{{progress['total_fn']}} functions matched"></span></td>
           </tr><tr>
             <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{"{:,}".format(progress['sec_size'])}}</b> B &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> functions matched &middot; <b>{{"{:.1f}".format(progress['coverage_pct_1dp'])}}%</b> covered</font></td>
           </tr></table>
@@ -3395,6 +3395,12 @@ def _render_potato_inner(
         # [Functions] link that dropped them landed on a page whose controls read
         # as unset over a grid that had been narrowed.
         functions_nav_url += "&filter=" + fs_url_quote(",".join(sorted(active_filters)))
+    # The grid-view link is the inverse of this one: omitted on the grid itself,
+    # where it would point at the page already open, and rendered on the
+    # function list so a reader who opened the list has a labeled way back to
+    # the map. The label states where the link goes rather than repeating the
+    # link beside it ("[Functions]" the way "[SPA]" names its destination).
+    grid_nav_url = functions_nav_url if view == "functions" else None
     functions_nav_url += "&view=functions"
     if status_filter:
         # The criterion the list is narrowed by travels with the link into it,
@@ -3430,6 +3436,7 @@ def _render_potato_inner(
         target=target,
         section=section,
         functions_nav_url=functions_nav_url,
+        grid_nav_url=grid_nav_url,
         view=view,
         active_filters=active_filters,
         status_filter=status_filter,

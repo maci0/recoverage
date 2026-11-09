@@ -193,8 +193,21 @@ export function reading(measurement: number, locale?: string | ReadonlyArray<str
  * missing translation and a missing noun is a broken sentence. */
 const _pluralRulesCache = new Map<string, Intl.PluralRules>();
 
+/** A `locale` argument, turned into the list `Intl.PluralRules` takes and a
+ * cache key; a single string becomes a one-element list. */
+function _localeList(locale: string | ReadonlyArray<string>): Array<string> {
+  // oxlint-disable-next-line @rikalabs/no-trivial-runtime-guard-helpers -- the guard IS the narrowing: callers pass string | string[], and one branch reads the value either way
+  if (Array.isArray(locale)) {
+    // oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion -- the isArray guard above already narrowed it; the cast only restores Array<string> for the spread
+    return [...(locale as Array<string>)];
+  }
+  // oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion -- the isArray guard above excluded the array arm, so this is the string arm
+  return [locale as string];
+}
+
 function _pluralRules(locale?: string | ReadonlyArray<string>): Intl.PluralRules {
-  const locales = locale === undefined ? undefined : Array.isArray(locale) ? [...locale] : [locale];
+  const locales: ReadonlyArray<string> | undefined =
+    locale === undefined ? undefined : _localeList(locale);
   const key = locales === undefined ? "" : locales.join(",");
   let rules = _pluralRulesCache.get(key);
   if (rules === undefined) {
