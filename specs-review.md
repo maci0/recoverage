@@ -42,11 +42,12 @@ Review the following:
    - Every "Mitigation in code" cell names a mechanism that exists: the named
      constant, the guard, the header, the cache eviction. Open the cited code.
    - Every mitigation present in the code for a ranked risk appears in its row.
-     A security control added since the last pass (`rg -l 'Sec-Fetch-Site'`
-     over the Python sources, and the route decorators in `src/recoverage/api.py`)
-     with no row is a missing row, not a missing control. `Sec-Fetch-Site` sits
-     in `src/recoverage/api.py` today; the search proves a control exists, not
-     where, so re-prove the file on each pass rather than trusting this line.
+     A security control added since the last pass with no row is a missing
+     row, not a missing control. Search for the control's header, constant,
+     or guard name over the Python sources (for example `rg -l 'Sec-Fetch-Site'`
+     or the route decorators in `src/recoverage/api.py`); the search proves a
+     control exists, not where, so re-prove the file on each pass rather than
+     trusting any example above.
    - The ranking is a judgement, so only flag a rank that is falsified: a risk
      table that still ranks unauthenticated remote reads below a risk the code
      has since bounded. Do not reshuffle ranks on taste.
@@ -56,15 +57,15 @@ Review the following:
 
 3. Design descriptions versus the code
    - Every mechanism `docs/DESIGN.md` attributes to a module is in that module
-     (`run_regen` in `regen.py`, the disassembly memo in `disasm.py` behind the
-     `/asm` handler rather than in the handler itself, the `db-updated` SSE event
-     in `api.py`). A mechanism the code dropped is a finding even when the
-     feature survives under another name; restate the mechanism the code
-     actually has.
+     (the regen entry point in `regen.py`, the disassembly memo in `disasm.py`
+     behind the `/asm` handler rather than in the handler itself, the
+     `db-updated` SSE event in `api.py`). A mechanism the code dropped is a
+     finding even when the feature survives under another name; restate the
+     mechanism the code actually has.
    - Every hard number in prose (compressed shell size, headroom bytes,
      congestion window, preload bytes, pagination defaults, cache sizes) must
      match the constant or measured value. `ui._check_payload_budget` is the
-     authority for the payload budget: call it or read the named constant
+     authority for the budget: call it or read the named constant
      rather than re-deriving a size by hand.
 
 4. Cross-document contradictions

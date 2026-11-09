@@ -78,8 +78,8 @@ Instructions:
 - Do not edit `tools/oxlint/anti-slop/` (vendored upstream), any `*-review.md` file, or a generated asset (`src/recoverage/assets/app.js`, `style.css`, `print.css`): those bytes come from `make web-build`, so a bundle edit is a drift finding against the `web/` source, never a fix. A lockfile moves only as its package manager's output, and never by hand.
 
 For each finding include:
-- File and line of the stale text
-- The exact command or file read that disproves it
+- File and line of the stale claim
+- The code you read that disproves it
 - The corrected text, ready to apply
 
 Output format:
