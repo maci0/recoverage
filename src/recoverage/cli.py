@@ -2139,11 +2139,12 @@ def export(
         import csv
 
         # The csv module owns every line break it writes: stdout's newline
-        # translation is switched off and the rows end in os.linesep, so a row
-        # ends in the platform's native ending exactly once.  Left on,
-        # Windows' text-mode stdout also rewrote a "\n" INSIDE a quoted cell
-        # (a section or target name can hold one) to "\r\n", and the cell read
-        # back was not the name the document holds.
+        # translation is switched off and the rows end in a bare "\n", so a row
+        # ends in exactly one line break on every platform (see
+        # reporting.csv_text).  Left on, Windows' text-mode stdout also
+        # rewrote a "\n" INSIDE a quoted cell (a section or target name can
+        # hold one) to "\r\n", and the cell read back was not the name the
+        # document holds.
         stream = _utf8_stream(sys.stdout)
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -2151,7 +2152,7 @@ def export(
         written = 0
         total = sum(len(data["sections"]) for data in all_data)
         try:
-            writer = csv.writer(stream, lineterminator=os.linesep)
+            writer = csv.writer(stream, lineterminator="\n")
             writer.writerow(CSV_HEADER)
             for data in all_data:
                 for sec_name, sec in data["sections"].items():

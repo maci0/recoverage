@@ -276,7 +276,7 @@ def _prune(root: Path) -> None:
     # at present-day magnitudes from the float's 53-bit mantissa).
     seconds, remainder = divmod(clock.wall_time(), 1.0)
     now_ns = int(seconds) * 1_000_000_000 + int(remainder * 1_000_000_000)
-    slots: list[tuple[int, Path]] = []
+    slots: list[tuple[int, str, Path]] = []
     try:
         entries = list(root.iterdir())
     except OSError as exc:
@@ -297,9 +297,12 @@ def _prune(root: Path) -> None:
             if now_ns - st.st_mtime_ns > _STALE_TMP_SECONDS * 1_000_000_000:
                 _unlink_quiet(entry, "stale temp")
         elif entry.suffix == _SLOT_SUFFIX:
-            slots.append((st.st_mtime_ns, entry))
-    slots.sort(reverse=True)
-    for _mtime, stale in slots[_CACHE_MAX_SLOTS:]:
+            # Name as the tie-breaker: two slots written in one mtime tick
+            # order by the directory listing otherwise, and which slot a prune
+            # keeps is part of what a replay observes.
+            slots.append((st.st_mtime_ns, entry.name, entry))
+    slots.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    for _mtime, _name, stale in slots[_CACHE_MAX_SLOTS:]:
         _unlink_quiet(stale, "stale slot")
 
 

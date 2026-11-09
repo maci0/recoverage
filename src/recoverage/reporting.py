@@ -15,7 +15,6 @@ surfaces instead of three.
 from __future__ import annotations
 
 import json
-import os
 import unicodedata
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -236,18 +235,20 @@ def markdown_text(stats: Iterable[Mapping[str, Any]]) -> str:
 
 
 def csv_text(stats: Iterable[Mapping[str, Any]]) -> str:
-    """The whole CSV document, rows ending in the platform's line ending.
+    """The whole CSV document, rows ending in a bare ``\\n``.
 
-    ``os.linesep`` for the same reason the CLI stream switches stdout's
-    newline translation off: a line break inside a quoted cell is then written
-    exactly once, and the row ending is the platform's native one.
+    A fixed ``\\n`` rather than ``os.linesep``: the output is a byte stream
+    that is diffed in replay and from one host to another, and a host-dependent
+    row ending makes the same export differ on Windows and POSIX.  The CLI
+    stream that writes *this* text switches stdout's translation off so the
+    single ``\\n`` is written exactly once.
     """
     items = list(stats)
     with_verified = any(
         "verified_bytes" in sec for data in items for sec in data["sections"].values()
     )
     buffer = io.StringIO(newline="")
-    writer = csv.writer(buffer, lineterminator=os.linesep)
+    writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(
         (*CSV_HEADER, "coverage_metric", "verified_bytes", "verified_pct")
         if with_verified
