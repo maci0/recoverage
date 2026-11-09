@@ -3632,7 +3632,7 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
         else:
             hex_left = " ".join(row[j : j + 2] for j in range(0, 16, 2))
             hex_right = " ".join(row[j : j + 2] for j in range(16, len(row), 2))
-        ascii_repr = ascii_text[i : i + 16].decode()
+        ascii_repr = ascii_text[i : i + 16].decode("ascii")
         offset = hex_addr(base_offset + i)[2:]
         lines.append(f"{offset}  {hex_left:<23s}  {hex_right:<23s}  |{ascii_repr}|")
     if max_bytes is not None and len(raw_bytes) > max_bytes:

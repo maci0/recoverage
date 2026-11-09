@@ -142,7 +142,7 @@ def _bounded(text: str) -> str:
 
 def error_body(code: str, detail: str, status: int) -> bytes:
     """The refusal reply the transport writes, mirroring the HTTP error envelope."""
-    return json.dumps({"error": code, "code": code, "detail": detail, "status": status}).encode()
+    return json.dumps({"error": code, "code": code, "detail": detail, "status": status}).encode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -712,7 +712,7 @@ def dispatch_json(config: WorkerConfig, name: str, request: Mapping[str, Any]) -
     Convenience over :func:`dispatch` for in-process callers; the reply and
     refusal are parsed JSON values rather than wire bytes.
     """
-    status, body = dispatch(config, name, json.dumps(request).encode())
+    status, body = dispatch(config, name, json.dumps(request).encode("utf-8"))
     try:
         return status, json.loads(body)
     except ValueError:
@@ -722,7 +722,7 @@ def dispatch_json(config: WorkerConfig, name: str, request: Mapping[str, Any]) -
 def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
     """Answer one call: ``(200, reply)`` or ``(status, refusal)``."""
     try:
-        reply = json.dumps(_answer(config, name, body), allow_nan=False).encode()
+        reply = json.dumps(_answer(config, name, body), allow_nan=False).encode("utf-8")
     except OpsError as exc:
         return exc.status, error_body(exc.code, str(exc), exc.status)
     except TypeError, ValueError:

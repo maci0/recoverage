@@ -1003,7 +1003,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     # test_broadcast_frame_encodes_with_a_coverage_dir_name_outside_utf8, so
     # the day an explicit ensure_ascii=False reaches this call the ASCII
     # assertion fails here instead of a rebuild raising out of the broadcast.
-    frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
+    frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode("utf-8")
     with _SSE_CLIENTS_LOCK:
         clients = list(_SSE_CLIENTS.items())
     for client, peer in clients:
