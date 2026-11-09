@@ -2742,7 +2742,7 @@ class TestRawByteRange:
     def _loaded(self, monkeypatch: Any) -> None:
         from recoverage import potato, server
 
-        monkeypatch.setattr(potato, "_load_dll", lambda target: self.BINARY)
+        monkeypatch.setattr(potato, "load_dll", lambda target: self.BINARY)
         with server.DLL_LOCK:
             server.DLL_DATA.clear()
         yield

@@ -1130,7 +1130,7 @@ class TestApiAsmVaBoundaries:
         import recoverage.api as api
 
         seen: list[int] = []
-        monkeypatch.setattr(api, "_load_dll", lambda target: bytes(0x200 + 0x1000))
+        monkeypatch.setattr(api, "load_dll", lambda target: bytes(0x200 + 0x1000))
 
         def record(va: int, size: int, file_offset: int, target: str) -> str:
             seen.append(size)
@@ -1349,7 +1349,7 @@ class TestApiAsm:
         """
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "_load_dll", lambda target: None)
+        monkeypatch.setattr(api, "load_dll", lambda target: None)
         target = require_target()
         for fmt in ("text", "json"):
             status, headers, body = wsgi_get(
@@ -1383,7 +1383,7 @@ class TestApiBytes:
         # Deterministic fake binary large enough for .text's fileOffset
         # (0x200) plus a full clamp-size window.
         self.dll = bytes((i % 251) for i in range(self.DLL_SIZE))
-        monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
+        monkeypatch.setattr(api, "load_dll", lambda target: self.dll)
 
     def _get(self, query: str, section: str = ".text") -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/FAKEDLL/sections/{section}/bytes?{query}")
@@ -1505,7 +1505,7 @@ class TestApiBytes:
     def test_missing_dll_is_404_with_config_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "_load_dll", lambda target: None)
+        monkeypatch.setattr(api, "load_dll", lambda target: None)
         status, headers, body = self._get("offset=0&size=4")
         assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
@@ -6602,7 +6602,7 @@ class TestImageWidthIsReadFromTheContainerHeader:
 
         image = self._pe(0x8664 if bits == 64 else 0x014C).ljust(0x204, b"\x90")
         monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
-        monkeypatch.setattr(api, "_load_dll", lambda target: image)
+        monkeypatch.setattr(api, "load_dll", lambda target: image)
         monkeypatch.setattr(disasm, "binary_stamp", lambda target: None)
         selected: list[int] = []
 
@@ -7244,8 +7244,8 @@ class TestSliceValidationDetail:
 
         monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
         self.dll = bytes((i % 251) for i in range(2048))
-        monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
-        # api's own _load_dll is only half the path: the text representation
+        monkeypatch.setattr(api, "load_dll", lambda target: self.dll)
+        # api's own load_dll is only half the path: the text representation
         # renders through disasm.get_disassembly, which reads server's. Every
         # test in this class asserted a 400 raised BEFORE the load, so the
         # missing half went unnoticed and a request that got past validation

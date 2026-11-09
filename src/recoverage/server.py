@@ -1796,7 +1796,7 @@ def binary_stamp(target: str) -> tuple[int, int, int, int] | None:
 def _binary_stamp_at(path: Path | None) -> tuple[int, int, int, int] | None:
     """Stat *path* into a binary stamp, None when there is no file to stat.
 
-    :func:`binary_stamp` and :func:`_load_dll` both resolve the target's
+    :func:`binary_stamp` and :func:`load_dll` both resolve the target's
     binary path and stat it; calling the public wrapper from the loader
     resolved the path twice per request (a config stat plus a
     ``Path.resolve()`` each time), so the loader reuses the path it already
@@ -1812,7 +1812,7 @@ def _binary_stamp_at(path: Path | None) -> tuple[int, int, int, int] | None:
 
 
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
-#: Chunk size for the bounded binary read in :func:`_load_dll`: the total
+#: Chunk size for the bounded binary read in :func:`load_dll`: the total
 #: read is capped at ``_MAX_DLL_SIZE + 1``, so the reader never materialises
 #: more than one byte past the cap, whatever the file does between the stat
 #: and the read.
@@ -2267,7 +2267,7 @@ def _is_known_target(target: str) -> bool:
     segment until config_fp moves.  Caller holds DLL_LOCK.
 
     An empty or unreadable coverage set (no project yet) reads as "no targets
-    known", and _load_dll is still called straight from tests with a
+    known", and load_dll is still called straight from tests with a
     monkeypatched _find_dll_path and an arbitrary key.  To keep those callers
     working while still bounding the memo, the caller also consults the
     _get_targets_config set directly; a target configured there (or whose
@@ -2334,7 +2334,7 @@ def _cache_dll_unavailable(
         return None
 
 
-def _load_dll(target: str) -> bytes | None:
+def load_dll(target: str) -> bytes | None:
     """Load DLL bytes for a target into DLL_DATA (thread-safe).
 
     Why no outer check: reading DLL_DATA[target] outside the lock races with

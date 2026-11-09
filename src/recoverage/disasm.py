@@ -16,7 +16,8 @@ import threading
 lazy from typing import Any
 
 from recoverage import metrics
-from recoverage.server import RecoError, _load_dll, binary_stamp, hex_addr
+from recoverage.config import RecoError
+from recoverage.server import load_dll, binary_stamp, hex_addr
 
 _log = logging.getLogger("recoverage")
 
@@ -278,12 +279,12 @@ def _disassembly_generation() -> int:
 def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """Disassemble *size* bytes of *target* at *va*, memoized per slice.
 
-    The DLL-load guard deliberately stays OUTSIDE the memo cache: ``_load_dll``
+    The DLL-load guard deliberately stays OUTSIDE the memo cache: ``load_dll``
     leaves transient OS failures uncached so the next request self-heals, and
     memoizing their "" result here would pin that outage until the next
     rebuild broadcast happened to clear the cache.
     """
-    if _load_dll(target) is None:
+    if load_dll(target) is None:
         return ""
     generation = _disassembly_generation()
     stamp = binary_stamp(target)
@@ -336,7 +337,7 @@ def _disassemble_loaded(
     on the binary the slice was read from: a replaced binary is a different key,
     where the target alone would serve the old binary's text.
     """
-    target_data = _load_dll(target)
+    target_data = load_dll(target)
     if target_data is None:
         # Raced a rebuild's DLL_DATA.clear() between the two loads, so this
         # slice is unresolvable rather than empty.  The "" lands in the memo

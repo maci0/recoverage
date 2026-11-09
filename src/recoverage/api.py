@@ -44,7 +44,7 @@ from recoverage.server import (
     _json_err,
     _json_ok,
     _json_ok_precompressed,
-    _load_dll,
+    load_dll,
     _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
@@ -2861,7 +2861,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
         # unconfigured original binary is the same 404 (/bytes answers the
         # same way), so the format= path must not turn it into a 422 the
         # client reads as "your address is past the end of the section".
-        target_data = _load_dll(target)
+        target_data = load_dll(target)
         if target_data is None:
             return _dll_not_found(target)
 
@@ -2969,7 +2969,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
                     f"{sec['size'] - req_offset}",
                 },
             )
-        target_data = _load_dll(target)
+        target_data = load_dll(target)
         if target_data is None:
             return _dll_not_found(target)
 

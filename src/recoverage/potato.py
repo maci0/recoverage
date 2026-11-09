@@ -41,7 +41,7 @@ from recoverage.server import (
     _etag_or_304,
     _evict_oldest,
     _format_hex_dump,
-    _load_dll,
+    load_dll,
     _log_safe,
     _newest_mtime_ns,
     _snapshot_db_mtime,
@@ -893,7 +893,7 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
     if size <= 0:
         return None
     size = min(size, _MAX_RAW_READ)
-    dll_data = _load_dll(target)
+    dll_data = load_dll(target)
     if dll_data is None:
         return None
     end = file_offset + size

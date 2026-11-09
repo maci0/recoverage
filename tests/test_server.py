@@ -70,7 +70,7 @@ from recoverage.server import (
     SUPPORTED_ENCODINGS,
     _best_encoding,
     _find_dll_path,
-    _load_dll,
+    load_dll,
     _project_dir,
     clear_target_cache,
     compress_payload,
@@ -478,7 +478,7 @@ class TestPathHelpers:
     def test_find_dll_path_refuses_a_binary_outside_the_tree(self, monkeypatch: Any) -> None:
         """A configured binary naming a file outside the project is refused.
 
-        rebrew-project.toml arrives in the checkout, and `_load_dll` READS the
+        rebrew-project.toml arrives in the checkout, and `load_dll` READS the
         path it names and `/asm` and `/bytes` serve the bytes, so a parent hop
         or an anchor is a read of any file the process can open.  Each value
         below is one of the shapes that gets out of the tree, and the answer is
@@ -3019,7 +3019,7 @@ class TestLogInjection:
         with caplog.at_level(logging.WARNING, logger="recoverage"):
             with DLL_LOCK:
                 DLL_DATA.clear()
-            assert _load_dll("evil\nX-Forged: yes") is None
+            assert load_dll("evil\nX-Forged: yes") is None
         msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
         assert any("X-Forged" in m for m in msgs), "failure was not logged at all"
         assert all("\n" not in m and "\r" not in m for m in msgs)
@@ -3041,8 +3041,8 @@ class TestLoadDllTransientFailure:
         monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
         try:
             # stat() on the absent path raises FileNotFoundError inside
-            # _load_dll's OSError handler: logged, returned as None, NOT stored.
-            assert srv._load_dll(key) is None
+            # load_dll's OSError handler: logged, returned as None, NOT stored.
+            assert srv.load_dll(key) is None
             assert key not in srv.DLL_DATA
 
             # The file comes back (build finished, lock released): retrying on
@@ -3050,12 +3050,12 @@ class TestLoadDllTransientFailure:
             real = tmp_path / "real.dll"
             real.write_bytes(b"MZ-fake-binary")
             holder["p"] = real
-            assert srv._load_dll(key) == b"MZ-fake-binary"
+            assert srv.load_dll(key) == b"MZ-fake-binary"
             assert srv.DLL_DATA[key] == b"MZ-fake-binary"
 
             # A later transient failure cannot poison the cached success.
             holder["p"] = tmp_path / "gone-again.dll"
-            assert srv._load_dll(key) == b"MZ-fake-binary"
+            assert srv.load_dll(key) == b"MZ-fake-binary"
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
@@ -3087,13 +3087,13 @@ class TestBinaryIsPartOfTheCacheKey:
         path = self._binary(tmp_path, monkeypatch, key)
         path.write_bytes(b"MZ-old-bytes")
         try:
-            assert srv._load_dll(key) == b"MZ-old-bytes"
+            assert srv.load_dll(key) == b"MZ-old-bytes"
             # Same size, new inode: the shape of a rebuilt binary landing by
             # rename, which a size comparison alone would miss.
             replacement = tmp_path / "game.dll.new"
             replacement.write_bytes(b"MZ-new-bytes")
             replacement.replace(path)
-            assert srv._load_dll(key) == b"MZ-new-bytes"
+            assert srv.load_dll(key) == b"MZ-new-bytes"
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
@@ -3115,7 +3115,7 @@ class TestBinaryIsPartOfTheCacheKey:
 
         monkeypatch.setattr(Path, "open", counting)
         try:
-            assert srv._load_dll(key) == srv._load_dll(key) == b"MZ-bytes"
+            assert srv.load_dll(key) == srv.load_dll(key) == b"MZ-bytes"
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
@@ -3132,9 +3132,9 @@ class TestBinaryIsPartOfTheCacheKey:
         monkeypatch.setattr(srv, "_MAX_DLL_SIZE", 8)
         path.write_bytes(b"MZ-way-too-large")
         try:
-            assert srv._load_dll(key) is None
+            assert srv.load_dll(key) is None
             path.write_bytes(b"MZ-ok")
-            assert srv._load_dll(key) == b"MZ-ok"
+            assert srv.load_dll(key) == b"MZ-ok"
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
@@ -3184,7 +3184,7 @@ class TestGetDisassemblyNoNegativeCache:
 
     The memo sits BELOW the load guard: caching "" under (va, size,
     file_offset, target) would pin a transient read failure past recovery
-    (the exact scenario _load_dll's no-negative-cache contract exists for),
+    (the exact scenario load_dll's no-negative-cache contract exists for),
     replaying empty disassembly until the next rebuild broadcast.
     """
 
@@ -3346,7 +3346,7 @@ class TestGetDisassemblyNoNegativeCache:
         import recoverage.disasm as disasm
 
         binary = b"MZ" + bytes(range(64))
-        monkeypatch.setattr(disasm, "_load_dll", lambda target: binary)
+        monkeypatch.setattr(disasm, "load_dll", lambda target: binary)
         try:
             assert disasm._disassemble_loaded(0x1000, 5, -10, "__neg_offset__", None) == ""
             assert disasm._disassemble_loaded(0x1000, -5, 0, "__neg_size__", None) == ""
@@ -3365,7 +3365,7 @@ class TestGetDisassemblyNoNegativeCache:
         import recoverage.disasm as disasm
 
         body = b"\x90\x90\x90\x90"
-        monkeypatch.setattr(disasm, "_load_dll", lambda target: b"MZ" + bytes(64) + body)
+        monkeypatch.setattr(disasm, "load_dll", lambda target: b"MZ" + bytes(64) + body)
         try:
             assert disasm._disassemble_loaded(-0x1000, 4, 66, "__neg_va__", None) == ""
             positive = disasm._disassemble_loaded(0x1000, 4, 66, "__pos_va__", None)
@@ -6816,13 +6816,13 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         target = "REPOINT"
         # No config yet: the negative verdict is cached, and the edit below is
         # what has to undo it.
-        assert srv._load_dll(target) is None
+        assert srv.load_dll(target) is None
 
         (project / "first.bin").write_bytes(b"FIRST-BINARY")
         (project / "rebrew-project.toml").write_text(
             f'[targets.{target}]\nbinary = "first.bin"\n', encoding="utf-8"
         )
-        assert srv._load_dll(target) == b"FIRST-BINARY"
+        assert srv.load_dll(target) == b"FIRST-BINARY"
 
         # A DIFFERENT-SIZED path, so the config's stat fingerprint moves even
         # on a filesystem whose mtime granularity is a whole second.
@@ -6830,7 +6830,7 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         (project / "rebrew-project.toml").write_text(
             f'[targets.{target}]\nbinary = "second-and-longer.bin"\n', encoding="utf-8"
         )
-        assert srv._load_dll(target) == b"SECOND-BINARY", (
+        assert srv.load_dll(target) == b"SECOND-BINARY", (
             "/asm and /bytes kept serving the binary the config edit replaced"
         )
 
