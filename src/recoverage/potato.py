@@ -49,9 +49,11 @@ from recoverage.server import (
     binary_stamp,
     coverage_for,
     db_target_ids,
+    fold_can_match_decimal,
     fold_can_match_hex,
     fold_needle,
     folded_columns_match,
+    folded_decimal_match,
     folded_row_columns,
     folded_va_columns,
     fs_text_bytes,
@@ -2082,8 +2084,11 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     # two address spellings are built and folded only when it can
     # (server.fold_can_match_hex).  That is the same guard the functions table
     # puts on its own two VA arms, and the common case, a name the reader
-    # typed, does not build a single address string.
+    # typed, does not build a single address string.  The bare decimal VA
+    # spelling carries the same guard (server.fold_can_match_decimal): the
+    # API list matches it, so the grid highlights what it returns.
     match_hex = fold_can_match_hex(needle)
+    match_decimal = fold_can_match_decimal(needle)
     # The three name columns and the two address spellings are folded ONCE for
     # the snapshot (server.folded_row_columns / folded_va_columns) rather than
     # re-folded for every row on every keystroke: the rows are frozen while the
@@ -2101,6 +2106,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             fn
             for fn in coverage.functions
             if folded_columns_match(folded_fns[id(fn)], needle)
+            or (match_decimal and folded_decimal_match(folded_fns[id(fn)], needle))
             or _va_matches_folded(
                 folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
             )
@@ -2117,6 +2123,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             gl
             for gl in coverage.globals
             if folded_columns_match(folded_gls[id(gl)], needle)
+            or (match_decimal and folded_decimal_match(folded_gls[id(gl)], needle))
             or _va_matches_folded(
                 folded_gl_vas[id(gl)] if folded_gl_vas is not None else None, needle, match_hex
             )
@@ -3004,12 +3011,14 @@ def _render_function_list(
         # the grid both returned it.
         needle = fold_needle(search_query)
         match_hex = fold_can_match_hex(needle)
+        match_decimal = fold_can_match_decimal(needle)
         folded = folded_row_columns(coverage, coverage.functions)
         folded_vas = folded_va_columns(coverage, coverage.functions) if match_hex else None
         rows = [
             fn
             for fn in rows
             if folded_columns_match(folded[id(fn)], needle)
+            or (match_decimal and folded_decimal_match(folded[id(fn)], needle))
             or _va_matches_folded(
                 folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
             )
