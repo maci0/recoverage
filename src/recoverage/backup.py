@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -120,6 +121,13 @@ DEFAULT_BACKUP_SUBDIR: Final = "backups"
 #: directory chronologically, so the newest backup is the last name in it.
 _ARCHIVE_PREFIX: Final = "coverage-"
 _ARCHIVE_SUFFIX: Final = ".tar"
+
+#: Bounds the concurrent, per-directory backup/restore operations in this process.
+#: ``write_backup`` reads the coverage documents and ``restore_backup`` replaces
+#: them; without coordination two in-process threads can interleave their reads
+#: or double-publish a restore, while ``_atomic_write`` already makes each
+#: individual file publish atomic.
+_BACKUP_LOCK = threading.Lock()
 
 #: How many stamped archives to keep in the backup directory.  Unbounded
 #: growth is the silent failure mode of a nightly job: the volume fills
@@ -686,6 +694,11 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     the default is beside it: an archive inside the tree it archives shares
     its failure domain.
     """
+    with _BACKUP_LOCK:
+        return _write_backup(db_dir, destination)
+
+
+def _write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     documents = _members(db_dir)
     members = documents + _referenced_files(db_dir, documents)
     if not documents:
@@ -1190,6 +1203,11 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     archive's set, so a target deleted from the source or added by a bad
     build does not survive. Non-coverage files are untouched.
     """
+    with _BACKUP_LOCK:
+        return _restore_backup(archive, db_dir, force=force)
+
+
+def _restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
     if db_dir.is_dir():
         for leftover in sorted(db_dir.glob(".restore-*")):
             if leftover.is_dir():
