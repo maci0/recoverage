@@ -203,16 +203,6 @@ def _backup_file_lock(db_dir: Path) -> Iterator[None]:
 #: daily backups; older archives are deleted after a successful new one.
 _RETENTION_COUNT: Final = 30
 
-#: Minimum verified archives that must survive before pruning.  Pruning is
-#: a deletion path: the oldest archive it deletes is the recovery point
-#: for a logical corruption discovered a month later ("restore the oldest
-#: archive that predates it").  Deleting against a directory with no
-#: verified recovery point turns recoverable corruption into total loss,
-#: so prune verifies the survivors before deleting any non-survivor.
-#: Best-effort like the deletion: a failed verify skips the prune
-#: instead of discarding the only recovery point the operator has.
-_PRUNE_VERIFY_MINIMUM: Final = 1  # one verified survivor wins; see _prune_old_archives
-
 #: The tightest cadence a backup schedule may declare before it must name an
 #: archive older than this as overdue. Independent of the coverage-staleness
 #: bound in recoverage.config (which judges the data): a dashboard can serve

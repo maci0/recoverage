@@ -483,26 +483,14 @@ _STATE_WORD = {state: word for state, word in LEGEND_ITEMS if word != "PROBLEM"}
 # ── HTML Helpers ────────────────────────────────────────────────────────────────────────
 
 
-def _section_heading(label: str, color: str, title: str) -> str:
+def _section_heading(title: str) -> str:
     """Render a section heading with the coverage-cell mark + title text.
 
     ``title`` is escaped here, not by the caller: the heading is built by
     string concatenation into element content, so a caller that forgot the
     escape would emit a DB-sourced section or file name as live markup.
     Callers pass the raw text.
-
-    The mark is the product's, not a generated tile: this heading used to
-    draw a hexagon holding an initials badge, colour the caller chose, which
-    is the initials-avatar placeholder every generated app puts where a logo
-    belongs — six headings, four of them the same ``01``, on a page whose tab
-    icon and topbar already carry the real mark. It draws
-    ``MARK_ON_DARK_SVG``, the nine cells this class already holds to one
-    drawing, rather than a fourth spelling of the same grid. ``label`` and
-    ``color`` stay in the signature because a pane heading may still need to
-    name which pane it is; they no longer draw a colour of their own, because
-    the brand has one accent and this page is dark in both OS themes.
     """
-    del label, color  # the mark carries the identity; a pane's own colour does not
     return (
         f'<table role="presentation" border="0" cellpadding="0" cellspacing="4"><tr>'
         f'<td valign="middle"><img src="{MARK_ON_DARK_SVG}"'
@@ -912,7 +900,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
 
     parts: list[str] = []
     parts.append(
-        _section_heading("{}", ACCENT_DATA, "Data Inspector")
+        _section_heading("Data Inspector")
         + f'<table width="100%" border="0" cellpadding="3" cellspacing="1"'
         f' bgcolor="{BORDER_COLOR}">'
     )
@@ -3564,7 +3552,7 @@ def _panel_empty_cell_bytes(
     raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
     if not raw_bytes:
         return
-    ctx["hex_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
+    ctx["hex_heading"] = _section_heading("Original Bytes")
     section_va = sec_data.get("va")
     address = (section_va if isinstance(section_va, int) else 0) + cell.get("start", 0)
     ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, address)
@@ -3771,7 +3759,7 @@ def _panel_function_detail(
     files = fn_data.get("files", [])
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
-        ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
+        ctx["c_heading"] = _section_heading(f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
     # Assembly (only meaningful for code cells)
@@ -3793,7 +3781,7 @@ def _panel_function_detail(
                 asm_va, min(asm_size, _MAX_ASM_READ), asm_file_offset, target
             )
             if asm_text:
-                ctx["asm_heading"] = _section_heading("ASM", ACCENT_ASM, "Assembly")
+                ctx["asm_heading"] = _section_heading("Assembly")
                 ctx["asm_html"] = _code_block_raw(
                     _highlight_asm(_wrap_text(asm_text, 55), target=target)
                 )
@@ -3804,7 +3792,7 @@ def _panel_function_detail(
     if fn_file_offset is not None and fn_size is not None:
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
-            ctx["bytes_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
+            ctx["bytes_heading"] = _section_heading("Original Bytes")
             fn_va = fn_data.get("va")
             ctx["bytes_html"] = _render_original_bytes(
                 raw_bytes, fn_va if isinstance(fn_va, int) else fn_file_offset

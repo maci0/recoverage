@@ -2276,17 +2276,17 @@ class TestSectionHeadingEscapesTitle:
     because one caller forgot."""
 
     def test_title_is_escaped(self) -> None:
-        html = _section_heading("C", "#fff", "<script>alert(1)</script>")
+        html = _section_heading("<script>alert(1)</script>")
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
     def test_quote_in_title_cannot_break_an_attribute(self) -> None:
-        html = _section_heading("C", "#fff", '" onmouseover="alert(1)')
+        html = _section_heading('" onmouseover="alert(1)')
         assert '" onmouseover="alert(1)' not in html
         assert "&quot;" in html
 
     def test_plain_title_is_unchanged(self) -> None:
-        assert "Original Bytes" in _section_heading("01", "#fff", "Original Bytes")
+        assert "Original Bytes" in _section_heading("Original Bytes")
 
 
 class TestSectionTabAccesskey:
@@ -4560,19 +4560,19 @@ class TestPageIdentityMatchesTheSpa:
         """
         from recoverage import potato
 
-        heading = potato._section_heading("01", potato.ACCENT_BYTES, "Original Bytes")
+        heading = potato._section_heading("Original Bytes")
         assert "polygon" not in heading, "a pane heading drew a generated hexagon again"
         assert "<text" not in heading, "a pane heading drew an initials badge again"
         assert "<img" in heading
 
-        for label, color, title in (
-            ("01", potato.ACCENT_BYTES, "Original Bytes"),
-            ("C", potato.ACCENT_C_SOURCE, "C Source (server.c)"),
-            ("ASM", potato.ACCENT_ASM, "Assembly"),
-            ("{}", potato.ACCENT_DATA, "Data Inspector"),
+        for title in (
+            "Original Bytes",
+            "C Source (server.c)",
+            "Assembly",
+            "Data Inspector",
         ):
             # The mark this page already draws, not a fourth spelling of it.
-            assert potato.MARK_ON_DARK_SVG in potato._section_heading(label, color, title)
+            assert potato.MARK_ON_DARK_SVG in potato._section_heading(title)
 
     def test_a_pane_heading_marks_itself_decoratively(self) -> None:
         """The mark beside a heading carries no name of its own.
@@ -4583,7 +4583,7 @@ class TestPageIdentityMatchesTheSpa:
         """
         from recoverage import potato
 
-        heading = potato._section_heading("01", potato.ACCENT_BYTES, "Original Bytes")
+        heading = potato._section_heading("Original Bytes")
         assert 'alt=""' in heading
         assert "Original Bytes" in heading
 
