@@ -15,6 +15,7 @@ project inputs.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -49,6 +50,13 @@ def _regen_lock_path(root: Path) -> Path:
     return root / ".recoverage-regen.lock"
 
 
+#: The Windows arm locks the first byte of the file, so it must exist before
+#: ``msvcrt.locking`` can lock it (the Microsoft CRT refuses to lock a byte
+#: past end-of-file). One byte is the whole lock; the file stays beside the
+#: config for the next rebuild, which reopens it for the same byte.
+_LOCK_BYTE = b"\x00"
+
+
 @contextmanager
 def _project_lock(root: Path) -> Iterator[None]:
     """Hold an exclusive, non-blocking lock for *root* across processes.
@@ -62,7 +70,7 @@ def _project_lock(root: Path) -> Iterator[None]:
     """
     root.mkdir(parents=True, exist_ok=True)
     lock_path = _regen_lock_path(root)
-    handle = lock_path.open("a+")
+    handle = lock_path.open("a+b")
     try:
         if os.name == "posix":
             import fcntl
@@ -80,12 +88,22 @@ def _project_lock(root: Path) -> Iterator[None]:
         else:
             import msvcrt
 
+            handle.seek(0)
             try:
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
             except OSError as exc:
-                raise RegenBusyError(
-                    f"another recoverage regen is running for {root}; wait for it to finish"
-                ) from exc
+                if exc.errno == errno.EINVAL:
+                    # A fresh lockfile carries no first byte yet, which
+                    # ``msvcrt.locking`` refuses; write it and lock the same
+                    # byte, so the file's length never changes the result.
+                    handle.write(_LOCK_BYTE)
+                    handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+                else:
+                    raise RegenBusyError(
+                        f"another recoverage regen is running for {root}; wait for it to finish"
+                    ) from exc
             try:
                 yield
             finally:

@@ -60,6 +60,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The sdist normalizer now clears the per-member PAX mtime headers, so two builds of one commit under the same `SOURCE_DATE_EPOCH` produce byte-identical archives.
 - A backup destination inside the coverage directory is refused, and a repeat write to an existing archive path is refused rather than overwriting the earlier backup.
 
+### Fixed
+
+- The cross-process regen lock no longer fails on a fresh lockfile on Windows: `msvcrt.locking` refuses to lock a byte past end-of-file, so the Windows arm writes the locked byte and retries, so a first `recoverage regen` locks like a kept one.
+
 ### Removed
 
 - `recoverage.status_colors.LIGHT`, the unused light-ground status palette, and the unused entries of `TERMINAL` (`reloc`, `proven`, `library`, `stub`) and `RICH_STYLES` (the `bold <color>` / `<color> bold` aliases); the statuses `TERMINAL` and `RICH_STYLES` still name are unchanged.

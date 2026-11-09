@@ -29,7 +29,7 @@ import pytest
 from recoverage import devserver
 from recoverage.cli import _open_and_reap
 from recoverage.devserver import _server_class_for
-from recoverage.regen import run_regen
+from recoverage.regen import _project_lock, run_regen
 
 #: The zombie scan below reads /proc/<pid>/stat, which only Linux provides.
 #: Probed, not keyed on os.name: macOS and the BSDs are posix and ship no
@@ -143,6 +143,41 @@ class TestLiveRefresh:
             run_regen(tmp_path)
         assert failure.value.exit_code == 2
         assert [p.name for p in tmp_path.iterdir() if p.name != ".recoverage-regen.lock"] == []
+
+
+class TestWindowsRegenLock:
+    def test_a_fresh_windows_lockfile_is_seeded_before_locking(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Microsoft CRT refuses to lock a byte past end-of-file, so an
+        empty lockfile raised EINVAL on Windows before the lock was taken.
+        The Windows arm writes the locked byte and retries on that error, so
+        a fresh lockfile locks like a kept one."""
+        import errno as _errno
+        import sys as _sys
+
+        import recoverage.regen as regen_module
+
+        calls: list[str] = []
+
+        class _FakeMsvcrt:
+            LK_NBLCK = 1
+            LK_UNLCK = 2
+
+            def locking(self, fd: int, mode: int, nbytes: int) -> None:
+                calls.append(f"lock:{mode}:{nbytes}")
+                if (
+                    mode == self.LK_NBLCK
+                    and len((tmp_path / ".recoverage-regen.lock").read_bytes()) == 0
+                ):
+                    raise OSError(_errno.EINVAL, "Invalid argument")
+
+        monkeypatch.setitem(_sys.modules, "msvcrt", _FakeMsvcrt())
+        monkeypatch.setattr(regen_module.os, "name", "nt")
+        with _project_lock(tmp_path):
+            pass
+        assert (tmp_path / ".recoverage-regen.lock").read_bytes() == b"\x00"
+        assert calls == ["lock:1:1", "lock:1:1", "lock:2:1"]
 
 
 class TestOpenAndReap:
