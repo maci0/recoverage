@@ -1643,7 +1643,7 @@ function MapArea({
         </p>
         {!portable && (
           <Button size="sm" disabled={regenBusy} onClick={onRegenerate}>
-            {regenBusy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
+            {regenBusy ? MSG.REGEN_IN_PROGRESS : <>Regenerate</>}
           </Button>
         )}
       </div>
