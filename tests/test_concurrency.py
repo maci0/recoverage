@@ -905,6 +905,7 @@ class TestIndexShellBuild:
         assert builds == 1
         assert ui.CACHED_INDEX_PAYLOAD == b"<html>shell</html>"
 
+
 class TestDataEntryPublication:
     """A /data entry must never be served half-built."""
 
@@ -928,16 +929,20 @@ class TestDataEntryPublication:
                         assert "raw" in entry, "entry published without raw"
                         for enc in list(entry.keys()):
                             assert entry[enc] is not None
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 with errors_lock:
                     errors.append(exc)
 
         def writer() -> None:
             try:
                 for i in range(50):
-                    api_mod._cache_data_insert(key, f"raw-{i}".encode(), "gzip", f"body-{i}".encode())
-                    api_mod._cache_data_insert(key, f"raw-{i}".encode(), "br", f"body-br-{i}".encode())
-            except BaseException as exc:  # noqa: BLE001
+                    api_mod._cache_data_insert(
+                        key, f"raw-{i}".encode(), "gzip", f"body-{i}".encode()
+                    )
+                    api_mod._cache_data_insert(
+                        key, f"raw-{i}".encode(), "br", f"body-br-{i}".encode()
+                    )
+            except BaseException as exc:
                 with errors_lock:
                     errors.append(exc)
 
@@ -982,7 +987,7 @@ class TestRegenLastAttemptLock:
                     with api_mod._REGEN_LAST_ATTEMPT_LOCK:
                         value = api_mod._regen_last_attempt
                     assert value is None or isinstance(value, float)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 with errors_lock:
                     errors.append(exc)
 

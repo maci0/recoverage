@@ -4902,7 +4902,8 @@ class TestRenderedPageNamesAndStates:
         functions = self._render(tmp_path, monkeypatch, "&view=functions")
         assert re.findall(r"<table(?![^>]*role=)[^>]*>", grid) == [
             (
-                '<table id="grid-container" tabindex="-1" border="1" cellpadding="8" cellspacing="0" '
+                '<table id="grid-container" tabindex="-1" border="1" '
+                'cellpadding="8" cellspacing="0" '
                 f'bordercolor="{BORDER_COLOR}" bgcolor="{BG_COLOR}" width="100%">'
             ),
         ]

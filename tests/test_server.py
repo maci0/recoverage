@@ -6421,7 +6421,7 @@ class TestSpaSearchIsACombobox:
         block = app[start : app.index("onGridSelect", start)]
         assert "if (selectedIndex === null)" in block
         assert "panes.fn === null" not in block
-        assert 'panel.scrollIntoView({ behavior:' in block
+        assert "panel.scrollIntoView({ behavior:" in block
         assert "}, [selectedIndex]);" in block
 
     def test_a_truncated_result_row_carries_the_full_name(self) -> None:
