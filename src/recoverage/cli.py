@@ -741,12 +741,12 @@ def _check_env_or_exit(*, json_output: bool = False) -> None:
 
 
 def coverage_source_or_exit(*, json_output: bool = False) -> Path:
-    """Resolve the coverage directory, exiting 2 when the project file is broken.
+    """Resolve the coverage source (project or snapshot directory), exiting 2 when broken.
 
-    A missing ``rebrew-project.toml`` still resolves to ``db/``.  A file that is
-    present but not valid TOML raises from the shared reader; exiting here keeps
-    that from becoming a traceback, and from silently reading a different
-    project's coverage.
+    A missing ``rebrew-project.toml`` still resolves to the project via the
+    shared reader.  A file that is present but not valid TOML raises from the
+    shared reader; exiting here keeps that from becoming a traceback, and
+    from silently reading a different project's coverage.
     """
     from rebrew.workspace import WorkspaceConfigError, WorkspaceNotFound
 
@@ -1687,8 +1687,8 @@ def serve(
     Every setting flag also reads a RECOVERAGE_* environment variable, used as
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
-    RECOVERAGE_LOG_LEVEL and RECOVERAGE_SNAPSHOTS (an explicit coverage directory,
-    instead of resolving rebrew-project.toml from the working directory, and
+    RECOVERAGE_LOG_LEVEL and RECOVERAGE_SNAPSHOTS (an explicit portable snapshot
+    directory, instead of resolving rebrew-project.toml from the working directory, and
     read by every command rather than by serve alone), plus
     RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
     transport rather than select a behavior and so have no flag.

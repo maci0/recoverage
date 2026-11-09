@@ -4290,7 +4290,7 @@ def _reject_broken_project_config() -> None:
     ``coverage_source`` raises ``WorkspaceConfigError`` for a present file that is
     not UTF-8 TOML; serving anyway would read ``db/``, which may be a
     different project's coverage than the one the file named. ``RECOVERAGE_SNAPSHOTS``
-    is applied first, so an explicit coverage directory still serves.
+    is applied first, so an explicit portable snapshot directory still serves.
     """
     try:
         coverage_source()
