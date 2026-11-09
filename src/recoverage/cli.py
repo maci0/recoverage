@@ -2369,9 +2369,11 @@ def check(
     """Check coverage against a threshold (CI gate).
 
     Exits 0 when every compared section meets the threshold, 1 when one does
-    not, and 2 for a bad --min-coverage or an unreadable coverage document.
-    A section the grid never records matches for is reported SKIP, unless
-    --section named it, which FAILs.
+    not or when nothing could be compared (no sections matched, or no tracked
+    sections), and 2 for a bad --min-coverage or an unreadable coverage
+    document. On exit 1 the verdict document is on stdout, with the
+    nothing-compared reason on stderr. A section the grid never records
+    matches for is reported SKIP, unless --section named it, which FAILs.
     """
     _use_utf8_stdout()
     json_output = _json_on(json_output)
@@ -2710,7 +2712,7 @@ def check_backup(
     directory: str = typer.Argument(
         ...,
         metavar="DIRECTORY",
-        help="Backup directory holding stamped archives (required)",
+        help="Backup directory holding stamped archives",
     ),
     max_age_hours: str = typer.Option(
         "25",

@@ -72,7 +72,8 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
     _command(
         "check",
         "Compare coverage with a threshold. Exit 1 prints the verdict document"
-        " and is the same failure code as a missing target, not a separate outcome.",
+        " on stdout and is the same code for a threshold miss and for"
+        " nothing compared.",
         "read_only",
     ),
     _command(
