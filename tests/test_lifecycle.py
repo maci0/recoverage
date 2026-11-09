@@ -146,6 +146,49 @@ class TestLiveRefresh:
 
 
 class TestOpenAndReap:
+    def test_the_timer_parks_once_not_per_slice(self, monkeypatch: Any) -> None:
+        """An idle timer is one wait, not a 50 ms poll loop."""
+        import recoverage.clock as clock
+
+        now = [1000.0]
+        waits: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            waits.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        monkeypatch.setattr(clock, "sleep", sleep)
+
+        fired: list[str] = []
+        timer = clock.Timer(30.0, lambda: fired.append("fired"))
+        timer.start()
+        timer.join(5)
+
+        assert not timer.is_alive(), "timer did not finish after its wait"
+        assert fired == ["fired"], fired
+        assert len(waits) == 1, f"parked {len(waits)} times: {waits}"
+
+    def test_a_cancelled_timer_never_fires(self, monkeypatch: Any) -> None:
+        """cancel before the deadline suppresses the callback."""
+        import recoverage.clock as clock
+
+        now = [1000.0]
+
+        def sleep(seconds: float) -> None:
+            now[0] += seconds
+
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        monkeypatch.setattr(clock, "sleep", sleep)
+
+        fired: list[str] = []
+        timer = clock.Timer(30.0, lambda: fired.append("fired"))
+        timer.cancel()
+        timer.start()
+        timer.join(5)
+
+        assert fired == [], fired
+
     def test_missing_opener_falls_back_to_webbrowser(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

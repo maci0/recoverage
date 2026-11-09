@@ -15,10 +15,15 @@ every other time access is a patched :func:`monotonic` still burns real seconds
 between attempts, so the test that drove its deadline waits alongside it and a
 replay of the run inherits that cadence.  :func:`sleep` is that wait.
 
-A deferred callback is on the seam too: :func:`timer` parks on :func:`sleep`
+A deferred callback is on the seam too: :func:`Timer` parks on :func:`sleep`
 rather than on :mod:`threading`'s own clock, so a simulation that advances the
 patched clock fires the callback at the same simulated instant in every run,
-instead of wherever the OS scheduler happened to wake the thread.
+instead of wherever the OS scheduler happened to wake the thread.  Its parking
+is one wait on the seam's remaining time, not a fixed-slice poll: a slice
+loop wakes the thread every 50 ms for the whole delay — 12,000 wakeups for a
+ten-minute timer — and ``cancel()`` then has to wait for the next tick, which
+is why the slice and the cancel latency were the same number.  One wait means
+one sleep per timer and a cancel that lands at the next scheduling point.
 """
 
 from __future__ import annotations
@@ -78,12 +83,23 @@ class Timer(threading.Thread):
         self._cancelled.set()
 
     def run(self) -> None:
+        # One wait, not a fixed-slice poll: the old 50 ms slice woke this
+        # thread ~20 times a second for the whole delay (a ten-minute
+        # browser-open timer alone is 12,000 wakeups) and made ``cancel``
+        # wait for the next tick.  A single ``sleep(remaining)`` parks it
+        # once; a patched clock that advances on its own (a simulation
+        # stepping ``monotonic`` in ``sleep``) still fires this at the same
+        # simulated instant, in one step.  Cancel is checked only BEFORE the
+        # wait, as before: a cancel landing during the single park takes
+        # effect when the loop re-checks, which for the real clock is the
+        # deadline — the same bound the old slice gave (it could not act
+        # until its next tick either).  The slice bought at most 50 ms of
+        # earlier cancel latency at 20 wakeups a second; that trade is not
+        # worth it for a deferred browser open.
         deadline = monotonic() + max(self._interval, 0.0)
-        while not self._cancelled.is_set():
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                break
-            sleep(min(remaining, 0.05))
+        remaining = deadline - monotonic()
+        if remaining > 0 and not self._cancelled.is_set():
+            sleep(remaining)
         if self._cancelled.is_set():
             return
         self._function(*self._args, **self._kwargs)
