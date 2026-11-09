@@ -1350,6 +1350,23 @@ def _unreadable_rows(rows: tuple[tuple[str, str, str], ...]) -> list[dict[str, s
     return [{"file": name, "target": target, "error": reason} for name, target, reason in rows]
 
 
+def section_key(name: str) -> str:
+    """The canonical identity of a section name, for every join between spellings.
+
+    A section name reaches this package from the coverage document (the PE
+    image's spelling, as rebrew stored it) and from a query string (the
+    reader's spelling, percent-decoded UTF-8).  Neither side is required to
+    agree on normalization form: a document built on macOS can carry the NFD
+    spelling of a name with combining marks while the SPA sends NFC, and
+    byte equality then answers 404 for a section that is there.  NFC is the
+    one composition both sides can be brought to without changing meaning;
+    case is deliberately not folded, because section names are case-sensitive
+    identifiers here (``.text`` and ``.TEXT`` are different rows), unlike
+    target ids which join across two sources that spell case freely.
+    """
+    return unicodedata.normalize("NFC", name)
+
+
 def target_key(target: str) -> str:
     """The canonical identity of a target id, for every join between two spellings.
 

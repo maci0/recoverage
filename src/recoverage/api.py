@@ -66,6 +66,7 @@ from recoverage.server import (
 lazy from recoverage import __version__, clock
 lazy from recoverage import config as _config
 lazy from recoverage import metrics as _metrics
+lazy from recoverage import reporting as _reporting
 lazy from recoverage._paths import coverage_source
 lazy from recoverage.disasm import (
     _target_width_bits,
@@ -926,7 +927,14 @@ def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]
     spells an absent value as ``""`` and the reader keeps it as ``None`` — a
     stored 0 is a real offset and is NOT the same answer.
     """
-    found = snap.sections.get(section)
+    found = next(
+        (
+            sec
+            for name, sec in snap.sections.items()
+            if _server.section_key(name) == _server.section_key(section)
+        ),
+        None,
+    )
     if found is None:
         raise _section_not_found(snap.target, section)
     sec = {
@@ -1960,7 +1968,13 @@ def _build_data_raw(
         for name, sec in snap.sections.items()
     }
 
-    if section_filter and section_filter not in data["sections"]:
+    # Byte equality missed the NFC/NFD twin (the query in one form, the
+    # document in the other), so the join is on section_key on both sides,
+    # the same NFC rule coverage_for applies to a target id.
+    wanted = _server.section_key(section_filter) if section_filter is not None else None
+    if section_filter is not None and not any(
+        _server.section_key(name) == wanted for name in data["sections"]
+    ):
         # Mirror /asm: an unknown section must 404, not return a silent
         # empty grid (which would also get memoized under that key).
         raise _section_not_found(target, section_filter)
@@ -1970,7 +1984,7 @@ def _build_data_raw(
     # dominated the cold /data build on an 80k-cell target, for identical bytes.
     cells_json: dict[str, str | None] = {}
     for name, sec in snap.sections.items():
-        if section_filter and name != section_filter:
+        if section_filter and _server.section_key(name) != wanted:
             # Siblings are omitted (absent key), which is the SPA's lazy-load
             # signal, not an empty grid.
             cells_json[name] = None
@@ -1999,7 +2013,7 @@ def _build_data_raw(
     data["section_cell_stats"] = {
         name: _server._bucket_row(sec)
         for name, sec in snap.sections.items()
-        if sec.cells and (not section_filter or name == section_filter)
+        if sec.cells and (not section_filter or _server.section_key(name) == wanted)
     }
 
     return _dumps_with_cells(data, cells_json)
@@ -2337,7 +2351,13 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
             },
         )
     search = _server.strip_ascii_whitespace(query_param("search")) or None
-    if search is not None and len(search) > _MAX_SEARCH_CHARS:
+    # The bound is in graphemes, not code points: len() counts a base plus its
+    # combining marks (or an emoji's ZWJ sequence) as several, which is also
+    # what truncate_text, the other surface's cap for the same term, counts.
+    # A term of 500 graphemes that is 501 code points (the last one joined by
+    # a combining mark) is inside the bound on both surfaces; counting code
+    # points here refuses what Potato Mode searches, and vice versa.
+    if search is not None and _reporting.truncate_text(search, _MAX_SEARCH_CHARS) != search:
         return _json_err(
             400,
             {

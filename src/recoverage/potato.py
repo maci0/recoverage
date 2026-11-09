@@ -74,6 +74,7 @@ from recoverage.server import (
     request_log_fields,
     resolve_targets,
     response,
+    section_key,
     set_auth_cookie,
     strip_ascii_whitespace,
     target_key,
@@ -1462,7 +1463,9 @@ def render_potato(parsed_url: ParseResult) -> str:
         errors="surrogateescape",
     )
     target = qs.get("target", [""])[0]
-    section = qs.get("section", [".text"])[0]
+    # ASCII trim only, like the API's ?section=: a section name is a
+    # document value, so a Unicode space at its edge is part of the name.
+    section = strip_ascii_whitespace(qs.get("section", [".text"])[0])
     filter_str = ",".join(qs.get("filter", [""]))
     active_filters = _parse_filters(filter_str)
     idx_str = qs.get("idx", [""])[0]
@@ -1866,7 +1869,16 @@ def _load_grid_cells(
             return cached[0], cached[1], cached[2]
 
     # An unknown or cell-less section has no cells and the grid renders empty.
-    found = coverage.sections.get(section)
+    # The join is on section_key (NFC) on both sides, like the API's
+    # section lookup: an NFD query against an NFC document must find it.
+    found = next(
+        (
+            sec
+            for name, sec in coverage.sections.items()
+            if section_key(name) == section_key(section)
+        ),
+        None,
+    )
     cells: list[dict[str, Any]] = (
         [_cell_json(cell) for cell in found.cells] if found is not None else []
     )
@@ -3186,7 +3198,7 @@ def _section_tab_data(
                 status=status_filter,
                 view=view or None,
             ),
-            s == section,
+            section_key(s) == section_key(section),
             _accesskey_attr(used_accesskeys, s[1:2] or s[:1]),
         )
         for s in sections
@@ -3294,8 +3306,10 @@ def _render_potato_inner(
         )
         return _no_data_page(target, error)
 
-    if section not in sections:
+    if section_key(section) not in {section_key(name) for name in sections}:
         section = next(iter(sections))
+    else:
+        section = next(name for name in sections if section_key(name) == section_key(section))
 
     sec_data: dict[str, Any] = sections.get(section, {})
 
