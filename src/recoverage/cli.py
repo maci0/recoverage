@@ -2230,9 +2230,10 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
     The flag is text for the same reason ``--port`` is: click's ``FLOAT`` runs
     the value through ``float()``, which accepts ``inf``, ``nan``, Unicode
     digits and the ``_`` separator, so a CI gate could be handed a threshold
-    that is not the number that was typed.  A leading sign is allowed (a
-    negative gate is a usage error the range check reports, not a parse error);
-    everything after it must be ASCII digits and one ASCII dot.
+    that is not the number that was typed.  A leading sign is allowed and a
+    number outside 0..100 is a usage error the range check reports (the
+    docstring's "between 0 and 100" arm), not a parse error; everything
+    after it must be ASCII digits and one ASCII dot.
     """
     text = value.strip()
     sign = ""
@@ -2254,14 +2255,19 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
             parsed = whole_int + frac_int / scale if frac else float(whole_int)
             if sign == "-":
                 parsed = -parsed
-            if not (0.0 <= parsed <= 100.0):
-                parsed = None
         except ValueError, OverflowError:
             parsed = None
     if parsed is None:
         _fail(
             f"Error: --min-coverage is not a number: {value!r}.",
             "--min-coverage is not a number",
+            2,
+            json_output,
+        )
+    if not (0.0 <= parsed <= 100.0):
+        _fail(
+            f"Error: --min-coverage must be between 0 and 100, got {parsed!r}.",
+            "--min-coverage must be between 0 and 100",
             2,
             json_output,
         )
@@ -2295,16 +2301,10 @@ def check(
     """
     _use_utf8_stdout()
     json_output = _json_on(json_output)
+    # _checked_min_coverage already refuses a value outside 0..100 as a
+    # usage error; the range check lives there so the parser and the
+    # check command cannot disagree about which message a bad gate gets.
     threshold = _checked_min_coverage(min_coverage, json_output)
-    if not 0.0 <= threshold <= 100.0:
-        # A flag value outside its own documented range is a usage error, the
-        # same exit 2 a non-numeric value gets from the parser.
-        _fail(
-            f"Error: --min-coverage must be between 0 and 100, got {threshold!r}.",
-            "--min-coverage must be between 0 and 100",
-            2,
-            json_output,
-        )
 
     with _open_targets(target, missing_exit_code=2, json_output=json_output) as (
         snapshots,
