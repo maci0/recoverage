@@ -31,11 +31,14 @@ this document does not fill them with a guess.
 
 `recoverage serve` binds loopback by default (`config.DEFAULT_BIND`,
 `src/recoverage/config.py`) and is unauthenticated unless a token is
-configured. A non-loopback bind is refused at startup without
-`--allow-remote` (`cli._remote_bind_gate`, `src/recoverage/cli.py`), and
-`--allow-remote` without `--token` is an acknowledgement, not a requirement:
-every host that can reach the port can read the served coverage and exposed
-project files. HTTP file routes serve configured target source roots and binaries
+configured. A non-loopback bind requires BOTH `--allow-remote` and a token
+(`--token` / `RECOVERAGE_TOKEN`): `cli._remote_bind_gate`
+(`src/recoverage/cli.py`) refuses at startup — exit 1, shared by `serve` and
+`recoverage config` — without the acknowledgement, and without the token even
+with it, so a remote `serve` cannot publish sources and binaries
+unauthenticated. The token has no length floor on either bind (the ops worker's
+32-byte floor has no dashboard equivalent), and a WSGI host mounting
+`recoverage.webapp.app` bypasses this gate entirely (see below). HTTP file routes serve configured target source roots and binaries
 only within the project, plus the fixed `<project>/src` and `<project>/original`
 trees; binary slices use configured contained binary paths, and Potato source
 reads use a contained `sourceRoot`. Portable exports alone do not include those
