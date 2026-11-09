@@ -38,7 +38,8 @@ configured. A non-loopback bind requires BOTH `--allow-remote` and a token
 with it, so a remote `serve` cannot publish sources and binaries
 unauthenticated. The token has no length floor on either bind (the ops worker's
 32-byte floor has no dashboard equivalent), and a WSGI host mounting
-`recoverage.webapp.app` bypasses this gate entirely (see below). HTTP file routes serve configured target source roots and binaries
+`recoverage.webapp.app` bypasses this gate entirely (see below). A
+loopback bind remains unauthenticated unless a token is configured. HTTP file routes serve configured target source roots and binaries
 only within the project, plus the fixed `<project>/src` and `<project>/original`
 trees; binary slices use configured contained binary paths, and Potato source
 reads use a contained `sourceRoot`. Portable exports alone do not include those
