@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import itertools
 import logging
+import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -2930,6 +2931,11 @@ def function_sort_key(field: str) -> Callable[[Function], Any]:
 # SQL: the documents are already parsed, so a `json_object(...)` shape would be
 # a string built to be parsed back.
 
+#: A lone surrogate (U+D800..U+DFFF), the one thing `_plain` rewrites in a
+#: string.  Compiled once at module scope so the per-cell scan in
+#: `_cell_json`/`cells_json` does not recompile it per cell.
+_SURROGATE_RE: Final = re.compile(r"[\ud800-\udfff]")
+
 
 def _plain(value: Any) -> Any:
     """*value* as plain JSON-serializable containers.
@@ -2954,7 +2960,7 @@ def _plain(value: Any) -> Any:
     every other path survived; sanitizing here makes the two agree.
     """
     if isinstance(value, str):
-        return "".join("\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value)
+        return _SURROGATE_RE.sub("\ufffd", value)
     if isinstance(value, Mapping):
         return {_plain_key(key): _plain(item) for key, item in value.items()}
     if isinstance(value, tuple | list):

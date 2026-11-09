@@ -191,12 +191,25 @@ export function reading(measurement: number, locale?: string | ReadonlyArray<str
  * what the test drives. A category the caller supplied no form for falls back
  * to `other` rather than dropping the noun, because a missing form is a
  * missing translation and a missing noun is a broken sentence. */
+const _pluralRulesCache = new Map<string, Intl.PluralRules>();
+
+function _pluralRules(locale?: string | ReadonlyArray<string>): Intl.PluralRules {
+  const locales = locale === undefined ? undefined : Array.isArray(locale) ? [...locale] : [locale];
+  const key = locales === undefined ? "" : locales.join(",");
+  let rules = _pluralRulesCache.get(key);
+  if (rules === undefined) {
+    rules = new Intl.PluralRules(locales, { type: "cardinal" });
+    _pluralRulesCache.set(key, rules);
+  }
+  return rules;
+}
+
 export function plural(
   amount: number,
   forms: Readonly<Partial<Record<Intl.LDMLPluralRule, string>>>,
   locale?: string | ReadonlyArray<string>,
 ): string {
-  const category = new Intl.PluralRules(locale, { type: "cardinal" }).select(amount);
+  const category = _pluralRules(locale).select(amount);
   return forms[category] ?? forms.other ?? "";
 }
 
