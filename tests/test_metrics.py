@@ -1019,12 +1019,14 @@ class TestProcessGrowthIsBounded:
         # beside it, both keyed on the client's own key.
         "recoverage.api._REGEN_COMPLETED_KEYS": ("_REGEN_LEDGER_MAX_ENTRIES", "count"),
         "recoverage.api._REGEN_ACTIVE_KEYS": ("_REGEN_LEDGER_MAX_ENTRIES", "count"),
-        # The /data single-flight claim. A build in flight is not a row to
-        # count — dropping a LIVE leader's claim on a size would run a second
-        # build beside it — so a claim is bounded by the instant past which a
-        # prune reclaims it, and a killed owner's claim costs one slot until
-        # then.
-        "recoverage.api._DATA_CACHE_BUILDING": ("_DATA_CACHE_BUILD_WAIT_SECONDS", "seconds"),
+        # The /data single-flight claim. A live leader's claim is never
+        # dropped on size — that would run a second build beside it — so the
+        # size cap is checked only at registration: a claimant that finds the
+        # map full builds without a claim (the accepted duplicate cost), and
+        # `_prune_stale_claims` reclaims a killed owner's claim on its
+        # deadline.  The cap bounds a burst of DISTINCT keys after a rebuild
+        # between registration and the deadline.
+        "recoverage.api._DATA_CACHE_BUILDING": ("_DATA_CACHE_BUILDING_MAX", "count"),
         # One row per CONNECTED client, capped by the refusal at the transport
         # rather than by an eviction.
         "recoverage.api._SSE_CLIENTS": ("_SSE_MAX_CLIENTS", "peers"),

@@ -356,6 +356,15 @@ _DATA_CACHE_MAX = 8
 # the claim instead of leaving the dead owner registered.
 _DataClaim = tuple[threading.Event, float]
 _DATA_CACHE_BUILDING: dict[_DataKey, _DataClaim] = {}
+#: Hard cap on claims registered at once.  A claim is one in-flight build,
+#: so the count is bounded by the connection cap in practice, but the cap
+#: keeps a burst of DISTINCT keys (many targets/sections after a rebuild)
+#: from growing the map without limit between the moment a claim is taken
+#: and the moment its 30 s deadline lets _prune_stale_claims reclaim it.
+#: A claimant that finds the map full builds without a claim (the accepted
+#: duplicate cost) rather than dropping a live leader's claim on size, which
+#: would run a second build beside it.
+_DATA_CACHE_BUILDING_MAX = 64
 #: How long a follower waits on the leader's build Event, and how long a claim
 #: stays answerable after it was taken.  The leader's finally always sets the
 #: Event and releases the claim, so this only bounds the case where it does not
@@ -447,6 +456,8 @@ def _data_cache_checkout(
         _metrics.CACHES.miss(_metrics.DATA_PAYLOAD_CACHE)
         claim = _DATA_CACHE_BUILDING.get(key)
         if claim is None:
+            if len(_DATA_CACHE_BUILDING) >= _DATA_CACHE_BUILDING_MAX:
+                return None, None
             event = threading.Event()
             _DATA_CACHE_BUILDING[key] = (event, now + _DATA_CACHE_BUILD_WAIT_SECONDS)
             return None, event
