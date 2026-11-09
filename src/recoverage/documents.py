@@ -34,11 +34,11 @@ equal to the one ``rebrew.coverage_toml.load_coverage_from`` builds.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
-lazy import contextlib
 lazy import gc
 lazy import hashlib
 lazy import io
@@ -47,7 +47,7 @@ lazy import os
 lazy import tempfile
 lazy import tomllib
 lazy import unicodedata
-lazy from collections.abc import Mapping
+lazy from collections.abc import Iterator, Mapping
 lazy from typing import Any, Final
 
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, snapshot_from_document
@@ -138,6 +138,26 @@ _WRITE_WARNED_LOCK = threading.Lock()
 
 #: Whether this process has already warned about a cache write failure.
 _WRITE_WARNED = False
+
+
+@contextlib.contextmanager
+def _paused_gc() -> Iterator[None]:
+    """Disable the cyclic collector, restoring the prior state on exit.
+
+    The pause restores whether the collector was enabled on entry, so a
+    caller that arrived with it disabled keeps it disabled, and an
+    exception during the rebuild cannot leave it off for the rest of the
+    process.  Caller holds :data:`_LOAD_LOCK`; the pause is process-wide,
+    so two overlapping rebuilds must not each restore their own prior
+    state.
+    """
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 def _stat_key(db_dir: Path) -> tuple[_StatKey, ...]:
@@ -525,13 +545,12 @@ def _current(db_dir: Path) -> _State:
         # on 116k cells).  Under the lock because gc.disable is process-wide,
         # and two overlapping loads restoring each other's state could leave
         # it off.
-        was_enabled = gc.isenabled()
-        gc.disable()
-        try:
-            return _rebuild(db_dir, key)
-        finally:
-            if was_enabled:
-                gc.enable()
+        state = _STATE
+        fresh_key = _stat_key(db_dir)
+        if state is not None and state[0] == db_dir and state[1] == fresh_key:
+            return state
+        with _paused_gc():
+            return _rebuild(db_dir, fresh_key)
 
 
 def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
