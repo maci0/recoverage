@@ -6424,6 +6424,42 @@ class TestSpaSearchIsACombobox:
         effect = results[start : start + 300]
         assert "activeIndex" in effect
 
+    def test_a_selection_brings_the_panel_into_view_without_a_parent_function(self) -> None:
+        """Below `lg` the panel sits under a lattice as tall as the page, so a
+        tap on a phone selected a block whose detail was thousands of pixels
+        below the fold — the tap looked like it did nothing. The scroll was
+        gated on `panes.fn`, the block's parent function, so a block contained
+        by no function (a data block, or a byte range the symbol inventory does
+        not cover) selected and scrolled nothing. The gate is the selection."""
+        app = _web("App.tsx")
+        start = app.index("Where a selection on a narrow viewport leaves the reader.")
+        block = app[start : app.index("onGridSelect", start)]
+        assert "if (selectedIndex === null)" in block
+        assert "panes.fn === null" not in block
+        assert 'panel.scrollIntoView({ behavior:' in block
+        assert "}, [selectedIndex]);" in block
+
+    def test_a_truncated_result_row_carries_the_full_name(self) -> None:
+        """A row's name is `truncate`d, and below `sm` the symbol column is
+        hidden — but a long undecorated name truncated to its first letters
+        just as surely. `title` is how the panel already answers the same for
+        a truncated digest, so each truncated span carries the full value."""
+        results = _web("components/SearchResults.tsx")
+        assert "title={result.name}" in results
+        assert "title={result.symbol}" in results
+
+    def test_a_failed_cell_read_is_an_alert_not_a_busy_region(self) -> None:
+        """The failure arm above a map whose cells failed to load used to spell
+        `aria-busy="true"`: the region said it was replacing itself, while the
+        failure cards above and below it — same shape, same retry — carried
+        `role="alert"`. The failure says so, or a screen reader hears a load
+        that never lands."""
+        app = _web("App.tsx")
+        start = app.index("Could not load the")
+        block = app[max(0, start - 400) : start + 400]
+        assert 'role="alert"' in block
+        assert 'aria-busy="true' not in block
+
     def test_the_active_row_is_worn_not_merely_announced(self) -> None:
         """The option holds no focus, so the ring is the only cue a sighted
         reader has that the arrows moved. A fill could not be that cue:

@@ -111,15 +111,25 @@ export function SearchResults(props: SearchResultsProps): ComponentChildren {
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => onPick(result)}
             >
-              <span className="min-w-0 grow truncate" dir="auto">
+              <span
+                className="min-w-0 grow truncate"
+                dir="auto"
+                title={result.name}
+              >
                 {isolate(result.name)}
               </span>
               {/* Below `sm` the symbol column truncated the name to a few
                   letters, and the symbol is usually the name with a linker
                   decoration, so a phone row keeps the name; the panel shows
-                  the symbol once the row is picked. */}
+                  the symbol once the row is picked. `title` carries the full
+                  name on either width, for the same reason: a long undecorated
+                  name truncates to its first letters just as surely. */}
               {result.symbol === null || result.symbol === result.name ? null : (
-                <span className="min-w-0 shrink truncate text-text-muted max-sm:hidden" dir="auto">
+                <span
+                  className="min-w-0 shrink truncate text-text-muted max-sm:hidden"
+                  dir="auto"
+                  title={result.symbol}
+                >
                   {result.symbol}
                 </span>
               )}

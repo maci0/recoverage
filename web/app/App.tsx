@@ -896,9 +896,14 @@ export function App() {
    * detail was thousands of pixels below the fold: the tap looked like it did
    * nothing at all. The panel is brought into view only when it is not already
    * on screen, so the arrow-key walk (which scrolls the map on every move) is
-   * untouched, and the scroll is instant under `prefers-reduced-motion`. */
+   * untouched, and the scroll is instant under `prefers-reduced-motion`.
+   *
+   * The gate is the selection itself, not the parent function: a block that no
+   * function contains — a data block, or a section whose symbol inventory does
+   * not cover every byte — selects exactly as a matched one does, and tying
+   * the scroll to `panes.fn` left every such tap scrolling nothing. */
   useEffect(() => {
-    if (selectedIndex === null || panes.fn === null) {
+    if (selectedIndex === null) {
       return;
     }
     const panel = document.querySelector<HTMLElement>("#panel");
@@ -911,7 +916,7 @@ export function App() {
     }
     const smooth = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== true;
     panel.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
-  }, [selectedIndex, panes.fn]);
+  }, [selectedIndex]);
 
   // Clicking the block already open closes it, which is the one way back from
   // the detail panel to the whole map. Without it the only ways out were a
@@ -1675,7 +1680,7 @@ function MapArea({
     return (
       <div
         className="flex flex-col items-start gap-3 rounded-action border border-border bg-fail-soft p-4 text-data text-st-fail"
-        aria-busy="true"
+        role="alert"
       >
         <p className="m-0">
           Could not load the {isolate(active.name)} map: {coverage.cellError.detail}
