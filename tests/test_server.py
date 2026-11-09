@@ -3115,13 +3115,14 @@ class TestBinaryIsPartOfTheCacheKey:
         path = self._binary(tmp_path, monkeypatch, key)
         path.write_bytes(b"MZ-bytes")
         reads: list[Path] = []
-        real_read = Path.read_bytes
+        real_open = Path.open
 
-        def counting(self: Path) -> bytes:
-            reads.append(self)
-            return real_read(self)
+        def counting(self: Path, *args: Any, **kwargs: Any) -> Any:
+            if self == path:
+                reads.append(self)
+            return real_open(self, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "read_bytes", counting)
+        monkeypatch.setattr(Path, "open", counting)
         try:
             assert srv._load_dll(key) == srv._load_dll(key) == b"MZ-bytes"
         finally:

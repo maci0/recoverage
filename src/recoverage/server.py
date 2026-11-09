@@ -1812,6 +1812,11 @@ def _binary_stamp_at(path: Path | None) -> tuple[int, int, int, int] | None:
 
 
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
+#: Chunk size for the bounded binary read in :func:`_load_dll`: the total
+#: read is capped at ``_MAX_DLL_SIZE + 1``, so the reader never materialises
+#: more than one byte past the cap, whatever the file does between the stat
+#: and the read.
+_DLL_READ_CHUNK = 1024 * 1024
 # Bound DLL_DATA entries: only configured targets are valid keys
 # (resolve_targets), so entries for unknown targets are dropped, and the
 # memo never outgrows the configured-target set it derives from.
@@ -2382,7 +2387,22 @@ def _load_dll(target: str) -> bytes | None:
                 file_size >> 20,
                 _MAX_DLL_SIZE >> 20,
             )
-        data = dll_path.read_bytes()
+        # The stat above bounds nothing the read can return — the file may
+        # be replaced or grown between the two — so the read itself is
+        # bounded, through the descriptor the size check measured.  A
+        # swapped path is read at the new path's current size only insofar
+        # as the read's own cap clamps it; without the cap read_bytes()
+        # would materialise the whole grown file in memory.
+        with dll_path.open("rb") as fh:
+            chunks: list[bytes] = []
+            remaining = _MAX_DLL_SIZE + 1
+            while remaining > 0:
+                chunk = fh.read(min(_DLL_READ_CHUNK, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        data = b"".join(chunks)
         if len(data) > _MAX_DLL_SIZE:
             return _cache_dll_unavailable(
                 target,
@@ -4493,12 +4513,10 @@ def _security_headers() -> None:
         "fullscreen=(), web-share=(), xr-spatial-tracking=()",
     )
     # Cross-origin isolation headers: COOP severs the browsing context from
-    # any opener, COEP blocks cross-origin subresources without CORP, and
-    # CORP keeps the dashboard's own assets from being embedded elsewhere.
-    # They do not break the SPA: no popups, no cross-origin embeds, no
-    # SharedArrayBuffer dependency.
+    # any opener, and CORP keeps the dashboard's own assets from being
+    # embedded elsewhere. They do not break the SPA: no popups, no
+    # cross-origin embeds.
     response.set_header("Cross-Origin-Opener-Policy", "same-origin")
-    response.set_header("Cross-Origin-Embedder-Policy", "require-corp")
     response.set_header("Cross-Origin-Resource-Policy", "same-origin")
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.

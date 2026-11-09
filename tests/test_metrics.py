@@ -1010,10 +1010,9 @@ class TestProcessGrowthIsBounded:
         # reading the same derived set instead of re-deriving it per request.
         "recoverage.server._SNAPSHOT_INDEX": ("_SNAPSHOT_INDEX_MAX", "count"),
         "recoverage.server._OPENED_FILE_ETAGS": ("_OPENED_FILE_ETAG_MAX", "count"),
-        "recoverage.server._FUNCTION_STORE_CACHE": (
-            "_FUNCTION_STORE_CACHE_MAX",
-            "count",
-        ),
+        # The resolved `rebrew-functions.toml` directory per (project,
+        # config stat, target), capped by eviction.
+        "recoverage.server._FUNCTION_STORE_CACHE": ("_FUNCTION_STORE_CACHE_MAX", "count"),
         # The route module's cache invalidators, registered once per route
         # module by the composition root at import. No bound constant: the
         # list is closed by the import graph, which `tests/test_import_graph.py`
