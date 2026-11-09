@@ -9,10 +9,10 @@ documented in [REFERENCE.md](REFERENCE.md) and recorded in the
 ## New API Endpoints
 
 ### `GET /api/targets/<target>/diff/<va>`
-Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew diff` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
+Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew diff` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list (under the `## Future Ideas / TODOs` section).
 
 ### `GET /api/targets/<target>/xrefs/<va>`
-Cross-reference lookup: which functions call this VA, and which VAs this function calls. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
+Cross-reference lookup: which functions call this VA, and which VAs this function calls. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list (under the `## Future Ideas / TODOs` section).
 
 ### `POST /api/targets/<target>/functions/<va>/annotate`
 Write annotations back from the dashboard. Accept a JSON body with annotation key-value pairs (`note`, `blocker`, `STATUS`, etc.) and write them through Rebrew's metadata owners; function documentation lives in dedicated Rebrew metadata, not in source comments. Enables in-browser editing of annotations without leaving the dashboard.
