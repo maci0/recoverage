@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.10.0] - 2026-11-09
+
 ### Added
 
 - `recoverage ops serve --otlp-endpoint` (or `RECOVERAGE_OTLP_ENDPOINT`, an
@@ -50,11 +52,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reply on stdout, and a target named by its binary's SHA-256. `--workspace`
   or `RECOVERAGE_OPS_WORKSPACE` confines the request `project_dir`.
 
-### Breaking
-
-- `POST /api/targets/<target>/functions` batch lookup now answers 400 when the JSON body carries any top-level key other than `vas` (`Body has unknown fields` with detail `unknown fields: ...; expected only vas`); previously such keys were silently ignored. Callers sending extra fields must remove them.
-- A non-loopback bind with `--allow-remote` now requires `--token` (or `RECOVERAGE_TOKEN`) and exits 1 without one; previously `--allow-remote` alone started an unauthenticated remote server.
-
 ### Changed
 
 - Retention prune now verifies the retained edge before deleting any
@@ -74,6 +71,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `recoverage.status_colors.LIGHT`, the unused light-ground status palette, and the unused entries of `TERMINAL` (`reloc`, `proven`, `library`, `stub`) and `RICH_STYLES` (the `bold <color>` / `<color> bold` aliases); the statuses `TERMINAL` and `RICH_STYLES` still name are unchanged.
 - `recoverage.server::parse_ascii_int` and `recoverage.server::strip_sign`, moved to `recoverage.config` (same names, same behaviour); import from `recoverage.config`. `recoverage.server::coverage_pct`, `recoverage.server::pct_1dp` and `recoverage.server::truncate_text` moved the same way to `recoverage.reporting`; import from `recoverage.reporting`.
+
+### Security
+
+- A non-loopback bind with `--allow-remote` now requires `--token` (or `RECOVERAGE_TOKEN`) and exits 1 without one; previously `--allow-remote` alone started an unauthenticated remote server.
+- `POST /api/targets/<target>/functions` batch lookup now answers 400 when the JSON body carries any top-level key other than `vas` (`Body has unknown fields` with detail `unknown fields: ...; expected only vas`); previously such keys were silently ignored. Callers sending extra fields must remove them.
 
 ## [8.9.0] - 2026-11-04
 
