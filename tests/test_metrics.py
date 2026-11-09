@@ -409,6 +409,21 @@ class TestCacheCounters:
         row = _health()["caches"][metrics.STATS_CACHE]
         assert row == {"hits": 1, "misses": 1}, row
 
+    def test_an_unregistered_cache_name_is_never_admitted(self) -> None:
+        """`_by_cache` is keyed by a closed vocabulary, not by caller data.
+
+        Every name the request path counts is one of ``metrics.CACHE_NAMES``;
+        a caller passing any other string is either passing request data or a
+        typo, and admitting it grew the map for the life of the process.
+        """
+        metrics.CACHES.reset()
+        metrics.CACHES.hit("data_payload")
+        metrics.CACHES.hit("invented-cache-name")
+        metrics.CACHES.miss("also-invented")
+        snap = metrics.CACHES.snapshot()
+        assert snap == {"data_payload": {"hits": 1, "misses": 0}}, snap
+        assert set(metrics.CACHE_NAMES) >= set(snap)
+
 
 class TestAuthCounters:
     """The ``auth`` block: the token gate's attempts and its live lockouts."""

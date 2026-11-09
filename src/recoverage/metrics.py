@@ -479,7 +479,11 @@ def regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, 
 
 
 #: The names the cache counters are keyed by.  Bounded by the call sites, never
-#: by request data, so this map cannot grow the way a route label can.
+#: by request data, so this map cannot grow the way a route label can.  The
+#: full vocabulary is :data:`CACHE_NAMES` and :meth:`CacheStats._count`
+#: admits only those names: an unregistered name is never admitted to
+#: ``_by_cache``.  The bound is that closed set, not an eviction; a caller
+#: cannot grow the map by inventing a name.
 DATA_PAYLOAD_CACHE: Final = "data_payload"
 STATS_CACHE: Final = "stats"
 REVALIDATION_CACHE: Final = "revalidate"
@@ -489,6 +493,17 @@ DOCUMENT_CACHE: Final = "document"
 #: The per-slice disassembly memo (`disasm._disassemble_loaded`): a hit is a
 #: slice the memo already held, a miss a fresh capstone decode.
 DISASSEMBLY_CACHE: Final = "disassembly"
+
+#: Every cache name :class:`CacheStats` counts, as a closed vocabulary.
+CACHE_NAMES: Final = frozenset(
+    {
+        DATA_PAYLOAD_CACHE,
+        STATS_CACHE,
+        REVALIDATION_CACHE,
+        DOCUMENT_CACHE,
+        DISASSEMBLY_CACHE,
+    }
+)
 
 
 class CacheStats:
@@ -518,6 +533,11 @@ class CacheStats:
         self._count(name, "miss")
 
     def _count(self, name: str, outcome: Literal["hit", "miss"]) -> None:
+        if name not in CACHE_NAMES:
+            # Never admitted: an unregistered name would grow ``_by_cache``
+            # for the life of the process, which is the growth the closed
+            # vocabulary above exists to stop.
+            return
         with self._lock:
             row = self._by_cache.get(name)
             if row is None:
