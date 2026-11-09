@@ -6738,6 +6738,39 @@ class TestClockSeam:
         assert status.startswith("200"), status
         assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
 
+    def test_wait_event_ends_on_the_patched_clock_not_real_time(
+        self, monkeypatch: Any
+    ) -> None:
+        """A bounded wait ends when the CLOCK passes its deadline.
+
+        ``wait_event`` is the seam ``api._await_build_event`` parks on; a
+        follower whose wait took real seconds would pass every patched-clock
+        test above while a killed leader's claim was reclaimed only after
+        real time.  A clock that jumps past the deadline on every read ends
+        the wait in milliseconds with the event never set (returns False),
+        and a set event wakes at once even when the clock never advances.
+        """
+        now = [1_000.0]
+
+        def jumping() -> float:
+            value = now[0]
+            now[0] += 100.0
+            return value
+
+        monkeypatch.setattr(clock, "monotonic", jumping)
+        unset = threading.Event()
+        assert clock.wait_event(unset, 1_000.0 + 50.0) is False
+        assert not unset.is_set()
+
+        monkeypatch.setattr(clock, "monotonic", lambda: 1_000.0)
+        preset = threading.Event()
+        preset.set()
+        assert clock.wait_event(preset, 1_000.0 + 50.0) is True
+
+        # An already-expired deadline returns the event's own state at once.
+        assert clock.wait_event(unset, 999.0) is False
+        assert clock.wait_event(preset, 999.0) is True
+
 
 class TestOriginIsThisDashboard:
     """The privileged-regen origin gate is a same-origin test, not a
