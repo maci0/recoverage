@@ -44,8 +44,8 @@ Review the following:
    - Every mitigation present in the code for a ranked risk appears in its row.
      A security control added since the last pass with no row is a missing
      row, not a missing control. Search for the control's header, constant,
-     or guard name over the Python sources (for example `rg -l 'Sec-Fetch-Site'`
-     or the route decorators in `src/recoverage/api.py`); the search proves a
+     or guard name over the Python sources (for example `rg -l 'Sec-Fetch-Site'` in
+     `src/recoverage/api.py`); the search proves a
      control exists, not where, so re-prove the file on each pass rather than
      trusting any example above.
    - The ranking is a judgement, so only flag a rank that is falsified: a risk
@@ -64,9 +64,10 @@ Review the following:
      mechanism the code actually has.
    - Every hard number in prose (compressed shell size, headroom bytes,
      congestion window, preload bytes, pagination defaults, cache sizes) must
-     match the constant or measured value. `ui._check_payload_budget` is the
-     authority for the budget: call it or read the named constant
-     rather than re-deriving a size by hand.
+     match the constant or measured value. `ui._TCP_CWND_BUDGET` and its
+     docstring in `src/recoverage/ui.py` are the authority for the shell
+     budget: call the helper (`_check_payload_budget`) or read the named
+     constant rather than re-deriving a size by hand.
 
 4. Cross-document contradictions
    - The same fact stated in two documents with two values is a finding, and the
