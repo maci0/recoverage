@@ -169,7 +169,7 @@ def _build_index_payload() -> bytes:
 #: congestion window) while the frontend was a ~14 KB script that painted the
 #: map itself and deferred the rest.  The current frontend is one Preact +
 #: Tailwind bundle: measured ~44 KB brotli for the inlined shell and stylesheet
-#: (44,036 B on the committed bundle; `make payload-budget` re-derives it),
+#: (44,310 B on the committed bundle; `make payload-budget` re-derives it),
 #: which no longer fits a round trip's initial window and is the price the port
 #: was accepted at.  Preact rather than React is most of why it is that small.
 #: The number below is the checked ceiling rather than the measurement, so a
