@@ -44,7 +44,6 @@ from recoverage.server import (
     _json_err,
     _json_ok,
     _json_ok_precompressed,
-    load_dll,
     _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
@@ -55,6 +54,7 @@ from recoverage.server import (
     config_fingerprint,
     fold_match_folded,
     header_present,
+    load_dll,
     origin_is_this_dashboard,
     path_param,
     query_param,
@@ -1019,7 +1019,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     # test_broadcast_frame_encodes_with_a_coverage_dir_name_outside_utf8, so
     # the day an explicit ensure_ascii=False reaches this call the ASCII
     # assertion fails here instead of a rebuild raising out of the broadcast.
-    frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode("utf-8")
+    frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
     with _SSE_CLIENTS_LOCK:
         clients = list(_SSE_CLIENTS.items())
     for client, peer in clients:

@@ -17,7 +17,7 @@ lazy from typing import Any
 
 from recoverage import metrics
 from recoverage.config import RecoError
-from recoverage.server import load_dll, binary_stamp, hex_addr
+from recoverage.server import binary_stamp, hex_addr, load_dll
 
 _log = logging.getLogger("recoverage")
 

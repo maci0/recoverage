@@ -186,7 +186,9 @@ def _bounded(text: str) -> str:
 
 def error_body(code: str, detail: str, status: int) -> bytes:
     """The refusal reply the transport writes, mirroring the HTTP error envelope."""
-    return json.dumps({"error": code, "code": code, "detail": detail, "status": status}).encode("utf-8")
+    return json.dumps({"error": code, "code": code, "detail": detail, "status": status}).encode(
+        "utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------
