@@ -37,7 +37,7 @@ that import and the resulting live view have been checked.
 ## Recovery procedures
 
 For a live project, restore damaged inputs from a matching project backup and run
-`recoverage check --json`. Input changes refresh the view automatically;
+`recoverage check --min-coverage 0 --json`. Input changes refresh the view automatically;
 `recoverage regen` requests an immediate read. A missing or corrupt target is
 reported explicitly, while healthy targets remain available. Never restore a
 portable export over a canonical metadata file.
@@ -47,7 +47,7 @@ For explicit offline snapshots, select their directory for each operation:
 ```bash
 RECOVERAGE_SNAPSHOTS=/srv/snapshots recoverage backup --to /srv/backups/nightly.tar
 RECOVERAGE_SNAPSHOTS=/srv/restored recoverage restore /srv/backups/nightly.tar
-RECOVERAGE_SNAPSHOTS=/srv/restored recoverage check --json
+RECOVERAGE_SNAPSHOTS=/srv/restored recoverage check --min-coverage 0 --json
 ```
 
 Restore validates every member before publishing files. Existing differing
@@ -130,22 +130,28 @@ first that fails.
 
 Run a drill against a fresh directory, leaving the live source untouched.
 The drill proves the archive restores, not merely that the file exists:
-`verify`/`verify-backups` read it back, `restore` stages it, `check` serves it.
+`restore-drill` verifies the archive in full, restores it into an empty
+drill directory, and reads the restored set back through the coverage
+loader the dashboard serves. It never reads or writes
+`RECOVERAGE_SNAPSHOTS`, so it cannot point at the live directory by
+mistake, and it refuses a drill directory that already holds files, so
+a drill dirtied by a previous run reads as a hygiene error instead of
+silently re-proving a stale set.
 
 ```bash
-drill=$(mktemp -d)
-# 1. Re-prove the archive before restoring it.
-recoverage verify /srv/backups/nightly.tar
-# 2. Restore into the drill copy, timing it for the RTO budget.
-time RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage restore /srv/backups/nightly.tar
-# 3. Serve the restored copy and confirm it answers.
-RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage check --json
+drill=$(mktemp -d)/snapshots
+# 1. Re-prove the whole retention set before drilling one archive.
+recoverage verify-backups /srv/backups
+# 2. Drill-restore the archive into the fresh directory, timing it for
+#    the RTO budget.
+time recoverage restore-drill /srv/backups/nightly.tar --into "$drill"
 ```
 
-Record the archive, elapsed time and document count, then remove the drill
-copy after inspection. A successful `tar -tf` alone does not exercise
-validation. Drill at least quarterly, and after every backup-format or
-retention change: a restore never exercised is a hypothesis.
+Record the archive, elapsed time and document count the drill prints,
+then remove the drill copy after inspection. A successful `tar -tf`
+alone does not exercise validation. Drill at least quarterly, and after
+every backup-format or retention change: a restore never exercised is
+a hypothesis.
 
 ## Recovering without this tool
 

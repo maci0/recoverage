@@ -2752,6 +2752,94 @@ def check_backup(
     )
 
 
+@app.command("restore-drill")
+def restore_drill(
+    archive: str = typer.Argument(
+        ..., metavar="ARCHIVE", help="Backup archive to drill-restore (.tar)"
+    ),
+    into: str = typer.Option(
+        ...,
+        "--into",
+        metavar="DIR",
+        help="Fresh drill directory to restore into (required; must be empty)",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the restored documents as a JSON object"
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Prove *archive* restores, into a fresh drill directory, serving nothing live.
+
+    The restore drill :func:`recoverage.backup.drill_restore` backs:
+    a verified restore into an empty directory, never the live snapshot
+    directory. ``RECOVERAGE_SNAPSHOTS`` is not read and not required: the
+    drill directory is the restore target, chosen by the operator, so
+    pointing it at the live directory by mistake is refused the same
+    way a dirty drill directory is. The restored copy is then read back
+    through the same coverage loader the dashboard serves, so a restore
+    that lands bytes the reader refuses is a drill failure, not a green
+    exit. Exits 1 on a corrupt archive, a dirty drill directory, or a
+    restored set no reader can serve, naming the archive or directory
+    so a scheduled drill says what it failed to prove.
+    """
+    from recoverage.backup import BackupError, drill_restore
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    as_json = _json_on(as_json)
+    _check_env_or_exit(json_output=as_json)
+    archive_path = _expanduser_path(archive, as_json=as_json)
+    drill_dir = _expanduser_path(into, as_json=as_json)
+    try:
+        written = drill_restore(archive_path, drill_dir)
+    except BackupError as exc:
+        _fail(f"Error: {exc}", str(exc), 1, as_json)
+    try:
+        from recoverage.documents import snapshot_set
+
+        snapshots, unreadable, _versions = snapshot_set(drill_dir)
+    except (OSError, ValueError) as exc:
+        _fail(
+            f"Error: restored drill at {drill_dir} cannot be read: {exc}",
+            f"restored drill at {drill_dir} cannot be read: {exc}",
+            1,
+            as_json,
+        )
+    if unreadable:
+        details = "; ".join(f"{name}: {reason}" for name, _t, reason in unreadable)
+        _fail(
+            f"Error: restored drill at {drill_dir} has unreadable documents: {details}",
+            f"restored drill at {drill_dir} has unreadable documents: {details}",
+            1,
+            as_json,
+        )
+    if not snapshots:
+        _fail(
+            f"Error: restored drill at {drill_dir} holds no readable coverage target",
+            f"restored drill at {drill_dir} holds no readable coverage target",
+            1,
+            as_json,
+        )
+    if as_json:
+        typer.echo(
+            _dumps(
+                {
+                    "restored": len(written),
+                    "target": str(drill_dir),
+                    "documents": [p.name for p in written],
+                    "targets": sorted(snapshots),
+                }
+            )
+        )
+        return
+    _secho(
+        f"Drill restored {_counted(len(written), 'document', 'documents')} to {drill_dir} "
+        f"({len(snapshots)} {_counted(len(snapshots), 'target', 'targets')}).",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
 @app.command("open")
 def open_cmd(
     port: str | None = typer.Option(

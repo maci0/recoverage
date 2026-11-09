@@ -213,6 +213,17 @@ needs no
 .B \-\-json
 writes the verified members and their digests as JSON.
 .TP
+.B restore\-drill
+Prove an archive restores, into a fresh drill directory, serving nothing
+live. Verifies the archive in full, restores it into the empty
+.BI \-\-into
+directory, and reads the restored set back through the coverage loader, so a
+restore landing bytes the reader refuses is a drill failure. Refuses a drill
+directory that already holds files. Needs no
+.BR RECOVERAGE_SNAPSHOTS .
+.B \-\-json
+writes the restored documents and targets as JSON.
+.TP
 .B schema
 Print the clispec 0.3 JSON document. Reads no project, no token, and no network.
 .B schema

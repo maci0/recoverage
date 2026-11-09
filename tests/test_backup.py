@@ -1171,6 +1171,51 @@ class TestBackupLocation:
             write_backup(db)
 
 
+class TestRestoreDrill:
+    """The drill proves a restore, not merely that an archive exists."""
+
+    def test_drill_restores_and_serves_a_fresh_directory(
+        self, db: Path, archive: Path, tmp_path: Path
+    ) -> None:
+        """A drill into an empty directory restores and the reader serves it."""
+        drill = tmp_path / "drill"
+        result = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill), "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["documents"] == [p.name for p in db.glob("coverage-*.toml")]
+        assert payload["targets"]
+        assert sorted(p.name for p in drill.glob("coverage-*.toml")) == payload["documents"]
+
+    def test_drill_refuses_a_dirty_directory(self, archive: Path, tmp_path: Path) -> None:
+        """A drill directory that already holds files proves nothing: refuse it."""
+        drill = tmp_path / "drill"
+        drill.mkdir()
+        (drill / "stale.txt").write_text("stale", encoding="utf-8")
+        result = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert result.exit_code == 1, result.output
+        assert "already holds" in result.output
+        assert not list(drill.glob("coverage-*.toml"))
+
+    def test_drill_refuses_a_corrupt_archive(self, tmp_path: Path) -> None:
+        """A corrupt archive fails the drill before any restore lands."""
+        bad = tmp_path / "bad.tar"
+        bad.write_bytes(b"not a tar")
+        drill = tmp_path / "drill"
+        result = runner.invoke(app, ["restore-drill", str(bad), "--into", str(drill)])
+        assert result.exit_code == 1, result.output
+        assert not list(drill.glob("coverage-*.toml")) if drill.exists() else True
+
+    def test_drill_does_not_need_a_snapshot_selection(
+        self, archive: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The drill target is --into, not RECOVERAGE_SNAPSHOTS: no selection needed."""
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
+        drill = tmp_path / "drill"
+        result = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert result.exit_code == 0, result.output
+        assert list(drill.glob("coverage-*.toml"))
+
+
 class TestBackupCli:
     """The two commands an operator and a cron job actually run."""
 

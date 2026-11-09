@@ -116,6 +116,11 @@ _COMMANDS: tuple[dict[str, Any], ...] = (
         "read_only",
     ),
     _command(
+        "restore-drill",
+        "Prove a backup archive restores into a fresh drill directory.",
+        "idempotent",
+    ),
+    _command(
         "open",
         "Open the running dashboard in a browser.",
         "non_idempotent",

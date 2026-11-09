@@ -1342,6 +1342,46 @@ def verify_all_backups(directory: Path) -> list[Path]:
     return [archive for _instant, _name, archive in stamped]
 
 
+def drill_restore(archive: Path, drill_dir: Path) -> list[Path]:
+    """Restore *archive* into a fresh *drill_dir*; return the restored paths.
+
+    The drill-only restore: like :func:`restore_backup` the archive is
+    verified in full before anything is written, and the drill directory
+    must be empty, so a drill can never overwrite the live snapshot
+    directory it was pointed at by mistake. A non-empty drill directory
+    is refused rather than merged, so a drill dirtied by a previous run
+    reads as a hygiene error instead of silently re-proving a stale set.
+    The restored bytes go through the same atomic publish
+    :func:`restore_backup` uses.
+    """
+    if drill_dir.exists():
+        if not drill_dir.is_dir():
+            raise BackupError(
+                f"refusing to drill into {drill_dir}: not a directory; "
+                "point the drill at a fresh directory"
+            )
+        try:
+            entries = sorted(drill_dir.iterdir())
+        except OSError as exc:
+            raise BackupError(f"cannot list drill directory {drill_dir}: {exc}") from exc
+        if entries:
+            listed = ", ".join(str(p) for p in entries[:5])
+            more = "" if len(entries) <= 5 else f", and {len(entries) - 5} more"
+            raise BackupError(
+                f"refusing to drill into {drill_dir}: it already holds {len(entries)} "
+                f"entr(ies) ({listed}{more}); a drill needs a fresh directory so a "
+                "stale set cannot pass as restored"
+            )
+        target = drill_dir
+    else:
+        try:
+            drill_dir.mkdir(parents=True)
+        except OSError as exc:
+            raise BackupError(f"cannot create drill directory {drill_dir}: {exc}") from exc
+        target = drill_dir
+    return restore_backup(archive, target)
+
+
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
     """Put every verified member of *archive* into *db_dir*; return the paths.
 

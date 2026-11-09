@@ -344,6 +344,23 @@ recoverage check-backup /srv/backups
 recoverage check-backup /srv/backups --max-age-hours 25 --json
 ```
 
+### `recoverage restore-drill`
+
+Prove a backup archive restores, into a fresh drill directory, serving
+nothing live. The archive is verified in full, restored into the empty
+`--into` directory, and the restored set is read back through the coverage
+loader the dashboard serves, so a restore landing bytes the reader refuses
+is a drill failure. Refuses a drill directory that already holds files, and
+neither reads nor requires `RECOVERAGE_SNAPSHOTS` — the drill target is
+`--into`, so it cannot point at the live directory by mistake. Exits 1
+naming the archive or directory on a corrupt archive, a dirty drill
+directory, or a restored set no reader can serve.
+
+```bash
+recoverage restore-drill /srv/backups/nightly.tar --into /tmp/drill/snapshots
+recoverage restore-drill /srv/backups/nightly.tar --into /tmp/drill/snapshots --json
+```
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).

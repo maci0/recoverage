@@ -7,6 +7,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage restore-drill` proves a backup archive restores into a fresh
+  drill directory and that the restored set is readable, without touching
+  the live snapshot directory or needing a `RECOVERAGE_SNAPSHOTS` selection.
+  It refuses a drill directory that already holds files.
 - `recoverage.RecoError` and `recoverage.app` are importable from the
   package root, alongside `recoverage.webapp.RecoError`, so a library
   consumer's catch and WSGI mount need not name a submodule.
