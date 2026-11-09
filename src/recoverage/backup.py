@@ -251,7 +251,17 @@ def _find_identical_archive(archive_dir: Path, members: list[tuple[str, bytes]])
     want = {name: hashlib.sha256(data).hexdigest() for name, data in members}
     try:
         candidates = _stamped_archives(archive_dir)
-    except OSError:
+    except OSError as exc:
+        _log.warning(
+            "backup: cannot list archives in %r to find an identical one: %r",
+            str(archive_dir),
+            str(exc),
+            extra=metrics.log_fields(
+                event="backup_idempotency_failed",
+                path=str(archive_dir),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
         return None
     for _instant, _name, path in reversed(candidates):
         try:

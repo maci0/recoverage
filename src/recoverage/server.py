@@ -762,7 +762,14 @@ def _function_store_dir(project_dir: Path, target: str) -> Path | None:
 
         try:
             cfg = load_config(project_dir, target=target)
-        except ConfigError:
+        except ConfigError as exc:
+            _log.debug(
+                "Function store for target %s: target load failed (%s: %s); "
+                "falling back to the default target",
+                _log_safe(target),
+                type(exc).__name__,
+                _log_safe(str(exc)),
+            )
             try:
                 cfg = load_config(project_dir)
             except ConfigError as exc:
@@ -791,7 +798,16 @@ def _stored_names_source(stored: str, source: Path, *roots: Path) -> bool:
     text = stored.replace("\\", "/")
     if not text:
         return False
-    resolved = source.resolve()
+    try:
+        resolved = source.resolve()
+    except (OSError, ValueError) as exc:
+        _log.debug(
+            "Function store: cannot resolve source %s: %s: %s",
+            _log_safe(str(source)),
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
+        return False
     for root in roots:
         try:
             rel = resolved.relative_to(root.resolve()).as_posix()
@@ -1170,7 +1186,13 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     for path in source.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
-        except OSError:
+        except OSError as exc:
+            _log.debug(
+                "coverage file %s vanished before its stat: %s: %s",
+                _log_safe(path.name),
+                type(exc).__name__,
+                _log_safe(str(exc)),
+            )
             continue
         entries.append((path.name, st.st_mtime_ns, st.st_size))
     entries.sort()
@@ -2411,11 +2433,21 @@ def _is_known_target(target: str) -> bool:
             if entry.get("id") == target:
                 return True
     except Exception as exc:  # no project / empty coverage set
-        _log.debug("resolve_targets unavailable: %s", type(exc).__name__)
+        _log.debug(
+            "resolve_targets unavailable for target %s: %s: %s",
+            _log_safe(target),
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
     try:
         config_targets = _get_targets_config()
     except Exception as exc:  # harnes tests with no project: no config
-        _log.debug("targets config unavailable: %s", type(exc).__name__)
+        _log.debug(
+            "targets config unavailable for target %s: %s: %s",
+            _log_safe(target),
+            type(exc).__name__,
+            _log_safe(str(exc)),
+        )
         config_targets = {}
     return target in config_targets or not config_targets
     # An empty config means no project at all: allow the load so a valid
