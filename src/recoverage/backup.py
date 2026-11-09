@@ -167,9 +167,7 @@ def _backup_file_lock(db_dir: Path) -> Iterator[None]:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
                     break
                 except OSError:
-                    import time
-
-                    time.sleep(0.05)  # device lock is poll-based on Windows
+                    clock.sleep(0.05)  # device lock is poll-based on Windows
         try:
             yield
         finally:
