@@ -1618,6 +1618,111 @@ class TestRegenOriginSameOrigin:
                 assert status.startswith("403"), f"{origin!r} was served: {status}"
 
 
+#: Grammar tokens for the ``Sec-Fetch-Site`` arm of the regen gate. Byte
+#: mutation alone never spells the exact token ``cross-site`` or a legal
+#: fetch-metadata value, so the campaign carries its own tokens: the refused
+#: token, every documented admitted value, and the lookalikes a loose
+#: comparison (substring, prefix, trailing junk) would wrongly admit.
+FETCH_SITE_SEEDS: list[bytes] = [
+    b"cross-site",
+    b"same-origin",
+    b"same-site",
+    b"none",
+    b"",
+    b"cross-site ",
+    b" cross-site",
+    b"CROSS-SITE",
+    b"Cross-Site",
+    b"cross-site\x00",
+    b"cross-site\n",
+    b"cross-site; foo",
+    b"cross-sit",
+    b"cross-sites",
+    b"not-cross-site",
+    b"cross%2dsite",
+    b"\xff",
+    b"a" * 300,
+]
+
+FETCH_SITE_TOKENS: tuple[bytes, ...] = (
+    b"cross-site",
+    b"same-origin",
+    b"same-site",
+    b"none",
+    b"cross",
+    b"-site",
+    b" ",
+    b"\x00",
+    b"\n",
+    b"\xff",
+    b"CROSS-SITE",
+    b"%00",
+)
+
+
+class TestRegenFetchSite:
+    """``Sec-Fetch-Site`` → the fetch-metadata arm of the POST /api/regen gate.
+
+    The privileged endpoint's CSRF defence has two halves: ``Origin`` (fuzzed
+    above) and, when ``Origin`` is absent, ``Sec-Fetch-Site``. Browsers
+    attach the latter to every request and only they ever send
+    ``cross-site``; a cross-site form POST that strips ``Origin`` is refused
+    on this header alone. A loose comparison here is a bypass no status
+    code can show, so the oracle is independent of the implementation:
+    ``cross-site`` — stripped and lowercased — is always a refusal, and no
+    other spelling is ever refused on this arm (admission requires only
+    that the value is not ``cross-site``; a non-browser client sending
+    ``Sec-Fetch-Site: whatever`` is served, as the gate documents).
+    """
+
+    _ADMITTED = frozenset({"same-origin", "same-site", "none"})
+
+    def test_cross_site_is_refused_and_only_it_is_admitted(self) -> None:
+        import recoverage.api as api
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
+            patch.setattr(api, "_regen_last_attempt", None)
+
+            def check(data: bytes) -> None:
+                value = data.decode("latin-1")
+                # Each check runs with a cold cooldown, so a 429 here is a
+                # refusal the cooldown arm actually owns (the previous
+                # admitted check's stamp), never a leftover from an earlier
+                # round: the oracle below judges admission, not timing.
+                api._regen_last_attempt = None
+                status, headers, body = wsgi_request(
+                    "POST",
+                    "/api/regen",
+                    headers={"Sec-Fetch-Site": value},
+                    remote_addr="127.0.0.1",
+                )
+                code = int(status.split()[0])
+                assert code in (200, 400, 403, 429, 500, 503), f"{value!r}: {status}"
+                folded = value.strip().lower()
+                if code == 200:
+                    assert folded != "cross-site", f"{value!r}: cross-site admitted"
+                elif code == 403:
+                    payload = _body_json(body, headers, "/api/regen")
+                    _assert_envelope(payload, status, "/api/regen")
+                    if folded == "cross-site":
+                        detail = str(payload.get("detail", ""))
+                        assert "cross-site" in detail.lower(), (
+                            f"{value!r}: refused without naming cross-site: {payload!r}"
+                        )
+                if folded == "cross-site":
+                    assert code != 200, f"{value!r}: cross-site was served: {status}"
+
+            _fuzz(
+                FETCH_SITE_SEEDS,
+                check,
+                iterations=300,
+                struct_tokens=FETCH_SITE_TOKENS,
+                num_tokens=FETCH_SITE_TOKENS,
+                label="TestRegenFetchSite.test_cross_site_is_refused_and_only_it_is_admitted",
+            )
+
+
 class TestRequestIdAndIdempotencyKey:
     """``X-Request-ID`` → ``_log_safe`` and ``Idempotency-Key`` → the ledger's
     regex.  One log-forging surface and one memory-bound surface, both reached
