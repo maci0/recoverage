@@ -159,7 +159,7 @@ def _build_index_payload() -> bytes:
         )
         js = ""
     html = html.replace("<!-- INJECT_CSS -->", f"<style>{rcssmin.cssmin(css)}</style>")
-    html = html.replace("<!-- INJECT_JS -->", f"<script>{js.strip()}</script>")
+    html = html.replace("<!-- INJECT_JS -->", f"<script defer>{js.strip()}</script>")
     payload = html.encode("utf-8")
     _check_payload_budget(payload)
     return payload
