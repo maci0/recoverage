@@ -2879,19 +2879,21 @@ class TestTransportSecurityFollowsTheConnection:
         assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
         assert "Secure" in headers.get("Set-Cookie", "")
 
-    def test_scheme_from_a_tls_terminating_proxy(self) -> None:
-        """A reverse proxy in front of this process leaves ``wsgi.url_scheme``
-        at http, so without the forwarded header a TLS deployment is
-        indistinguishable from a plaintext one."""
+    def test_forwarded_proto_is_ignored_over_plaintext(self) -> None:
+        """X-Forwarded-Proto is client-supplied: any peer can send it, so it
+        must not make the server think the request arrived over TLS.  A
+        plaintext request carrying the header must get neither HSTS nor a
+        Secure cookie — believing it self-DoSes the legitimate user."""
         from conftest import wsgi_request
 
         _, headers, _ = wsgi_request(
             "GET",
             "/?token=unit-test-token",
-            headers={"X-Forwarded-Proto": "HTTPS"},
+            headers={"X-Forwarded-Proto": "https"},
+            environ_extra={"wsgi.url_scheme": "http"},
         )
-        assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
-        assert "Secure" in headers.get("Set-Cookie", "")
+        assert "Strict-Transport-Security" not in headers
+        assert "Secure" not in headers.get("Set-Cookie", "")
 
     def test_every_response_carries_hsts_where_the_request_was_secure(self) -> None:
         """Not just the page routes: an API response is the one a cross-origin
@@ -2907,9 +2909,8 @@ class TestTransportSecurityFollowsTheConnection:
         assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
 
     def test_the_flag_cannot_relax_anything(self) -> None:
-        """A client that claims https over plaintext gets a STRICTER answer, not
-        a weaker one: the cookie it is handed is one its own browser will not
-        send over the connection it is on, and the HSTS header is discarded."""
+        """A client that claims https over plaintext gets NO transport
+        hardening: the spoofed header is ignored entirely."""
         from conftest import wsgi_request
 
         _, headers, _ = wsgi_request(
@@ -2920,8 +2921,8 @@ class TestTransportSecurityFollowsTheConnection:
         )
         cookie = headers.get("Set-Cookie", "")
         assert cookie
-        # The hardening set is unchanged; only the two transport additions
-        # are present, and both are additive.
+        assert "Strict-Transport-Security" not in headers
+        assert "Secure" not in cookie
         assert headers.get("X-Frame-Options") == "DENY"
         assert headers.get("Content-Security-Policy")
 

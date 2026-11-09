@@ -2498,25 +2498,20 @@ HSTS_MAX_AGE_SECONDS = 31_536_000
 def request_is_https() -> bool:
     """Whether this request reached the process over TLS.
 
-    Two sources, and neither is trusted for anything but this one answer.
     ``wsgi.url_scheme`` is what the server itself saw, which is the whole
     truth for the bundled ``wsgiref`` listener (always ``http``, it speaks no
-    TLS) and for a mount behind a TLS-terminating server that sets it.  A
-    reverse proxy that terminates TLS in front of this process and forwards
-    plain HTTP leaves it ``http``, so ``X-Forwarded-Proto`` is read as well:
-    without it a TLS deployment is indistinguishable from a plaintext one and
-    never gets the transport rules below.
+    TLS) and for a mount behind a TLS-terminating server that sets it.
 
-    A client can send ``X-Forwarded-Proto: https`` over plaintext, and that is
-    harmless rather than a bypass: both answers here make a response STRICTER
-    (a ``Secure`` cookie the plaintext client then cannot use, an HSTS header a
-    browser ignores because it arrived over ``http``).  Nothing is relaxed by
-    believing the header, and a deployment that strips it at the edge is the
-    deployment that already terminates TLS itself and sets the scheme.
+    ``X-Forwarded-Proto`` is NOT read: it is client-supplied and any peer
+    can send it.  Believing it over plaintext makes both answers STRICTER
+    in a way that self-DoSes the legitimate user (a ``Secure`` cookie a
+    plaintext browser will not store, an HSTS pin a plaintext browser
+    discards), and a TLS-terminating reverse proxy must be configured to set
+    ``wsgi.url_scheme`` itself (or sit behind a proxy-aware WSGI middleware
+    that strips client-supplied forwarded headers) rather than having the
+    app trust the header unconditionally.
     """
-    if request.environ.get("wsgi.url_scheme", "http").lower() == "https":
-        return True
-    return _header("X-Forwarded-Proto", "").strip().lower() == "https"
+    return request.environ.get("wsgi.url_scheme", "http").lower() == "https"
 
 
 #: Every encoding this server can produce, most preferred first.  ONE list:
