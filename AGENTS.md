@@ -135,7 +135,7 @@ recoverage/
     │                        #   JSON request on stdin, JSON reply on stdout, target named by
     │                        #   binary SHA-256
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, ops, regen,
-    │                        #   backup, restore, verify, verify-backups, check-backup, open, config, schema)
+    │                        #   backup, restore, verify, verify-backups, check-backup, restore-drill, open, config, schema)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   per-thread Cs per image width (read off the PE/ELF
@@ -224,7 +224,7 @@ make typecheck-web          # bun install --frozen-lockfile && bun run typecheck
 make smoke                  # uv run --locked --extra dev python tools/smoke.py
 make payload-budget         # the inlined shell's size at each static encoding, which the
                             #   payload budget in docs/DESIGN.md quotes
-make smoke-fail             # same, against a deliberately corrupt db
+make smoke-fail             # same, against a deliberately corrupt db: must degrade, not lie
 make browser-sbom           # the npm packages compiled into the shipped browser
                             #   assets, with the version and digest bun.lock pinned
                             #   (the sbom job uploads this as recoverage-browser-sbom)
@@ -259,6 +259,7 @@ RECOVERAGE_SNAPSHOTS=/absolute/path/to/snapshots uv run recoverage restore ARCHI
 uv run recoverage verify ARCHIVE  # check backup vs manifest, no restore
 uv run recoverage verify-backups DIRECTORY  # verify every stamped archive in a directory
 uv run recoverage check-backup DIRECTORY    # refuse if no fresh stamped backup (25h default)
+uv run recoverage restore-drill ARCHIVE --into DIR  # prove an archive restores into a fresh drill directory
 # Archive/restore portable exports; never canonical metadata.
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
