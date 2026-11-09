@@ -235,8 +235,8 @@ class TestWriteBackup:
         the same file.  ``os.replace`` made run two silently overwrite run
         one — the earlier backup gone, with nothing saying so.  The publish
         must fail-if-exists and leave the first archive's bytes intact.
-        The retry succeeds under the next free suffix instead of failing
-        on the first run's file, so a redelivery still yields a backup.
+        An identical retry converges to the existing archive (verified),
+        so a redelivery never mints a duplicate that prunes a distinct one.
         """
         monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_700_000_000.123456)
         out = tmp_path / "out"
@@ -244,8 +244,10 @@ class TestWriteBackup:
         first = write_backup(db, out)
         first_bytes = first.path.read_bytes()
         second = write_backup(db, out)
-        assert second.path != first.path
-        assert sorted(p.name for p in out.iterdir()) == sorted([first.path.name, second.path.name])
+        # Idempotent retry: identical documents converge to the existing
+        # archive instead of minting a duplicate that prunes a distinct one.
+        assert second.path == first.path
+        assert [p.name for p in out.iterdir()] == [first.path.name]
         assert first.path.read_bytes() == first_bytes
 
     def test_a_repeat_write_to_an_explicit_path_is_refused(self, db: Path, tmp_path: Path) -> None:

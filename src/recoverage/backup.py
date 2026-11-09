@@ -172,6 +172,44 @@ class BackupInfo:
     total_bytes: int
 
 
+def _find_identical_archive(archive_dir: Path, members: list[tuple[str, bytes]]) -> Path | None:
+    """Newest stamped archive whose member digests match *members*, or None.
+
+    Compares the manifest's member digests (never the archive bytes, whose
+    ``created`` stamp differs per attempt). Unreadable/non-stamped entries
+    are skipped. Bounded by _RETENTION_COUNT via the directory contents:
+    no ledger grows without bound.
+    """
+    want = {name: hashlib.sha256(data).hexdigest() for name, data in members}
+    try:
+        candidates = sorted(
+            (
+                (instant, p.name, p)
+                for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+                if p.is_file()
+                and not p.is_symlink()
+                and (instant := _archive_stamp_instant(p.name)) is not None
+            ),
+            key=lambda pair: (pair[0], pair[1]),
+            reverse=True,
+        )
+    except OSError:
+        return None
+    for _instant, _name, path in candidates:
+        try:
+            manifest, _contents = _read_archive(path)
+        except BackupError, OSError, ValueError, tarfile.TarError:
+            continue
+        have = {
+            str(m.get("name")): str(m.get("sha256"))
+            for m in manifest.get("members", [])
+            if isinstance(m, dict)
+        }
+        if have == want:
+            return path
+    return None
+
+
 def default_backup_dir(coverage_dir: Path) -> Path:
     """Where a backup goes when nothing names a directory: ``../backups``."""
     return coverage_dir.resolve().parent / DEFAULT_BACKUP_SUBDIR
@@ -713,6 +751,7 @@ def _write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     # a clock step (an NTP correction between the calls would otherwise
     # name the archive by one instant and date it by another).
     now = clock.wall_time()
+    stamped_default = destination is None or destination.is_dir()
     if destination is None:
         destination = _default_archive_path(backup_dir_from_env(db_dir), now)
     elif destination.is_dir():
@@ -721,6 +760,15 @@ def _write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
     manifest = _manifest(members, created)
     blob = _tar_bytes(members, manifest)
     _require_outside_coverage_dir(db_dir, destination)
+    # Idempotency: a retry (cron redelivery, replayed drill) whose documents
+    # have not changed must not mint a new archive and prune a distinct older
+    # one. For a stamped default, return an existing archive holding
+    # identical member digests instead. The manifest's created stamp differs
+    # per attempt, so compare member digests, not blob bytes.
+    if stamped_default:
+        found = _find_identical_archive(destination.parent, members)
+        if found is not None:
+            return verify_backup(found)
     try:
         _atomic_write(destination, blob)
     except BackupError:
