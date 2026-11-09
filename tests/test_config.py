@@ -108,7 +108,20 @@ class TestScalarParsing:
             config.snapshot_override()
 
     @pytest.mark.parametrize(
-        "raw", ["s3cret ", " s3cret", "s3cret\n", "  ", "two words", "tok\x01en", "tok\x7fen"]
+        "raw",
+        [
+            "s3cret ",
+            " s3cret",
+            "s3cret\n",
+            "  ",
+            "two words",
+            "tok\x01en",
+            "tok\x7fen",
+            "tok\ufeff",
+            "tok\u200b",
+            "caf\u00e9",
+            "tok\U0001f600",
+        ],
     )
     def test_token_a_client_cannot_present_is_refused(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
@@ -395,6 +408,11 @@ class TestBindValidation:
     def test_the_flag_path_shares_the_floor(self) -> None:
         with pytest.raises(config.ConfigError, match="not an interface address"):
             config.validate_bind("localhost/api", "--bind")
+
+    @pytest.mark.parametrize("raw", ["127.0.0.1\ufeff", "host\u200bname", "lo\u200dcalhost"])
+    def test_an_invisible_character_no_resolver_answers_is_a_startup_error(self, raw: str) -> None:
+        with pytest.raises(config.ConfigError, match="invisible character"):
+            config.validate_bind(raw, "--bind")
 
     def test_validate_bind_is_what_the_flag_path_uses(self) -> None:
         """--bind and RECOVERAGE_BIND are one setting; the flag skips bind()

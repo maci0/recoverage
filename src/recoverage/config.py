@@ -360,6 +360,20 @@ def _carries_control_char(value: str) -> bool:
     return any(ord(ch) <= _C0_LAST or _DEL <= ord(ch) <= _C1_LAST for ch in value)
 
 
+#: Characters no carrier can spell faithfully that ``str.isspace`` does not
+#: name: U+FEFF (ZERO WIDTH NO-BREAK SPACE; ``str.strip`` removes it, so a
+#: trailing one is a lockout waiting to happen) and its zero-width kin.  A
+#: header reaches the gate latin-1 decoded, so a non-ASCII token's UTF-8
+#: bytes arrive as separate characters and the byte comparison never meets
+#: it; a token is ASCII or it is a lockout over some carrier.
+_HIDDEN_WHITESPACE: Final = frozenset("\ufeff\u200b\u200c\u200d\u2060")
+
+
+def _carries_hidden_whitespace(value: str) -> bool:
+    """True if *value* holds a character no carrier can spell faithfully."""
+    return any(ch in _HIDDEN_WHITESPACE for ch in value)
+
+
 def _int_var(name: str, default: int) -> int:
     raw = _raw(name)
     if raw is None:
@@ -486,6 +500,12 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
             f"{name}: {value!r} is not an interface address "
             "(it carries whitespace or a control character; quote it in the unit file)"
         )
+    if _carries_hidden_whitespace(value):
+        raise ConfigError(
+            f"{name}: {value!r} is not an interface address "
+            "(it carries an invisible character no resolver can answer; "
+            "quote it in the unit file)"
+        )
     if ":" in value:
         try:
             IPv6Address(value)
@@ -586,6 +606,12 @@ def validate_token(value: str | None, name: str = "RECOVERAGE_TOKEN") -> str | N
         raise ConfigError(
             f"{name}: contains whitespace or a control character, which no request "
             "header, query value or cookie can carry"
+        )
+    if _carries_hidden_whitespace(value) or any(ord(ch) > 0x7F for ch in value):
+        raise ConfigError(
+            f"{name}: contains a character no request header can carry "
+            "(non-ASCII or invisible); use ASCII, so every carrier "
+            "spells the same bytes"
         )
     return value
 
