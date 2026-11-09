@@ -639,6 +639,7 @@ def _resolve_serve_config(
     cors_origin: list[str] | None = None,
     token: str | None = None,
     log_level: str | None = None,
+    json_output: bool = False,
 ) -> _ServeConfig:
     """Merge `serve`'s flags over the RECOVERAGE_* environment.
 
@@ -692,7 +693,7 @@ def _resolve_serve_config(
             client_timeout=config.client_timeout(),
         )
     except config.ConfigError as exc:
-        _fail(f"Error: {exc}", str(exc), 2, False)
+        _fail(f"Error: {exc}", str(exc), 2, json_output)
     return resolved
 
 
@@ -2786,7 +2787,7 @@ def config_cmd(
     _use_utf8_stdout()
     _use_utf8_stderr()
     as_json = _json_on(as_json)
-    resolved = _resolve_serve_config()
+    resolved = _resolve_serve_config(json_output=as_json)
     settings = resolved.render()
     if as_json:
         typer.echo(_dumps(settings))
