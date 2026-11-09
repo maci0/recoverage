@@ -2511,7 +2511,8 @@ def request_is_https() -> bool:
     that strips client-supplied forwarded headers) rather than having the
     app trust the header unconditionally.
     """
-    return request.environ.get("wsgi.url_scheme", "http").lower() == "https"
+    scheme = cast(str, request.environ.get("wsgi.url_scheme", "http"))
+    return scheme.lower() == "https"
 
 
 #: An RFC 9110 qvalue in ASCII: ``0`` or ``1`` with an optional decimal

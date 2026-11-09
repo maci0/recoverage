@@ -40,6 +40,7 @@ from recoverage.backup import (
     FORMAT_VERSION,
     MANIFEST_NAME,
     BackupError,
+    BackupInfo,
     backup_dir_from_env,
     check_backup_freshness,
     default_backup_dir,
@@ -446,11 +447,11 @@ class TestArchiveSizeBounds:
         )
         tie.write_bytes(b"x")
         orig_verify = backup.verify_backup
-        backup.verify_backup = lambda path: None  # type: ignore[assignment]
+        backup.verify_backup = lambda path: BackupInfo(path, "", (), 0)
         try:
             backup._prune_old_archives(backup_dir)
         finally:
-            backup.verify_backup = orig_verify  # type: ignore[assignment]
+            backup.verify_backup = orig_verify
         remaining = sorted(p.name for p in backup_dir.iterdir())
         assert len(remaining) == 30, remaining
         assert stamped[30].name in remaining
@@ -495,11 +496,11 @@ class TestArchiveSizeBounds:
         # The survivor the prune checks is the newest (stamped[-1]); that
         # one verifies, the older ones are junk the verify only sampled.
         orig_verify = backup.verify_backup
-        backup.verify_backup = lambda path: None  # type: ignore[assignment]
+        backup.verify_backup = lambda path: BackupInfo(path, "", (), 0)
         try:
             backup._prune_old_archives(backup_dir)
         finally:
-            backup.verify_backup = orig_verify  # type: ignore[assignment]
+            backup.verify_backup = orig_verify
         remaining = sorted(p.name for p in backup_dir.iterdir())
         assert len(remaining) == 30, remaining
         assert stamped[0].name not in remaining
