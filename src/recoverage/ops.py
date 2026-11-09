@@ -423,6 +423,23 @@ def _verified_section_bytes(section: Any, trusted: Any) -> int:
     if section.va is None:
         return 0
     ranges: list[list[int]] = []
+    # ``TrustedVerification`` is an untyped rebrew dataclass — ``va``/``size`` arrive
+    # verbatim off the JSON wire and nothing re-validates them after
+    # ``validate_coverage_execution`` (which authenticates the envelope's own
+    # digest, so a caller holding the envelope can still shape the record).
+    # A record whose ``va``/``size`` are not plain ints (str, list, None,
+    # bool, float, NaN...) raises a bare ``TypeError`` out of the sort and
+    # the ``va + size`` add below, landing as a 500 engine error.  Refuse it
+    # up front: only an int extent is a function extent.
+    for record in trusted.records:
+        if record.status != "EXACT":
+            continue
+        va, size = record.va, record.size
+        # Validate before the sort: a hostile ``va`` (str, list, None...) is not
+        # orderable against an integer ``va``, and the extent arithmetic would
+        # raise a bare ``TypeError`` instead of the documented refusal.
+        if type(va) is not int or type(size) is not int:
+            raise _invalid(f"verification record for {record.source!r} names a non-integer extent")
     for record in sorted(trusted.records, key=lambda item: item.va):
         if record.status != "EXACT":
             continue

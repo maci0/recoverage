@@ -7845,6 +7845,88 @@ _TOML_TOKENS: tuple[bytes, ...] = (
 )
 
 
+# ── the verified-bytes fold: ``ops._verified_section_bytes`` ──────────
+#
+# ``_snapshot_stats`` is the ops worker's coverage-metric path: it folds a
+# ``TrustedCoverage`` (rebrew's untyped ``TrustedVerification`` dataclasses,
+# whose ``va``/``size`` arrive verbatim off the JSON wire in ``_answer``) over
+# one section's cells.  ``TestOpsParseRequest``/``TestOpsDispatch`` never
+# reach it — dispatch refuses before any retained envelope validates — so a
+# record whose ``va`` is a string, whose ``size`` is a list, or whose two
+# records disagree in type crashed the fold with a bare ``TypeError`` (a 500
+# engine error on the worker) instead of the documented ``invalid-request``
+# refusal.  The campaign below mutates the record VALUES through
+# ``TrustedVerification`` itself (the seam the worker crosses) and pins:
+#
+# * the fold never raises anything but the documented refusal;
+# * an accepted fold is exactly the independent byte intersection of the
+#   well-typed EXACT extents with the exact cells (the pair oracle), so a
+#   dropped, double-counted or status-blind extent fails;
+# * a record with a non-integer extent is refused, never counted.
+
+#: One section, two exact cells and one stub, so an accepted extent can cover
+#: one cell, both, neither, or straddle the stub.  The base VA is absolute:
+#: the fold compares ``record.va`` against ``section.va + cell.start``.
+_TRUSTED_BASE = 0x10000000
+_TRUSTED_SECTIONS: dict[str, dict[str, Any]] = {
+    ".text": {
+        "va": _TRUSTED_BASE,
+        "size": 0x40,
+        "fileOffset": 0,
+        "unitBytes": 16,
+        "columns": 4,
+        "cells": [
+            cell(0, 16, "exact"),
+            cell(16, 32, "stub"),
+            cell(32, 48, "exact"),
+        ],
+    }
+}
+
+# JSON spellings of one record, in the shape ``_answer`` builds them: mutation
+# keeps the record a dict so the fuzzer reaches the field-coercion seam, while
+# the value pool carries the types a JSON caller can actually send.
+_TRUSTED_RECORD_SEEDS: tuple[bytes, ...] = (
+    b'{"source": "a.c", "va": 268435456, "size": 16, "status": "EXACT", "match_count": 1}',
+    b'{"source": "a.c", "va": 268435488, "size": 16, "status": "EXACT", "match_count": 0}',
+    b'{"source": "a.c", "va": 268435456, "size": 48, "status": "EXACT", "match_count": 1}',
+    b'{"source": "a.c", "va": 268435456, "size": 16, "status": "RELOC", "match_count": 1}',
+    b'{"source": "a.c", "va": "268435456", "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": 268435456, "size": "16", "status": "EXACT"}',
+    b'{"source": "a.c", "va": true, "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": null, "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": 1e309, "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": 268435456, "size": -5, "status": "EXACT"}',
+    b'{"source": "a.c", "va": [1], "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": 268435456, "size": [1], "status": "EXACT"}',
+    b'{"source": 5, "va": 268435456, "size": 16, "status": "EXACT"}',
+    b'{"source": "a.c", "va": 268435456, "size": 16, "status": 5}',
+)
+
+_TRUSTED_TOKENS: tuple[bytes, ...] = (
+    b'"va": 268435456',
+    b'"va": "268435456"',
+    b'"va": true',
+    b'"va": null',
+    b'"va": 1e309',
+    b'"va": -1',
+    b'"size": 16',
+    b'"size": "16"',
+    b'"size": -16',
+    b'"size": 0',
+    b'"status": "EXACT"',
+    b'"status": "RELOC"',
+    b'"status": 5',
+    b'"source": "a.c"',
+    b'"source": 5',
+    b'"match_count": 1',
+    b'", "',
+    b"{",
+    b"}",
+    b"\x00",
+)
+
+
 class TestTomlDocumentBytes:
     """A coverage TOML document never only raises CoverageTomlError."""
 
@@ -7876,3 +7958,163 @@ class TestTomlDocumentBytes:
             num_tokens=_NUM_TOKENS,
             label="TestTomlDocumentBytes.test_parse_toml_never_escapes_except_as_coverage_toml_error",
         )
+
+
+class TestTrustedVerificationFold:
+    """An authenticated extent fold counts only well-typed EXACT bytes."""
+
+    def test_hostile_records_never_escape_as_a_crash(self, tmp_path: Path) -> None:
+        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.workspace.status import TrustedCoverage, TrustedVerification
+
+        from recoverage import ops
+        from recoverage.ops import _verified_section_bytes
+
+        directory = tmp_path / "db"
+        directory.mkdir(parents=True, exist_ok=True)
+        write_coverage(directory, "TRUSTED", _TRUSTED_SECTIONS)
+        _clear_derived_caches()
+        snap = load_coverage_from(directory, "TRUSTED")
+        section = snap.sections[".text"]
+
+        def expected(records: list[Any]) -> int:
+            extents = sorted(
+                (r.va, r.va + r.size)
+                for r in records
+                if r.status == "EXACT" and type(r.va) is int and type(r.size) is int
+            )
+            merged: list[list[int]] = []
+            for start, end in extents:
+                if end <= start:
+                    continue
+                if merged and start <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], end)
+                else:
+                    merged.append([start, end])
+            total = 0
+            for c in section.cells:
+                if c.state != "exact":
+                    continue
+                lo, hi = section.va + c.start, section.va + c.end
+                if hi <= lo:
+                    continue
+                total += sum(max(0, min(hi, e) - max(lo, s)) for s, e in merged)
+            return total
+
+        def check(data: bytes) -> None:
+            try:
+                raw_records = json.loads(b"[" + data + b"]")
+            except Exception:
+                return
+            records: list[Any] = []
+            for row in raw_records:
+                if not isinstance(row, dict):
+                    return
+                for key in ("source", "va", "size", "status"):
+                    if key not in row:
+                        return
+                try:
+                    records.append(
+                        TrustedVerification(
+                            source=row["source"],
+                            va=row["va"],
+                            size=row["size"],
+                            status=row["status"],
+                            match_count=row.get("match_count", 0),
+                        )
+                    )
+                except BaseException:
+                    return
+            try:
+                trusted = TrustedCoverage(tuple(records))
+            except BaseException:
+                # Either a record is unhashable (va = [1]) so this container
+                # itself cannot index by VA, or it keyed two records onto one
+                # VA.  Both are refusals on this surface only when the fold
+                # agrees they are malformed — check the raw rows so the
+                # assertion stays a pair oracle, not a crash oracle.
+                vas = [row.get("va") for row in raw_records]
+                assert not all(type(v) is int for v in vas) or len(set(vas)) != len(vas), (
+                    f"TrustedCoverage refused well-typed records: {raw_records!r}"
+                )
+                return
+            try:
+                got = _verified_section_bytes(section, trusted)
+            except ops.InvalidRequestError as exc:
+                code = exc.code
+                assert code == "invalid-request", f"wrong refusal code {code!r}"
+                assert any(
+                    type(r.va) is not int or type(r.size) is not int
+                    for r in records
+                    if r.status == "EXACT"
+                ), f"a well-typed EXACT record was refused: {records!r}"
+                return
+            except BaseException as exc:
+                raise AssertionError(
+                    f"_verified_section_bytes raised {type(exc).__name__}: {exc} "
+                    f"for records {records!r}"
+                ) from exc
+            assert type(got) is int, f"non-int verified_bytes {got!r} for {records!r}"
+            assert got >= 0, f"negative verified_bytes {got} for {records!r}"
+            assert all(
+                type(r.va) is int and type(r.size) is int for r in records if r.status == "EXACT"
+            ), f"a non-integer EXACT extent was counted as {got} for {records!r}"
+            want = expected(records)
+            assert got == want, (
+                f"verified_bytes {got} != independent {want} for records {records!r}"
+            )
+
+        _fuzz(
+            list(_TRUSTED_RECORD_SEEDS),
+            check,
+            iterations=300,
+            struct_tokens=_TRUSTED_TOKENS,
+            num_tokens=_TRUSTED_TOKENS,
+            label="TestTrustedVerificationFold.test_hostile_records_never_escape_as_a_crash",
+        )
+
+    def test_well_typed_extents_count_exactly(self, tmp_path: Path) -> None:
+        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.workspace.status import TrustedCoverage, TrustedVerification
+
+        from recoverage.ops import InvalidRequestError, _verified_section_bytes
+
+        directory = tmp_path / "db"
+        directory.mkdir(parents=True, exist_ok=True)
+        write_coverage(directory, "TRUSTED", _TRUSTED_SECTIONS)
+        _clear_derived_caches()
+        section = load_coverage_from(directory, "TRUSTED").sections[".text"]
+        base = _TRUSTED_BASE
+
+        def record(va: Any, size: Any, status: Any = "EXACT") -> Any:
+            return TrustedVerification(source="a.c", va=va, size=size, status=status, match_count=1)
+
+        assert _verified_section_bytes(section, TrustedCoverage(())) == 0
+        assert (
+            _verified_section_bytes(
+                section, TrustedCoverage((record(base, 0x10), record(base + 0x20, 0x10)))
+            )
+            == 32
+        )
+        assert _verified_section_bytes(section, TrustedCoverage((record(base, 0x30),))) == 32
+        assert (
+            _verified_section_bytes(section, TrustedCoverage((record(base, 0x10, "RELOC"),))) == 0
+        )
+        assert (
+            _verified_section_bytes(
+                section, TrustedCoverage((record(base, 0x10), record(base + 8, 0x10)))
+            )
+            == 16
+        )
+        for bad in ("x", None, True, 1.5, [1]):
+            rec = record(bad, 0x10)
+            try:
+                trusted = TrustedCoverage((rec,))
+            except TypeError:
+                # An unhashable VA cannot even be keyed by the carrier: the
+                # refusal happens at construction, not in the fold.
+                assert isinstance(bad, list), f"va {bad!r} refused at construction"
+                continue
+            with pytest.raises(InvalidRequestError):
+                _verified_section_bytes(section, trusted)
+
