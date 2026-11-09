@@ -132,7 +132,11 @@ _ARCHIVE_SUFFIX: Final = ".tar"
 #: lock beside the coverage directory (mirroring ``regen._project_lock``): a
 #: cron retry and a CLI run over the same directory converge instead of
 #: interleaving reads/publish/prune, and a killed holder releases it because
-#: the lock is held on an open descriptor.
+#: the lock is held on an open descriptor.  The drill takes the same lock
+#: beside its drill directory through the restore it runs: two concurrent
+#: drills into one directory serialize on it, and the second reads the
+#: directory the first left and converges on the comparison rather than
+#: racing two restores into it.
 _BACKUP_LOCK = threading.Lock()
 
 #: Name of the cross-process lock ``write_backup``/``restore_backup`` take
@@ -1351,7 +1355,33 @@ def drill_restore(archive: Path, drill_dir: Path) -> list[Path]:
     reads as a hygiene error instead of silently re-proving a stale set.
     The restored bytes go through the same atomic publish
     :func:`restore_backup` uses.
+
+    Repeatability: the rerun of a completed drill (a scheduled drill
+    replayed by its scheduler, a retry after the first answer was lost)
+    converges when the directory already holds exactly this archive's
+    members byte for byte — the proof the operator asked for is still
+    true, and the first run already landed it. Any other entry, or a
+    document whose bytes differ from the archive's, is refused as a
+    dirty drill: converging on a subset of the directory by deleting
+    what a retry did not write could drop an operator's files, so the
+    refusal stays the answer for everything but the converged state.
     """
+    # Verify here, not in the restore: the comparison below needs the
+    # archive's member bytes, and the restore verifies again under its
+    # lock exactly as it did before this rerun existed.
+    _info, members = _verify_archive(archive)
+    return _drill_into(archive, drill_dir, members)
+
+
+def _drill_into(archive: Path, drill_dir: Path, members: dict[str, bytes]) -> list[Path]:
+    """The emptiness/converged check and the restore it guards.
+
+    The restore below takes the advisory lock beside *drill_dir*, so
+    two concurrent drills into one directory serialize on it: the
+    comparison here and the restore it guards cannot be interleaved
+    by a second drill into the same directory.
+    """
+    target = drill_dir
     if drill_dir.exists():
         if not drill_dir.is_dir():
             raise BackupError(
@@ -1363,6 +1393,8 @@ def drill_restore(archive: Path, drill_dir: Path) -> list[Path]:
         except OSError as exc:
             raise BackupError(f"cannot list drill directory {drill_dir}: {exc}") from exc
         if entries:
+            if _is_converged_drill(drill_dir, entries, members):
+                return [drill_dir / name for name in sorted(members)]
             listed = ", ".join(str(p) for p in entries[:5])
             more = "" if len(entries) <= 5 else f", and {len(entries) - 5} more"
             raise BackupError(
@@ -1378,6 +1410,29 @@ def drill_restore(archive: Path, drill_dir: Path) -> list[Path]:
             raise BackupError(f"cannot create drill directory {drill_dir}: {exc}") from exc
         target = drill_dir
     return restore_backup(archive, target)
+
+
+def _is_converged_drill(drill_dir: Path, entries: list[Path], members: dict[str, bytes]) -> bool:
+    """Whether *entries* are exactly *members*, byte for byte.
+
+    The rerun of a finished drill converges only on the state the first
+    run left: the same names and the same bytes. A differing document is
+    a dirty drill the refusal must still catch — a stale set edited
+    after the first drill must not re-prove the archive — and any extra
+    entry is one a drill cannot adopt. Only regular files count;
+    a symlink or a directory is not a document this restore writes.
+    """
+    if {entry.name for entry in entries} != set(members):
+        return False
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_file():
+            return False
+        try:
+            if entry.read_bytes() != members[entry.name]:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:

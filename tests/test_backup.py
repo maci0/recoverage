@@ -1205,6 +1205,51 @@ class TestRestoreDrill:
         assert result.exit_code == 1, result.output
         assert not list(drill.glob("coverage-*.toml")) if drill.exists() else True
 
+    def test_a_drill_rerun_converges_instead_of_refusing(
+        self, archive: Path, tmp_path: Path
+    ) -> None:
+        """Re-running a completed drill is a no-op, not a refusal.
+
+        A scheduled drill is replayed by its scheduler and a retry runs
+        after the first answer was lost: the second run must leave the
+        restored bytes (and their mtime) untouched and exit 0, exactly as
+        a second forced restore of the same archive does.
+        """
+        drill = tmp_path / "drill"
+        first = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert first.exit_code == 0, first.output
+        before = {
+            entry.name: (entry.read_bytes(), entry.stat().st_mtime_ns)
+            for entry in drill.glob("coverage-*.toml")
+        }
+        assert before
+        second = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert second.exit_code == 0, second.output
+        after = {
+            entry.name: (entry.read_bytes(), entry.stat().st_mtime_ns)
+            for entry in drill.glob("coverage-*.toml")
+        }
+        assert after == before
+        assert sorted(entry.name for entry in drill.iterdir()) == sorted(before)
+
+    def test_a_drill_rerun_still_refuses_a_tampered_document(
+        self, archive: Path, tmp_path: Path
+    ) -> None:
+        """Convergence requires the archive's bytes, not merely its names.
+
+        A document edited after the first drill is a dirty drill: the
+        rerun must refuse it rather than re-prove the archive over bytes
+        it no longer holds.
+        """
+        drill = tmp_path / "drill"
+        first = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert first.exit_code == 0, first.output
+        document = next(drill.glob("coverage-*.toml"))
+        document.write_bytes(document.read_bytes() + b"\n# tampered\n")
+        second = runner.invoke(app, ["restore-drill", str(archive), "--into", str(drill)])
+        assert second.exit_code == 1, second.output
+        assert "already holds" in second.output
+
     def test_drill_does_not_need_a_snapshot_selection(
         self, archive: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
