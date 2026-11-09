@@ -971,7 +971,11 @@ export function App() {
   const { reload, busy } = useLiveReload({
     enabled: targetReady && loadError === null,
     onDbUpdated,
+    // A regen failure is the failure the reader waited minutes for: it
+    // must not expire unseen under the transient-notice timer, so it
+    // holds like the success beside it until dismissed or replaced.
     onNotice: setNotice,
+    onFailure: flashPersistent,
     onDone: flashPersistent,
   });
 
@@ -1445,6 +1449,7 @@ export function App() {
               onGridReady={(focus) => {
                 gridFocus.current = focus;
               }}
+              onRegenerate={reload}
             />
           )}
           <ul
@@ -1557,6 +1562,7 @@ function MapArea({
   onGridReady,
   onClearFilters,
   onClearSearch,
+  onRegenerate,
 }: MapAreaProps): ComponentChildren {
   if (noTargets && unreadable.length > 0) {
     const one = unreadable.length === 1;
@@ -1640,6 +1646,8 @@ function MapArea({
         {!portable && (
           <Button size="sm" disabled={regenBusy} onClick={onRegenerate}>
             {regenBusy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
+          </Button>
+        )}
           </Button>
         )}
       </div>

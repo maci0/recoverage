@@ -6153,6 +6153,45 @@ class TestSpaLayoutAndFeedback:
         ):
             assert marker in app, f"deep-link marker missing: {marker}"
 
+    def test_a_failed_copy_holds_its_label(self) -> None:
+        """A clipboard refusal is the failure the reader needs the text for.
+
+        The success flash is one second because the next copy replaces it;
+        the failure flashing for the same second left the button reading
+        "Copy" again with no trace that the copy was refused, so the
+        reader had no reason to retry or to select the text by hand.
+        """
+        copy = _web("components/ui/copy-button.tsx")
+        assert 'setFlashed("Copy failed")' in copy
+        assert "scheduleReset(true)" in copy
+
+    def test_a_regen_failure_holds_like_a_regen_success(self) -> None:
+        """The failure the reader waited minutes for must not expire unseen.
+
+        The transient notice timer clears in seconds; a regen refusal
+        delivered through it vanished before the reader looked up from
+        the map, leaving the button reading "Regenerate" with no trace
+        of the run it had just watched finish.
+        """
+        live = _web("hooks/useLiveReload.ts")
+        assert "onFailure" in live
+        assert "(onFailure ?? onNotice)(reason" in live
+        assert "(onFailure ?? onNotice)(MSG.REGEN_UNAVAILABLE)" in live
+        app = _web("App.tsx")
+        assert "onFailure: flashPersistent" in app
+
+    def test_an_empty_target_offers_regenerate_in_place(self) -> None:
+        """"Use Regenerate in the topbar" is a dead end on a narrow viewport.
+
+        The topbar wraps into a block and the button the copy names is
+        off-screen; the empty state itself now carries the same action,
+        so the next step is one click from where the reader is standing.
+        """
+        app = _web("App.tsx")
+        empty = app.split("No coverage data for", 1)[1]
+        assert "onRegenerate" in empty
+        assert ">Regenerate<" in empty
+
     def test_the_share_link_token_leaves_the_address_bar(self) -> None:
         """`?token=` is a credential, not page state, and the address bar is
         where a credential lives longest.
