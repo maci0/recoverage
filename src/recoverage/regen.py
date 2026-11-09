@@ -1,7 +1,21 @@
-"""Explicitly refresh the live coverage view without generating files."""
+"""Explicitly refresh the live coverage view without generating files.
+
+``POST /api/regen`` is serialized in-process by ``_REGEN_LOCK``; that lock
+cannot see another process. A ``recoverage regen`` cron job and a running
+``serve`` process can therefore run two pipelines at once over the same project
+unless both take a cross-process advisory lock. :func:`run_regen` takes that
+lock (``.recoverage-regen.lock`` beside ``rebrew-project.toml``) for the whole
+pipeline: a second execution converges to a refusal naming the holder instead
+of interleaving writes, and the lock is held on an open descriptor so a killed
+run releases it.
+"""
 
 from __future__ import annotations
 
+import contextlib
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 lazy from pathlib import Path
 
 from recoverage.config import RecoError
@@ -16,6 +30,69 @@ class RegenError(RecoError, RuntimeError):
         self.precondition = precondition
 
 
+class RegenBusyError(RegenError):
+    """Another recoverage process is refreshing the same project.
+
+    Recovery is to re-run this command after that process finishes; a second
+    concurrent pipeline is never started here.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, exit_code=1)
+        self.precondition = True
+
+
+def _regen_lock_path(root: Path) -> Path:
+    """The lock file for *root*'s project directory, beside the project file."""
+    return root / ".recoverage-regen.lock"
+
+
+@contextmanager
+def _project_lock(root: Path) -> Iterator[None]:
+    """Hold an exclusive, non-blocking lock for *root* across processes.
+
+    ``POST /api/regen`` is serialized in-process by ``_REGEN_LOCK``; that lock
+    cannot see another process. A ``recoverage regen`` cron job and a running
+    ``serve`` process therefore run two pipelines at once unless the CLI path
+    also takes a cross-process lock. The lock is the file itself and is held
+    via ``flock`` (POSIX) or ``msvcrt.locking`` (Windows) for the whole
+    pipeline, so a crash releases it and a retry converges.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = _regen_lock_path(root)
+    handle = lock_path.open("a+")
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise RegenBusyError(
+                    f"another recoverage regen is running for {root}; wait for it to finish"
+                ) from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        else:
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+            except OSError as exc:
+                raise RegenBusyError(
+                    f"another recoverage regen is running for {root}; wait for it to finish"
+                ) from exc
+            try:
+                yield
+            finally:
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+    finally:
+        handle.close()
+
+
 def run_regen(root: Path) -> None:
     """Refresh canonical project inputs without writing any files."""
     from rebrew.coverage_project import ProjectCoverageError, load_project_coverage
@@ -28,13 +105,14 @@ def run_regen(root: Path) -> None:
             2,
             precondition=True,
         )
-    try:
-        view = load_project_coverage(root, refresh=True)
-    except ProjectCoverageError as exc:
-        raise RegenError(str(exc)) from exc
-    if view.failures:
-        raise RegenError(
-            "; ".join(f"{target}: {reason}" for target, reason in view.failures.items())
-        )
-    if not view.snapshots:
-        raise RegenError("No configured coverage targets")
+    with _project_lock(root):
+        try:
+            view = load_project_coverage(root, refresh=True)
+        except ProjectCoverageError as exc:
+            raise RegenError(str(exc)) from exc
+        if view.failures:
+            raise RegenError(
+                "; ".join(f"{target}: {reason}" for target, reason in view.failures.items())
+            )
+        if not view.snapshots:
+            raise RegenError("No configured coverage targets")

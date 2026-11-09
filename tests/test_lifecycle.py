@@ -115,7 +115,7 @@ class TestLiveRefresh:
         monkeypatch.setattr("rebrew.coverage_project.load_project_coverage", load)
         assert run_regen(tmp_path) is None
         assert calls == [(tmp_path, True)]
-        assert list(tmp_path.iterdir()) == []
+        assert [p.name for p in tmp_path.iterdir() if p.name != ".recoverage-regen.lock"] == []
 
     def test_failed_targets_remain_visible(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -142,7 +142,7 @@ class TestLiveRefresh:
         with pytest.raises(RegenError, match="read-only") as failure:
             run_regen(tmp_path)
         assert failure.value.exit_code == 2
-        assert list(tmp_path.iterdir()) == []
+        assert [p.name for p in tmp_path.iterdir() if p.name != ".recoverage-regen.lock"] == []
 
 
 class TestOpenAndReap:
