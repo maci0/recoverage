@@ -20,6 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 lazy import math
 lazy import threading
+lazy from heapq import nsmallest
 lazy from typing import Any, Final, Literal
 
 #: A request slower than this is counted separately and logged at WARNING.
@@ -114,6 +115,20 @@ def percentile(samples: list[float], fraction: float) -> float:
     share = min(max(fraction, 0.0), 1.0)
     position = share * (len(samples) - 1) + QUANTILE_ROUNDING_HALF
     return samples[min(len(samples) - 1, math.floor(position))]
+
+
+def _quantile(samples: deque[float], fraction: float) -> float:
+    """Quantile of an unsorted window without sorting it."""
+    if not samples:
+        return 0.0
+    if not math.isfinite(fraction):
+        return 0.0
+    share = min(max(fraction, 0.0), 1.0)
+    position = share * (len(samples) - 1) + QUANTILE_ROUNDING_HALF
+    k = min(len(samples) - 1, math.floor(position)) + 1
+    if k == len(samples):
+        return float(max(samples))
+    return float(nsmallest(k, samples)[-1])
 
 
 @dataclass
@@ -303,23 +318,15 @@ class RequestStats:
         """
         with self._lock:
             mean = self._sum_ms / self._timed if self._timed else 0.0
-            window = sorted(self._recent_ms)
             by_route: dict[str, Any] = {}
             for route, row in sorted(self._by_route.items()):
-                # One sort of this route's window, read twice: every
-                # request's `finish` waits on this lock.
-                route_window = sorted(row.recent_ms)
                 by_route[route] = {
                     "requests": row.requests,
                     "errors": row.errors,
                     "max_ms": round(row.max_ms, MS_DIGITS),
-                    # Quantiles of this route's own window, so a
-                    # process-wide p95 that moved can be attributed
-                    # without a second request: the row whose p95 sits
-                    # at SLOW_REQUEST_MS is the endpoint that moved.
-                    "latency_window": len(route_window),
-                    "p50_ms": round(percentile(route_window, P50), MS_DIGITS),
-                    "p95_ms": round(percentile(route_window, P95), MS_DIGITS),
+                    "latency_window": len(row.recent_ms),
+                    "p50_ms": round(_quantile(row.recent_ms, P50), MS_DIGITS),
+                    "p95_ms": round(_quantile(row.recent_ms, P95), MS_DIGITS),
                 }
             return {
                 "total": self._total,
@@ -338,9 +345,9 @@ class RequestStats:
                 "slow_threshold_ms": SLOW_REQUEST_MS,
                 "mean_ms": round(mean, MS_DIGITS),
                 "max_ms": round(self._max_ms, MS_DIGITS),
-                "latency_window": len(window),
-                "p50_ms": round(percentile(window, P50), MS_DIGITS),
-                "p95_ms": round(percentile(window, P95), MS_DIGITS),
+                "latency_window": len(self._recent_ms),
+                "p50_ms": round(_quantile(self._recent_ms, P50), MS_DIGITS),
+                "p95_ms": round(_quantile(self._recent_ms, P95), MS_DIGITS),
                 "by_status": {k: self._by_status[k] for k in sorted(self._by_status)},
                 "by_route": by_route,
             }

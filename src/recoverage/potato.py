@@ -1721,7 +1721,12 @@ def _load_section_data(
         )
     )
 
-    if key is not None and _snapshot_db_mtime() == snap:
+    # Publish guard: snap was taken before pinning, so a rebuild landing
+    # during the build must not file this payload under the old key.
+    # The re-check reads the directory a second time; reusing the
+    # pre-build token would file a payload built from partly stale
+    # input under a fingerprint newer than it.  Kept deliberately.
+    if key is not None and _snapshot_db_mtime() == snap:  # review-loop: keep
         with _SECTION_DATA_CACHE_LOCK:
             _evict_oldest(_SECTION_DATA_CACHE, _SECTION_DATA_CACHE_MAX)
             _SECTION_DATA_CACHE[key] = (sections, data)
