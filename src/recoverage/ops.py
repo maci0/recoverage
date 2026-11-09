@@ -55,6 +55,50 @@ from recoverage.config import RecoError, json_depth_exceeds
 lazy from recoverage import reporting
 lazy from recoverage._paths import project_override
 
+__all__ = [
+    "COVERAGE_NOT_FOUND",
+    "DEFAULT_CONCURRENCY",
+    "DETAIL_MAX_CHARS",
+    "ENGINE_ERROR",
+    "EXIT_ERROR",
+    "HOST_ENV",
+    "INVALID_REQUEST",
+    "MAX_CONCURRENCY",
+    "MAX_REPLY_BYTES",
+    "MAX_REQUEST_BYTES",
+    "MIN_TOKEN_BYTES",
+    "OPS",
+    "PORT_ENV",
+    "TARGET_NOT_FOUND",
+    "TOKEN_ENV",
+    "UNKNOWN_OP",
+    "ConflictError",
+    "ExportRequest",
+    "GateRequest",
+    "InvalidRequestError",
+    "MapRequest",
+    "NotFoundError",
+    "Op",
+    "OpsError",
+    "PlanRequest",
+    "RetainedFile",
+    "RetainedRequest",
+    "WorkerConfig",
+    "app",
+    "call_command",
+    "confined_dir",
+    "coverage_export",
+    "coverage_gate",
+    "coverage_map",
+    "coverage_plan",
+    "dispatch",
+    "dispatch_json",
+    "error_body",
+    "parse_request",
+    "project_root",
+    "serve_command",
+]
+
 _log = logging.getLogger("recoverage")
 
 #: Exit code of a refusal.

@@ -31,6 +31,46 @@ from ipaddress import IPv6Address, ip_address
 from pathlib import Path
 from typing import Final
 
+__all__ = [
+    "DEFAULT_BIND",
+    "DEFAULT_CLIENT_TIMEOUT_SECONDS",
+    "DEFAULT_LOG_LEVEL",
+    "DEFAULT_MAX_CONNECTIONS",
+    "DEFAULT_MAX_DB_AGE_HOURS",
+    "DEFAULT_PORT",
+    "ENV_PREFIX",
+    "KNOWN_VARS",
+    "LOG_LEVELS",
+    "MAX_CLIENT_TIMEOUT_SECONDS",
+    "MAX_JSON_DEPTH",
+    "MAX_MAX_CONNECTIONS",
+    "MAX_PORT",
+    "MIN_CLIENT_TIMEOUT_SECONDS",
+    "MIN_PORT",
+    "ConfigError",
+    "RecoError",
+    "active_config",
+    "allow_remote",
+    "bind",
+    "bind_names_every_interface",
+    "check_snapshot_override",
+    "check_unknown_vars",
+    "client_timeout",
+    "cors",
+    "cors_origins",
+    "json_depth_exceeds",
+    "log_level",
+    "max_connections",
+    "parse_ascii_int",
+    "parse_log_level",
+    "port",
+    "snapshot_override",
+    "strip_sign",
+    "token",
+    "validate_bind",
+    "validate_token",
+]
+
 #: Deepest JSON container nesting a request may carry.  ``json.loads``
 #: nests one stack frame per ``{``/``[``, so a body under the byte cap can
 #: still nest past the interpreter's recursion limit and surface as
