@@ -954,10 +954,16 @@ def serve_command(
     # RECOVERAGE_BIND: without the same floor an out-of-range port or a
     # host:port/URL spelled as host reaches socket.bind() as a traceback
     # (OverflowError/gaierror) instead of a startup error naming the flag.
+    # The port range is config.MIN/MAX_PORT, not a restated 0-65535: a
+    # second spelling of the range is a second answer to "what ports are
+    # legal" that drifts from config.port()'s.
     try:
         host = validate_bind(host, "--host")
-        if not 0 <= resolved_port <= 65535:
-            raise ConfigError(f"--port: {resolved_port} is not in the range 0-65535")
+        if not _config.MIN_PORT <= resolved_port <= _config.MAX_PORT:
+            raise ConfigError(
+                f"--port: {resolved_port} is not in the range "
+                f"{_config.MIN_PORT}-{_config.MAX_PORT}"
+            )
     except ConfigError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_ERROR) from None
