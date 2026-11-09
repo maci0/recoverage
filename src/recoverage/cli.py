@@ -1230,18 +1230,26 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
     running.
     """
     try:
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            # No shell: every argv here is the platform's own opener, and the
-            # Windows one carries `cmd /c start` itself.
-            shell=False,
-            start_new_session=(os.name == "posix"),
-            # creationflags is Windows-only: Popen raises ValueError for a
-            # non-zero value on POSIX, so only pass it when Windows accepts it.
-            **({"creationflags": _windows_detach_flags()} if os.name == "nt" else {}),
-        )
+        # creationflags is keyword-only in typeshed's Popen overloads, so the
+        # conditional-kwargs splat below (``**{...} if nt else {}``) does not
+        # match any overload.  Pass it explicitly on Windows and omit it
+        # elsewhere, where a non-zero value would raise ValueError.
+        if os.name == "nt":
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                creationflags=_windows_detach_flags(),
+            )
+        else:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                start_new_session=True,
+            )
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         # Expected on minimal installs (no xdg-open/open); say why before
         # falling back — "no browser ever appeared" must be diagnosable from
