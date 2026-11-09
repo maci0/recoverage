@@ -192,20 +192,10 @@ def _find_identical_archive(archive_dir: Path, members: list[tuple[str, bytes]])
     """
     want = {name: hashlib.sha256(data).hexdigest() for name, data in members}
     try:
-        candidates = sorted(
-            (
-                (instant, p.name, p)
-                for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-                if p.is_file()
-                and not p.is_symlink()
-                and (instant := _archive_stamp_instant(p.name)) is not None
-            ),
-            key=lambda pair: (pair[0], pair[1]),
-            reverse=True,
-        )
+        candidates = _stamped_archives(archive_dir)
     except OSError:
         return None
-    for _instant, _name, path in candidates:
+    for _instant, _name, path in reversed(candidates):
         try:
             manifest, _contents = _read_archive(path)
         except BackupError, OSError, ValueError, tarfile.TarError:
@@ -338,7 +328,8 @@ def _fsync_dir(path: Path) -> None:
     if os.name == "nt":
         return
     try:
-        fd = os.open(path, os.O_RDONLY)
+        with os.fdopen(os.open(path, os.O_RDONLY)) as fd:
+            os.fsync(fd)
     except OSError as exc:
         _log.warning(
             "Cannot fsync directory %r for durability: %r",
@@ -350,23 +341,6 @@ def _fsync_dir(path: Path) -> None:
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
-        return
-    try:
-        os.fsync(fd)
-    except OSError as exc:
-        _log.warning(
-            "Cannot fsync directory %r for durability: %r",
-            str(path),
-            str(exc),
-            extra=metrics.log_fields(
-                event="backup_fsync_failed",
-                path=str(path),
-                error=f"{type(exc).__name__}: {exc}",
-            ),
-        )
-    finally:
-        with contextlib.suppress(OSError):
-            os.close(fd)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -733,16 +707,7 @@ def _prune_old_archives(archive_dir: Path) -> None:
     freshness monitor surface the corruption instead.
     """
     try:
-        candidates = sorted(
-            (
-                (instant, p.name, p)
-                for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-                if p.is_file()
-                and not p.is_symlink()
-                and (instant := _archive_stamp_instant(p.name)) is not None
-            ),
-            key=lambda pair: (pair[0], pair[1]),
-        )
+        candidates = _stamped_archives(archive_dir)
     except OSError as exc:
         _log.warning(
             "backup: cannot list archives in %r to prune old ones: %r",
@@ -1167,6 +1132,19 @@ def _archive_stamp_instant(name: str) -> datetime | None:
         return None
 
 
+def _stamped_archives(directory: Path) -> list[tuple[datetime, str, Path]]:
+    """Regular stamped archives in *directory*, oldest first by stamped instant."""
+    entries = [
+        (instant, path.name, path)
+        for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+        if path.is_file()
+        and not path.is_symlink()
+        and (instant := _archive_stamp_instant(path.name)) is not None
+    ]
+    entries.sort(key=lambda pair: (pair[0], pair[1]))
+    return entries
+
+
 def _newest_stamped_archive(directory: Path) -> Path | None:
     """The newest stamped archive file in *directory*, or None.
 
@@ -1186,11 +1164,7 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
     becomes "newest" by carrying a fresh mtime.
     """
     try:
-        candidates = [
-            path
-            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-            if path.is_file() and not path.is_symlink()
-        ]
+        stamped = _stamped_archives(directory)
     except OSError as exc:
         _log.warning(
             "Cannot list backup directory %r for newest archive: %r",
@@ -1203,14 +1177,9 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
             ),
         )
         raise BackupError(f"cannot list backup directory {directory}: {exc}") from exc
-    stamped = [
-        (instant, path)
-        for path in candidates
-        if (instant := _archive_stamp_instant(path.name)) is not None
-    ]
     if not stamped:
         return None
-    return max(stamped, key=lambda pair: (pair[0], pair[1].name))[1]
+    return stamped[-1][2]
 
 
 def newest_archive_age_hours(directory: Path) -> float | None:
@@ -1297,20 +1266,14 @@ def verify_all_backups(directory: Path) -> list[Path]:
     if not directory.is_dir():
         raise BackupError(f"no backup directory at {directory}; no backup has been taken there")
     try:
-        candidates = sorted(
-            path
-            for path in directory.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-            if path.is_file()
-            and not path.is_symlink()
-            and _archive_stamp_instant(path.name) is not None
-        )
+        stamped = _stamped_archives(directory)
     except OSError as exc:
         raise BackupError(f"cannot list backups in {directory}: {exc}") from exc
-    if not candidates:
+    if not stamped:
         raise BackupError(f"no stamped backup in {directory}; no backup has been taken there")
-    for archive in candidates:
+    for _instant, _name, archive in stamped:
         verify_backup(archive)
-    return candidates
+    return [archive for _instant, _name, archive in stamped]
 
 
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
