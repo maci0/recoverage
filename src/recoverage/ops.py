@@ -763,8 +763,13 @@ def call_command(
 ) -> None:
     """Answer one op: the JSON request on stdin, the reply on stdout.
 
-    A refusal prints {"error","code","detail","status"} on stdout and exits 2.
+    Writes the JSON request body from stdin; when stdin is a terminal,
+    refuses with exit 2 instead of waiting for input. A refusal prints
+    {"error","code","detail","status"} on stdout and exits 2.
     """
+    if sys.stdin.isatty():
+        sys.stderr.write("error: request must be piped on stdin, not typed\n")
+        raise typer.Exit(EXIT_ERROR)
     config = WorkerConfig(
         workspace=_existing_dir(workspace, "--workspace"),
         filestore=_existing_dir(filestore, "--filestore"),

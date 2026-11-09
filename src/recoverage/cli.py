@@ -2355,6 +2355,8 @@ def check(
                 fg=_VERDICT_COLORS[verdict.status],
             )
 
+    if json_output:
+        typer.echo(_dumps(outcome.document()))
     if outcome.reason is not None:
         _fail(
             f"Error: {outcome.reason}.",
@@ -2362,8 +2364,6 @@ def check(
             1,
             json_output,
         )
-    if json_output:
-        typer.echo(_dumps(outcome.document()))
     if not outcome.passed:
         raise typer.Exit(1)
 
@@ -2378,7 +2378,9 @@ def regen(
     """Refresh the live project view without generating files.
 
     Progress and errors go to stderr. Portable snapshots are read-only;
-    unset RECOVERAGE_SNAPSHOTS to refresh a project.
+    unset RECOVERAGE_SNAPSHOTS to refresh a project. Exits 1 when the
+    refresh fails. With --json, a successful refresh writes
+    {"status":"ok"} to stdout and errors use the stderr envelope.
     """
     from recoverage.server import _project_dir
 
@@ -2387,7 +2389,9 @@ def regen(
     json_output = _json_on(json_output)
     _check_env_or_exit(json_output=json_output)
     _run_regen(_project_dir(), json_output=json_output)
-    if not json_output:
+    if json_output:
+        typer.echo(_dumps({"status": "ok"}))
+    else:
         _secho("Done: live coverage refreshed.", fg=typer.colors.GREEN, err=True)
 
 
@@ -2492,6 +2496,7 @@ def restore(
     force: bool = typer.Option(
         False,
         "--force",
+        "-f",
         help="Restore over documents that differ from the archive's",
     ),
     as_json: bool = typer.Option(
@@ -2645,7 +2650,7 @@ def check_backup(
     directory: str = typer.Argument(
         ...,
         metavar="DIRECTORY",
-        help="Backup directory holding stamped archives (default: the backup directory)",
+        help="Backup directory holding stamped archives (required)",
     ),
     max_age_hours: str = typer.Option(
         "25",
