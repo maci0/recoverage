@@ -2733,6 +2733,7 @@ class TestAllowRemoteWithoutRemoteBind:
     def test_a_remote_bind_with_the_acknowledgment_does_not_warn(self, monkeypatch: Any) -> None:
         monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
         monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        monkeypatch.setenv("RECOVERAGE_TOKEN", "test-token-1234567890")
         result = runner.invoke(app, ["config"])
 
         assert result.exit_code == 0

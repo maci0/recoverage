@@ -1384,7 +1384,9 @@ def _is_browser_origin(value: str) -> bool:
     return bool(parts.hostname)
 
 
-def _remote_bind_gate(bind: str, allow_remote: bool) -> str | None:
+def _remote_bind_gate(
+    bind: str, allow_remote: bool, token: str | None = None
+) -> str | None:
     """The refusal a network bind earns without the acknowledgment, else None.
 
     Shared by `serve` and `recoverage config`, because a preflight that
@@ -1395,16 +1397,31 @@ def _remote_bind_gate(bind: str, allow_remote: bool) -> str | None:
     NOTE: "::" is the IPv6 wildcard (binds every interface) and must NOT be
     treated as loopback, or `--bind ::` would silently expose the
     unauthenticated API without the acknowledgment.
+
+    A remote bind also requires a token: ``--allow-remote`` only confirms the
+    operator wants the traffic, not that it is safe unauthenticated.  Without
+    that pairing every host on the network reads project sources, original
+    binaries, hex bytes and disassembly.
     """
     from recoverage.server import LOOPBACK_HOSTS
 
-    if bind in LOOPBACK_HOSTS or allow_remote:
+    if bind in LOOPBACK_HOSTS:
         return None
-    return (
-        f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
-        "binary bytes and disassembly) to every reachable host on the network. "
-        "Pass --allow-remote (or RECOVERAGE_ALLOW_REMOTE=1) to confirm you want this."
-    )
+    if not allow_remote:
+        return (
+            f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
+            "binary bytes and disassembly) to every reachable host on the network. "
+            "Pass --allow-remote (or RECOVERAGE_ALLOW_REMOTE=1) to confirm you want this."
+        )
+    if not token:
+        return (
+            f"--bind {bind} with --allow-remote exposes the recoverage API "
+            "unauthenticated to every reachable host on the network, including "
+            "raw binary bytes and disassembly. "
+            "Pass --token (or RECOVERAGE_TOKEN) to require authentication, "
+            "or bind a loopback address (127.0.0.1) instead."
+        )
+    return None
 
 
 def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
@@ -1751,14 +1768,14 @@ def serve(
     # Every warning in this block goes to stderr, so a deployment that
     # captures stdout for the banner (tools/smoke.py, the harness) still
     # sees the half of the configuration that will not work.
-    refusal = _remote_bind_gate(bind, allow_remote)
+    refusal = _remote_bind_gate(bind, allow_remote, token)
     if refusal is not None:
         _secho(refusal, fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     is_remote = bind not in LOOPBACK_HOSTS
     if is_remote:
         _secho(
-            "warning: serving unauthenticated binary data on the network; "
+            "warning: serving authenticated binary data on the network; "
             "restrict access at the firewall.",
             fg=typer.colors.YELLOW,
             err=True,
@@ -2801,7 +2818,7 @@ def config_cmd(
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _snapshot_warnings(resolved.snapshots):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
-    refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
+    refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote, resolved.token)
     if refusal is not None:
         # The settings are already on stdout (the preflight data); the
         # refusal is the error, so in JSON mode it is the one stderr object

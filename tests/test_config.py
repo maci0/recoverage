@@ -1067,9 +1067,24 @@ class TestConfigCommand:
 
         monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
         monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
+        monkeypatch.setenv("RECOVERAGE_TOKEN", "test-token-1234567890")
         result = CliRunner().invoke(app, ["config", "--json"])
         assert result.exit_code == 0
         assert "allow-remote" not in result.output
+
+    def test_remote_bind_with_acknowledgment_but_no_token_exits_1(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--allow-remote without a token is still unauthenticated exposure."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 1
+        assert "token" in result.output.lower()
 
     def test_ipv6_wildcard_is_not_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`::` binds every interface, so it is refused exactly like
