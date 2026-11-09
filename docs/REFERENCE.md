@@ -336,8 +336,8 @@ Refuse when a backup directory has no fresh stamped backup. Exits 1 when
 the newest stamped archive is older than `--max-age-hours` (default 25),
 when the directory holds none, or when it does not exist, naming the
 directory and the age so a cron alert says where the backup was expected.
-Reads only the directory listing and mtimes; writes nothing and needs no
-`RECOVERAGE_SNAPSHOTS`.
+It also verifies the newest archive before reporting fresh; writes nothing
+and needs no `RECOVERAGE_SNAPSHOTS`.
 
 ```bash
 recoverage check-backup /srv/backups
