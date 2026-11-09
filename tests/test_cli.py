@@ -2011,6 +2011,25 @@ class TestBrowserOpenerSelection:
         assert launched == []
         assert fallback == ["http://127.0.0.1:8001/"]
 
+    def test_posix_opener_passes_no_creationflags(self, monkeypatch: Any) -> None:
+        """Popen raises ValueError for non-zero creationflags off Windows, so
+        passing it unconditionally would crash open_browser on every POSIX host."""
+        seen: dict[str, Any] = {}
+
+        class FakeProc:
+            def wait(self, timeout: float = 0) -> int:
+                return 0
+
+        def fake_popen(args: list[str], **kwargs: Any) -> FakeProc:
+            seen.update(kwargs)
+            return FakeProc()
+
+        monkeypatch.setattr(cli.os, "name", "posix")
+        monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+        assert cli._open_and_reap("http://127.0.0.1:8001/", ["xdg-open", "http://127.0.0.1:8001/"])
+        assert "creationflags" not in seen
+        assert seen.get("start_new_session") is True
+
 
 class TestServeServerWiring:
     def _capture_security(self, monkeypatch: Any) -> dict[str, Any]:

@@ -163,11 +163,13 @@ def cache_dir() -> Path | None:
     the ``LOCALAPPDATA`` directory ``Path.home()`` already resolves to.
     """
     raw = os.environ.get("XDG_CACHE_HOME", "")
-    # PureWindowsPath.is_absolute() answers for a Windows-shaped value on any host:
-    # a POSIX host's Path never treats "C:\..." as absolute, so an XDG value carried
-    # over from a Windows checkout would escape to a relative "C:\..." directory
-    # instead of falling back to the platform cache.
-    if raw and (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute()):
+    # A Windows-shaped absolute (drive or UNC) carried over from a Windows
+    # checkout is not absolute for the POSIX Path: taking it would create a
+    # relative "C:\..." directory under the cwd instead of falling back to
+    # the platform cache. PureWindowsPath names the drive, so a POSIX host
+    # ignores any value Windows would read as anchored to a drive/UNC root;
+    # a plain "/tmp/x" has no drive and stays valid on POSIX.
+    if raw and Path(raw).is_absolute() and not (os.name != "nt" and PureWindowsPath(raw).drive):
         base = Path(raw)
     else:
         try:

@@ -229,6 +229,15 @@ def test_a_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -
     assert documents.cache_dir() == expected / "recoverage" / "documents"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Path reads a drive value as relative")
+def test_a_windows_shaped_absolute_xdg_cache_home_is_ignored_on_posix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", r"C:\Users\test\AppData\Local")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert documents.cache_dir() == Path.home() / ".cache" / "recoverage" / "documents"
+
+
 def test_the_cache_keeps_the_most_recently_used_slots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

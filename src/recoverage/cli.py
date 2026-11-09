@@ -1238,9 +1238,11 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
             # Windows one carries `cmd /c start` itself.
             shell=False,
             start_new_session=(os.name == "posix"),
-            creationflags=_windows_detach_flags(),
+            # creationflags is Windows-only: Popen raises ValueError for a
+            # non-zero value on POSIX, so only pass it when Windows accepts it.
+            **({"creationflags": _windows_detach_flags()} if os.name == "nt" else {}),
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
         # Expected on minimal installs (no xdg-open/open); say why before
         # falling back — "no browser ever appeared" must be diagnosable from
         # the log alone instead of failing silently.
@@ -1384,9 +1386,7 @@ def _is_browser_origin(value: str) -> bool:
     return bool(parts.hostname)
 
 
-def _remote_bind_gate(
-    bind: str, allow_remote: bool, token: str | None = None
-) -> str | None:
+def _remote_bind_gate(bind: str, allow_remote: bool, token: str | None = None) -> str | None:
     """The refusal a network bind earns without the acknowledgment, else None.
 
     Shared by `serve` and `recoverage config`, because a preflight that
