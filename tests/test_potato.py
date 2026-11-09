@@ -1258,12 +1258,37 @@ def test_search_status_line_explains_an_empty_result():
     target = require_target()
     if not target:
         pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
-    hint = "Check the spelling, or search by address."
+    hint = "Check the spelling, or search by address. Use the form above to search again."
     empty = render_potato_url(f"/potato?target={target}&search=zzz_no_such_function")
     assert hint in empty
     assert "0 matches for &quot;zzz_no_such_function&quot;." in empty
     hit = render_potato_url(f"/potato?target={target}&search=_func_a")
     assert hint not in hit
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_function_list_empty_result_names_the_next_step():
+    """A list emptied by a search or a status criterion must say what to do next.
+
+    "No functions match ..." with only a [Clear search] left a reader whose
+    query matched nothing with no cue that the criterion, not the data, was
+    the cause — and no cue to check the spelling against the address form.
+    Rendered, so the row the reader reads carries the guidance.
+    """
+    target = require_target()
+    if not target:
+        pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
+    searched = render_potato_url(
+        f"/potato?target={target}&view=functions&search=zzz_no_such_function"
+    )
+    assert "No functions match" in searched
+    assert "Check the spelling, or search by address." in searched
+    assert "[Clear search]" in searched
+
+    filtered = render_potato_url(f"/potato?target={target}&view=functions&status=NO_SUCH_STATUS")
+    assert "No functions with status" in filtered
+    assert "Check the criterion, or clear it to list every function." in filtered
+    assert "[Clear filter]" in filtered
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")

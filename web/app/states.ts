@@ -178,13 +178,17 @@ export function isDimmed(
 
 /** What `dimSummary` says about each combination of the two armed rules: the
  * clause naming what dimmed the lattice, and the clause naming what undoes it.
- * Indexed by the one key each combination has. */
+ * Indexed by the one key each combination has. The undo clause names the
+ * control the reader presses ("All states" is the pill's own label, and a
+ * prose "turn off the status filter" is a hunt through the pill row for the
+ * one that unsets it); the caption's own "Clear filter" / "Clear search"
+ * buttons beside the sentence answer the same two actions in one click. */
 const DIM_CAUSE = {
-  filter: ["the status filter", "turn off the status filter"],
+  filter: ["the status filter", "press All states"],
   search: ["the search", "clear the search"],
   both: [
     "the status filter and the search",
-    "turn off the status filter and clear the search",
+    "press All states and clear the search",
   ],
 } as const satisfies Record<string, readonly [string, string]>;
 

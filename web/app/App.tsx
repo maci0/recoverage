@@ -114,7 +114,11 @@ function potatoUrl(state: {
 /** The guidance the search status adds after its count: no hits at all, none of
  * them in the section on screen, or what Enter will select. The list is named
  * only while it is on screen, since the reader closes it and the line keeps
- * counting. */
+ * counting. The next step is named in the same sentence as the result it
+ * answers: a bare "0 matches" with no guidance left the reader who had typed
+ * a term the map did not hold with no visible reason to press Enter or clear
+ * the box, and the line is the search's only summary while the dropdown is
+ * closed. */
 function searchHint(
   matches: number,
   sectionMatches: number | null,
@@ -122,7 +126,7 @@ function searchHint(
   resultsOpen: boolean,
 ): string {
   if (matches === 0) {
-    return ". Check the spelling, or search by address.";
+    return ". Check the spelling, or search by address. Press Enter to clear and try again.";
   }
   if (sectionMatches === 0) {
     return `, none in ${isolate(section ?? "this section")}. Press Enter to jump to the first.`;

@@ -1161,7 +1161,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         % if search_query:
         <tr><td colspan="4" valign="middle" nowrap><font size="2" color="{{ACCENT_COLOR}}">{{search_match_label}} for &quot;{{search_query}}&quot;{{"." if search_match_count == 0 else ""}}</font>
         % if search_match_count == 0:
-        <font size="2" color="{{MUTED_COLOR}}">Check the spelling, or search by address.</font>
+        <font size="2" color="{{MUTED_COLOR}}">Check the spelling, or search by address. Use the form above to search again.</font>
         % end
         <a href="{{clear_search_url}}"><font size="2" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
         % end
@@ -3117,6 +3117,7 @@ def _render_function_list(
             parts.append(
                 f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions match '
                 f"&quot;{_esc(search_query)}&quot;. "
+                f"Check the spelling, or search by address. "
                 f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear search]</font></a>'
                 "</font></td></tr>"
             )
@@ -3124,6 +3125,7 @@ def _render_function_list(
             parts.append(
                 f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions with status '
                 f"{_esc(status_filter)}. "
+                f"Check the criterion, or clear it to list every function. "
                 f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear filter]</font></a>'
                 "</font></td></tr>"
             )

@@ -1678,15 +1678,17 @@ class TestSpaDimmedMapSaysSo:
 
     def test_the_caption_names_the_rule_and_the_way_back(self) -> None:
         """Every combination names both, because the reader who has to act is
-        the one whose map went blank."""
+        the one whose map went blank. The way back names the control the
+        reader presses ("All states" is the pill's own label), not a prose
+        description of unsetting a filter."""
         states = _web("states.ts")
         for phrase in (
             "the status filter",
             "the search",
             "the status filter and the search",
-            "turn off the status filter",
+            "press All states",
             "clear the search",
-            "turn off the status filter and clear the search",
+            "press All states and clear the search",
         ):
             assert phrase in states, f"the caption cannot say {phrase!r}"
         # The all-dimmed arm is the one that used to be a dead end.
