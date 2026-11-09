@@ -139,11 +139,10 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   /* Type scale. Six body steps and four display steps, each visibly apart:
-     11 / 12 / 14 / 16 / 18 / 22, then 32 / 30-42 / 36-60 / 40-72. */
+     11 / 12 / 14 / 18 / 22, then 32 / 30-42 / 36-60 / 40-72. */
   --text-chip: 0.6875rem;
   --text-micro: 0.75rem;
   --text-data: 0.875rem;
-  --text-body: 1rem;
   --text-intro: 1.125rem;
   --text-lede: 1.375rem;
   --text-figure: 2rem;

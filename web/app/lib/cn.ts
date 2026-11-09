@@ -14,7 +14,7 @@ import { extendTailwindMerge } from "tailwind-merge";
 const twMerge = extendTailwindMerge({
   extend: {
     theme: {
-      text: ["chip", "micro", "data", "body", "intro", "lede", "figure", "title", "headline", "display"],
+      text: ["chip", "micro", "data", "intro", "lede", "figure", "title", "headline", "display"],
       radius: ["hair", "cell", "chip", "control", "action"],
       shadow: ["lift"],
       leading: ["display", "title", "snug", "body", "prose", "code"],
