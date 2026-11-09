@@ -136,22 +136,10 @@ _RETENTION_COUNT: Final = 30
 #: daily names its own threshold instead of inheriting this one.
 BACKUP_OVERDUE_HOURS: Final = 25
 
-#: Most bytes one member of an archive may hold, and most bytes an archive may
-#: hold in total.  A verify (and a restore, which verifies first) holds every
-#: member's bytes in memory, because that is what makes it one pass; the bound
-#: is therefore on the reader rather than on the writer.
-#:
-#: A tar header carries the member's length and the reader trusts it, so an
-#: archive a restore did not write — one an operator downloaded, or one produced
-#: by something else entirely — declares whatever size it likes and is read to
-#: that figure.  Unbounded, that is a member read into memory before any name
-#: or digest has been looked at, which is a denial of service against the
-#: command whose whole purpose is to be safe to run on a schedule.  One
-#: gigabyte is far above any real coverage directory (the documents are
-#: per-target TOML, and a large project's set is tens of megabytes), so the
-#: bound is a ceiling against a hostile archive rather than a limit a project
-#: reaches; raise it here, which is where the reader lives, rather than adding
-#: a knob the backup commands do not otherwise carry.
+#: Bounds for the reader vs archive a hostile archive could declare. Both
+#: cover DATA members only; ``manifest.json`` is excluded from both because
+#: it is the verifier's own metadata, not a payload, and counting it would
+#: refuse a legitimately-sized archive whose manifest pushes it over the cap.
 _MAX_MEMBER_BYTES: Final = 1 << 30
 _MAX_ARCHIVE_BYTES: Final = 1 << 30
 
@@ -644,15 +632,24 @@ def _prune_old_archives(archive_dir: Path) -> None:
 
     Only names this module writes (prefix+suffix+timestamp shape) are
     considered, so an operator's other files in the directory are never
-    removed.  Best-effort: a deletion failure is logged, not raised —
+    removed. Order is the stamped instant, not the lexicographic name:
+    ``_default_archive_path`` appends ``-2``..``-999`` for same-microsecond
+    collisions, so ``coverage-…000000Z-2.tar`` and ``coverage-…000000Z.tar``
+    share one instant and must not be ordered by name alone when pruning.
+    Best-effort: a deletion failure is logged, not raised —
     the new backup already verified and must not be reported as failed
     because the old ones could not be pruned.
     """
     try:
         candidates = sorted(
-            p
-            for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
-            if p.is_file() and not p.is_symlink() and _archive_stamp_instant(p.name) is not None
+            (
+                (instant, p.name, p)
+                for p in archive_dir.glob(f"{_ARCHIVE_PREFIX}*{_ARCHIVE_SUFFIX}")
+                if p.is_file()
+                and not p.is_symlink()
+                and (instant := _archive_stamp_instant(p.name)) is not None
+            ),
+            key=lambda pair: (pair[0], pair[1]),
         )
     except OSError as exc:
         _log.warning(
@@ -661,11 +658,16 @@ def _prune_old_archives(archive_dir: Path) -> None:
             str(exc),
         )
         return
-    for stale in candidates[:-_RETENTION_COUNT] if len(candidates) > _RETENTION_COUNT else []:
+    stale = (
+        [p for _instant, _name, p in candidates[:-_RETENTION_COUNT]]
+        if len(candidates) > _RETENTION_COUNT
+        else []
+    )
+    for stale_archive in stale:
         try:
-            stale.unlink()
+            stale_archive.unlink()
         except OSError as exc:
-            _log.warning("backup: cannot prune old archive %r: %r", str(stale), str(exc))
+            _log.warning("backup: cannot prune old archive %r: %r", str(stale_archive), str(exc))
 
 
 def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
@@ -723,11 +725,16 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
         # becomes the newest file in the backup directory, and a freshness
         # monitor reading mtime alone would call it fresh while it cannot
         # be restored. Remove it (best effort) so the directory holds only
-        # archives that were read back once.
+        # archives that were read back once. The directory fsync already
+        # happened inside ``_atomic_write`` before the name was published;
+        # this second fsync covers the removal.
         with contextlib.suppress(OSError):
             destination.unlink()
         _fsync_dir(destination.parent)
         raise
+    # Prune only after fsync+verify: retention deletes the oldest archives,
+    # so a crash before the new one's directory entry is durable must not
+    # have already discarded a previous good backup.
     _prune_old_archives(destination.parent)
     return info
 
@@ -769,6 +776,13 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
+                if member.name == MANIFEST_NAME:
+                    # The verifier's own metadata: bounded by json_depth_exceeds
+                    # below, not by the payload caps. A hostile manifest is
+                    # still held in memory, but it is one small JSON document
+                    # whose depth is checked before decode.
+                    declared.append(member)
+                    continue
                 if member.size < 0 or member.size > _MAX_MEMBER_BYTES:
                     raise BackupError(
                         f"{path}: member {member.name!r} declares {member.size} bytes, "
@@ -789,8 +803,15 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
                 # extractfile returns a file-like (ExFileObject) that is not
                 # closed by leaving the tar; closing it releases the archive's
                 # underlying descriptor on this cold CLI path per member.
+                # The manifest is read to its declared size (bounded by the
+                # depth check below, not the payload cap); payload members
+                # use the cap + 1 sentinel.
+                if member.name == MANIFEST_NAME:
+                    read_limit = member.size + 1
+                else:
+                    read_limit = _MAX_MEMBER_BYTES + 1
                 with handle:
-                    payload = handle.read(_MAX_MEMBER_BYTES + 1)
+                    payload = handle.read(read_limit)
                 # The header sized the read above; a member that delivers more
                 # than it declared is a truncated-then-appended stream, and
                 # taking only the declared count would verify a prefix of the

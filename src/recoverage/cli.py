@@ -2648,8 +2648,9 @@ def check_backup(
     when the newest stamped archive in DIRECTORY is older than
     --max-age-hours, when the directory holds none, or when it does not
     exist, naming the directory and the age so a cron alert says where the
-    backup was expected. It reads only the directory listing and mtimes;
-    it writes nothing and needs no RECOVERAGE_SNAPSHOTS selection.
+    backup was expected. It reads the newest archive's stamped instant
+    (not its mtime) and verifies that archive; it writes nothing and
+    needs no RECOVERAGE_SNAPSHOTS selection.
     """
     from recoverage.backup import BackupError, check_backup_freshness
 

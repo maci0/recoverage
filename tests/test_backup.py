@@ -394,6 +394,60 @@ class TestArchiveSizeBounds:
         with pytest.raises(BackupError, match="total limit"):
             verify_backup(wide)
 
+    def test_manifest_bytes_do_not_count_against_the_payload_caps(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Data members fitting the caps verify even though the manifest
+        would push the summed size over the total cap."""
+        monkeypatch.setattr(backup, "_MAX_MEMBER_BYTES", 1_000_000)
+        monkeypatch.setattr(backup, "_MAX_ARCHIVE_BYTES", 96)
+        covers = tmp_path / "caps.tar"
+        payload = b"x" * 32
+        with tarfile.open(covers, "w") as sink:
+            for index in range(3):
+                info = tarfile.TarInfo(f"coverage-{index}.toml")
+                info.size = len(payload)
+                sink.addfile(info, io.BytesIO(payload))
+            manifest = json.dumps(
+                {
+                    "format": FORMAT_VERSION,
+                    "created": "x",
+                    "members": [
+                        {
+                            "name": f"coverage-{i}.toml",
+                            "size": len(payload),
+                            "sha256": backup._digest(payload),
+                        }
+                        for i in range(3)
+                    ],
+                }
+            ).encode()
+            mi = tarfile.TarInfo(MANIFEST_NAME)
+            mi.size = len(manifest)
+            sink.addfile(mi, io.BytesIO(manifest))
+        verify_backup(covers)
+
+    def test_prune_orders_by_stamped_instant_not_name(self, tmp_path: Path) -> None:
+        """Same-microsecond neighbours (``-2`` suffix) prune by instant."""
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        stamped = []
+        for i in range(31):
+            # Formatted as _stamp does: date + HHMMSS + "." + 6-digit usec
+            name = f"{backup._ARCHIVE_PREFIX}20240101T000000.{i:06d}Z{backup._ARCHIVE_SUFFIX}"
+            p = backup_dir / name
+            p.write_bytes(b"x")
+            stamped.append(p)
+        tie = (
+            backup_dir
+            / f"{backup._ARCHIVE_PREFIX}20240101T000000.000000Z-2{backup._ARCHIVE_SUFFIX}"
+        )
+        tie.write_bytes(b"x")
+        backup._prune_old_archives(backup_dir)
+        remaining = sorted(p.name for p in backup_dir.iterdir())
+        assert len(remaining) == 30, remaining
+        assert stamped[30].name in remaining
+
     def test_a_duplicated_member_name_is_refused(self, tmp_path: Path) -> None:
         """Two members under one name are not resolved by picking the last."""
         data = b"second"
