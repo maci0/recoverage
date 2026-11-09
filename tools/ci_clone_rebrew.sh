@@ -31,12 +31,18 @@ fi
 export GIT_TERMINAL_PROMPT=0
 export GIT_LFS_SKIP_SMUDGE=1
 
-# -c outranks repo config and the clone template.  core.hooksPath=/dev/null is
-# not a directory, so git runs no hooks, and protocol.ext.allow=never refuses
-# ext:: remotes that would execute a helper.
+# -c outranks repo config and the clone template.  core.hooksPath is pointed at
+# an empty directory so git runs no hooks, and protocol.ext.allow=never refuses
+# ext:: remotes that would execute a helper.  The spelling is a directory that
+# exists on every platform this script runs on (POSIX, and Git Bash on
+# Windows): a /dev/null path is a file on POSIX and a drive-relative path on
+# Windows, where git warns that it is not a directory and may still run
+# hooks.  An empty hooks directory is the portable 'no hooks' value.
+HOOKS_EMPTY="$(mktemp -d)"
+trap 'rm -rf -- "$HOOKS_EMPTY"' EXIT
 git_safe=(
   -c core.fsmonitor=
-  -c core.hooksPath=/dev/null
+  -c core.hooksPath="$HOOKS_EMPTY"
   -c protocol.ext.allow=never
   -c core.sshCommand=ssh
   -c gpg.program=gpg

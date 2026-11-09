@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import logging
 import math
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PureWindowsPath
@@ -89,6 +90,18 @@ lazy from recoverage import clock
 lazy from recoverage.documents import COVERAGE_GLOB
 
 _log = logging.getLogger("recoverage")
+
+
+def _name_key(name: str) -> str:
+    """The case-folded identity of a flat member name: two spellings one name.
+
+    Archives are flat and restored flat, so two members whose names differ only
+    by case (or by an NFC/NFD spelling) are one file on a case-insensitive
+    filesystem and must be refused as a collision everywhere, not written
+    as two members that collide on the restore target.
+    """
+    return unicodedata.normalize("NFC", name).casefold()
+
 
 #: The manifest's own name inside the archive.  Every other member is named by
 #: :data:`COVERAGE_GLOB`, so a member that is neither is this one.
@@ -406,6 +419,7 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
     the night's good backup.
     """
     out: list[tuple[str, bytes]] = []
+    seen: dict[str, str] = {}
     for path in sorted(db_dir.glob(COVERAGE_GLOB)):
         try:
             data = path.read_bytes()
@@ -418,6 +432,17 @@ def _members(db_dir: Path) -> list[tuple[str, bytes]]:
         # refused by name rather than as a read error.
         if path.is_symlink():
             raise BackupError(f"coverage document {path} is a symlink; refusing to follow it")
+        # Two documents whose names differ only by case are one file on a
+        # case-insensitive filesystem (macOS APFS, Windows): the archive is
+        # flat, so a second member with the folded name would overwrite the
+        # first on restore. Refuse here rather than archive both.
+        key = _name_key(path.name)
+        if key in seen:
+            raise BackupError(
+                f"coverage documents {seen[key]!r} and {path.name!r} collide on a "
+                "case-insensitive filesystem; the archive names members once"
+            )
+        seen[key] = path.name
         out.append((path.name, data))
     return out
 
@@ -522,23 +547,23 @@ def _referenced_files(db_dir: Path, documents: list[tuple[str, bytes]]) -> list[
                 f"referenced file {candidate} (from {ref!r}) is not present in the "
                 f"snapshot directory {db_dir}; the archive would restore without it"
             )
-        if candidate.name in found:
+        key = _name_key(candidate.name)
+        if key in found:
             raise BackupError(
-                f"referenced files {found[candidate.name]} and {candidate} share one name; "
+                f"referenced files {found[key]} and {candidate} share one name; "
                 "the archive names members once and cannot carry both"
             )
-        found[candidate.name] = candidate
-    document_names = {name for name, _data in documents}
+        found[key] = candidate
+    document_names = {_name_key(name) for name, _data in documents}
     for name in found:
         if name in document_names:
             raise BackupError(
                 f"referenced file {name!r} collides with a coverage document of the same name"
             )
     out: list[tuple[str, bytes]] = []
-    for name in sorted(found):
-        path = found[name]
+    for _key, path in sorted(found.items(), key=lambda item: item[1].name):
         try:
-            out.append((name, path.read_bytes()))
+            out.append((path.name, path.read_bytes()))
         except OSError as exc:
             raise BackupError(f"cannot read referenced file {path}: {exc}") from exc
     return out
