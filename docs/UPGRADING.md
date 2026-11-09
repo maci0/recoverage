@@ -34,16 +34,29 @@ the next restart.
 
 ## [Unreleased]
 
-### Batch function lookup rejects unknown top-level fields
+### `POST /api/targets/<target>/functions` batch lookup rejects unknown top-level fields
 
 Before: `POST /api/targets/<target>/functions` silently ignored any
 top-level JSON key other than `vas`.
 
-After: any other top-level key is a 400 (`unknown fields: ...; expected
-only vas`).
+After: any other top-level key is a 400 with error `Body has unknown fields`
+and detail `unknown fields: ...; expected only vas`.
 
 Do: remove extra fields from the request body. A well-formed
 `{"vas": [...]}` body is unchanged.
+
+### A non-loopback bind now requires a token as well as acknowledgement
+
+Before: `--allow-remote` alone started an unauthenticated remote server.
+
+After: `cli._remote_bind_gate` refuses a non-loopback bind that lacks a
+token (exit 1 from both `serve` and `recoverage config`) even when
+`--allow-remote` is given. A remote bind requires BOTH `--allow-remote`
+and `--token` / `RECOVERAGE_TOKEN`.
+
+Do: pass `--token` (or set `RECOVERAGE_TOKEN`), or bind a loopback
+address (127.0.0.1) instead. An unauthenticated remote deployment no
+longer starts.
 
 ## [8.0.0]
 

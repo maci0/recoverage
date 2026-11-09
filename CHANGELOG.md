@@ -46,7 +46,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
-- `POST /api/targets/<target>/functions` batch lookup now answers 400 when the JSON body carries any top-level key other than `vas`; previously such keys were silently ignored. Callers sending extra fields must remove them.
+- `POST /api/targets/<target>/functions` batch lookup now answers 400 when the JSON body carries any top-level key other than `vas` (`Body has unknown fields` with detail `unknown fields: ...; expected only vas`); previously such keys were silently ignored. Callers sending extra fields must remove them.
 - A non-loopback bind with `--allow-remote` now requires `--token` (or `RECOVERAGE_TOKEN`) and exits 1 without one; previously `--allow-remote` alone started an unauthenticated remote server.
 
 ### Changed
