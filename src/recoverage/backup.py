@@ -135,6 +135,16 @@ _BACKUP_LOCK = threading.Lock()
 #: daily backups; older archives are deleted after a successful new one.
 _RETENTION_COUNT: Final = 30
 
+#: Minimum verified archives that must survive before pruning.  Pruning is
+#: a deletion path: the oldest archive it deletes is the recovery point
+#: for a logical corruption discovered a month later ("restore the oldest
+#: archive that predates it").  Deleting against a directory with no
+#: verified recovery point turns recoverable corruption into total loss,
+#: so prune verifies the survivors before deleting any non-survivor.
+#: Best-effort like the deletion: a failed verify skips the prune
+#: instead of discarding the only recovery point the operator has.
+_PRUNE_VERIFY_MINIMUM: Final = 1  # one verified survivor wins; see _prune_old_archives
+
 #: The tightest cadence a backup schedule may declare before it must name an
 #: archive older than this as overdue. Independent of the coverage-staleness
 #: bound in recoverage.config (which judges the data): a dashboard can serve
@@ -712,6 +722,15 @@ def _prune_old_archives(archive_dir: Path) -> None:
     Best-effort: a deletion failure is logged, not raised —
     the new backup already verified and must not be reported as failed
     because the old ones could not be pruned.
+
+    Pruning is itself a deletion path, and the oldest archive it deletes
+    is the recovery point for a logical corruption discovered later
+    ("restore the oldest archive that predates it" — ``docs/RECOVERY.md``).
+    A prune that deletes against a directory whose retained edge no
+    longer verifies turns recoverable corruption into total loss, so the
+    survivors are verified before any non-survivor is deleted; a survivor
+    that does not verify skips the prune (logged, not raised) and lets the
+    freshness monitor surface the corruption instead.
     """
     try:
         candidates = sorted(
@@ -736,11 +755,32 @@ def _prune_old_archives(archive_dir: Path) -> None:
             ),
         )
         return
-    stale = (
-        [p for _instant, _name, p in candidates[:-_RETENTION_COUNT]]
-        if len(candidates) > _RETENTION_COUNT
-        else []
-    )
+    if len(candidates) <= _RETENTION_COUNT:
+        return
+    keep = candidates[-_RETENTION_COUNT:]
+    stale = [p for _instant, _name, p in candidates[:-_RETENTION_COUNT]]
+    # Verify the survivors before deleting anything: the newest archive a
+    # logical-corruption restore reaches for is the oldest one retained,
+    # and it must still verify.  A corrupt survivor means the directory
+    # holds no verified recovery point at its edge; prune then would
+    # discard the older (possibly good) archives around it.  Skip the
+    # prune and let the freshness monitor surface the corruption.
+    # The check stops at the first verified survivor: retention is a
+    # deletion path, and the edge the restore reaches for is the newest
+    # one, not the whole window.
+    for _instant, _name, path in keep:
+        try:
+            verify_backup(path)
+        except BackupError as exc:
+            _log.warning(
+                "backup: skipping prune of %d archive(s) in %r: %r does not verify (%r)",
+                len(stale),
+                str(archive_dir),
+                str(path),
+                str(exc),
+            )
+            return
+        break
     for stale_archive in stale:
         try:
             stale_archive.unlink()

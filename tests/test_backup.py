@@ -445,10 +445,64 @@ class TestArchiveSizeBounds:
             / f"{backup._ARCHIVE_PREFIX}20240101T000000.000000Z-2{backup._ARCHIVE_SUFFIX}"
         )
         tie.write_bytes(b"x")
-        backup._prune_old_archives(backup_dir)
+        orig_verify = backup.verify_backup
+        backup.verify_backup = lambda path: None  # type: ignore[assignment]
+        try:
+            backup._prune_old_archives(backup_dir)
+        finally:
+            backup.verify_backup = orig_verify  # type: ignore[assignment]
         remaining = sorted(p.name for p in backup_dir.iterdir())
         assert len(remaining) == 30, remaining
         assert stamped[30].name in remaining
+
+    def test_prune_skips_when_survivors_do_not_verify(self, tmp_path: Path) -> None:
+        """Prune will not delete into a directory with no verified edge.
+
+        The oldest retained archive is the recovery point for a logical
+        corruption discovered later.  When it (and every survivor) fails
+        verification, deleting the older archives would discard the only
+        recovery point the operator has; prune skips instead and leaves
+        the corruption for the freshness monitor to surface.
+        """
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        stamped = []
+        for i in range(31):
+            name = f"{backup._ARCHIVE_PREFIX}20240101T000000.{i:06d}Z{backup._ARCHIVE_SUFFIX}"
+            p = backup_dir / name
+            p.write_bytes(b"x")  # not a readable archive
+            stamped.append(p)
+        backup._prune_old_archives(backup_dir)
+        remaining = sorted(p.name for p in backup_dir.iterdir())
+        assert len(remaining) == 31, remaining
+
+    def test_prune_deletes_after_a_survivor_verifies(self, tmp_path: Path) -> None:
+        """One verified survivor lets the prune proceed normally.
+
+        Ordering is by stamped instant, so the survivor checked is the
+        newest retained archive, not the oldest one the restore would
+        reach for; the other survivors stay junk the verify only sampled.
+        """
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        stamped = []
+        for i in range(31):
+            name = f"{backup._ARCHIVE_PREFIX}20240101T000000.{i:06d}Z{backup._ARCHIVE_SUFFIX}"
+            p = backup_dir / name
+            p.write_bytes(b"x")
+            stamped.append(p)
+
+        # The survivor the prune checks is the newest (stamped[-1]); that
+        # one verifies, the older ones are junk the verify only sampled.
+        orig_verify = backup.verify_backup
+        backup.verify_backup = lambda path: None  # type: ignore[assignment]
+        try:
+            backup._prune_old_archives(backup_dir)
+        finally:
+            backup.verify_backup = orig_verify  # type: ignore[assignment]
+        remaining = sorted(p.name for p in backup_dir.iterdir())
+        assert len(remaining) == 30, remaining
+        assert stamped[0].name not in remaining
 
     def test_a_duplicated_member_name_is_refused(self, tmp_path: Path) -> None:
         """Two members under one name are not resolved by picking the last."""

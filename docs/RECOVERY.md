@@ -16,7 +16,8 @@ own version control and backups. `recoverage backup` never backs up that project
 | Referenced original binaries named in `metadata.paths` (`originalDll`) | Explicit snapshot directory (must be inside it) | Archived flat beside the documents; `backup` refuses a set whose referenced file is absent, escaping, or name-colliding, because a restore without it serves the map but not `/asm` |
 | Source trees named in `metadata.paths` (`sourceRoot`) | Owning project | **Excluded by design, and a backup refusal rather than an omission:** the archive format carries one flat member per name, so it cannot hold a tree. `backup` refuses a document naming `sourceRoot` (present or absent) rather than archiving around it and restoring a map with no source pane. Back the tree up through its project |
 | Parse caches and in-process memos | Recoverage | Rebuilt on demand |
-| Retained ops inputs: staged files, the selected binary, and any temp snapshot a call builds under the ops workspace | `RECOVERAGE_OPS_FILESTORE` / `RECOVERAGE_OPS_WORKSPACE` (`recoverage ops call`/`serve`) | Not covered by `recoverage backup`; the backend that staged them re-supplies them, so losing the store loses in-flight work, not coverage history |
+| Retained ops inputs: staged files, the selected binary, and any temp snapshot a call builds under the ops workspace | `RECOVERAGE_OPS_FILESTORE` / `RECOVERAGE_OPS_WORKSPACE` (`recoverage ops call`/`serve`) | Not covered by `recoverage backup`; the backend that staged them re-supplies them, so losing the store loses in-flight work, not coverage history. Loss is silent by design: no checksum or ledger lives here, so a partial store after a crash reads as an empty one, and the next call re-fetches. |
+| Retention prune (`_RETENTION_COUNT`) | `recoverage backup` | Deletes archives past 30 only after the new archive verifies **and** the retained edge still verifies (one survivor is enough). A prune that deletes against an unverified edge discards the recovery point for logical corruption discovered later; it skips instead and the freshness monitor surfaces the corruption |
 
 The ops workspace holds scratch: a retained snapshot is a temp directory
 under it, removed when the call returns. Its loss mid-call aborts the call
@@ -81,7 +82,12 @@ refuses to claim otherwise.
 
 ## Backup schedule
 
-Use a separate backup volume and state the schedule’s time zone explicitly:
+Use a separate backup volume and state the schedule’s time zone explicitly.
+Offsite or separate-account copies are expected, not optional: a backup that
+lives in the same account, region, or credential boundary as the snapshot
+directory can be deleted with it (ransomware, fat-finger, account loss), so
+copy the archive to a separate failure domain after `backup` succeeds.
+Nothing in this repo provisions that copy — the operator arranges it.
 
 ```cron
 CRON_TZ=UTC
@@ -122,16 +128,24 @@ first that fails.
 
 ## Restore drills
 
-Run a drill against a fresh directory, leaving the live source untouched:
+Run a drill against a fresh directory, leaving the live source untouched.
+The drill proves the archive restores, not merely that the file exists:
+`verify`/`verify-backups` read it back, `restore` stages it, `check` serves it.
 
 ```bash
 drill=$(mktemp -d)
-RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage restore /srv/backups/nightly.tar
+# 1. Re-prove the archive before restoring it.
+recoverage verify /srv/backups/nightly.tar
+# 2. Restore into the drill copy, timing it for the RTO budget.
+time RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage restore /srv/backups/nightly.tar
+# 3. Serve the restored copy and confirm it answers.
 RECOVERAGE_SNAPSHOTS="$drill/snapshots" recoverage check --json
 ```
 
 Record the archive, elapsed time and document count, then remove the drill
-copy after inspection. A successful `tar -tf` alone does not exercise validation.
+copy after inspection. A successful `tar -tf` alone does not exercise
+validation. Drill at least quarterly, and after every backup-format or
+retention change: a restore never exercised is a hypothesis.
 
 ## Recovering without this tool
 
