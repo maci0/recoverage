@@ -473,6 +473,15 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
 #: full of exactly that.
 _REPO_MIN_COMPRESS_BYTES = 1024
 
+#: Cap for the per-request repo-file read in :func:`_serve_repo_file`: the
+#: read is bounded like the binary read in ``server.load_dll`` (stat check
+#: plus a capped read through the opened descriptor, ``_MAX_DLL_SIZE + 1``),
+#: so a file that grows between the stat and the read — or a hostile project
+#: tree carrying a multi-gigabyte ``.json``/``.js`` — is never materialised
+#: whole in memory on the request path. Past this bound bottle's
+#: ``static_file`` answers instead, which streams from disk.
+_REPO_MAX_COMPRESS_BYTES = 16 * 1024 * 1024
+
 #: The suffixes the repo-file route squeezes. The `src/<target>` tree is what
 #: the code panes download, whole, when a cell is selected, and it is text:
 #: brotli takes a 60 KB C file to roughly 12 KB, which is the difference
@@ -554,9 +563,18 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
     ):
         return _uncompressed()
     try:
-        if candidate.stat().st_size < _REPO_MIN_COMPRESS_BYTES:
+        size = candidate.stat().st_size
+        if size < _REPO_MIN_COMPRESS_BYTES or size > _REPO_MAX_COMPRESS_BYTES:
             return _uncompressed()
-        raw = candidate.read_bytes()
+        # Bounded read through the opened descriptor, mirroring
+        # ``server.load_dll``: the stat above bounds nothing a replacement
+        # between stat and read can return, so the read itself is capped
+        # at ``_REPO_MAX_COMPRESS_BYTES + 1`` and anything that grew past
+        # the bound falls through to bottle's streaming ``static_file``.
+        with candidate.open("rb") as fh:
+            raw = fh.read(_REPO_MAX_COMPRESS_BYTES + 1)
+        if len(raw) > _REPO_MAX_COMPRESS_BYTES:
+            return _uncompressed()
     except OSError as exc:
         # Vanished between the resolve above and the read: bottle's 404, which
         # is the answer the rest of the route already gives for a missing file.
