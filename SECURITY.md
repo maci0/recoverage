@@ -49,7 +49,11 @@ entry in the risk-ranked table in
 
 The bundled listener speaks no TLS, so a non-loopback deployment has no
 transport security either, and the token travels as a URL parameter. The model
-names that as risk 4. The share-link form is narrowed on the client side: `/`
+names that as risk 4. The auth cookie carries `Secure` only where the request
+itself arrived over TLS (`server.request_is_https`, `src/recoverage/server.py`,
+which since `6c1e580` reads `wsgi.url_scheme` alone and ignores
+client-supplied `X-Forwarded-Proto`); a TLS-terminating proxy must set
+`wsgi.url_scheme` itself. The share-link form is narrowed on the client side: `/`
 exchanges `?token=` for an HttpOnly cookie (`server.set_auth_cookie` in
 `src/recoverage/server.py`, named by symbol rather than by line) and the SPA
 then removes the parameter from
@@ -86,7 +90,13 @@ is the trust. It refuses to overwrite a document whose bytes differ unless
 leaves no marker in the served
 output, so a rollback and a rebuild are indistinguishable to a reader. Backup
 prune failures (`src/recoverage/backup.py`) are WARNING-logged; the restore
-itself is not logged through the package's logger. The model
+itself is not logged through the package's logger. Since `4117251`
+`write_backup`/`restore_backup` also take a cross-process advisory lock
+(`backup._backup_file_lock`, `src/recoverage/backup.py`), so a cron retry
+and a CLI run over the same directory converge instead of interleaving.
+`recoverage restore-drill ARCHIVE --into DIR` (`src/recoverage/cli.py`,
+`1bc9d11`) proves an archive restores into a fresh drill directory without
+touching the live snapshot directory. The model
 carries that as risks 12 and 13, boundary 9, and unmitigated 16 and 17;
 `docs/RECOVERY.md` carries the operational drill.
 
