@@ -519,12 +519,12 @@ else in the query string is ignored.
 | `/api/targets/<target>/functions` | `sort` | `va` | `va`, `name`, `size`, `status`, `symbol`, `module`, each optionally suffixed `:asc` or `:desc` | an unknown column or direction |
 | `/api/targets/<target>/functions` | `limit` | `50` | clamped to 1..500 | never; an unparseable value falls back to the default |
 | `/api/targets/<target>/functions` | `offset` | `0` | clamped to 0..10000000 | never; an unparseable value falls back to the default |
-| `/api/targets/<target>/asm` | `va` | required | hex with or without `0x`, or a decimal address | unparseable or outside the section |
+| `/api/targets/<target>/asm` | `va` | required | hex with or without `0x`, or a decimal address | unparseable (400) or outside the section (422) |
 | `/api/targets/<target>/asm` | `size` | required | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
 | `/api/targets/<target>/asm` | `section` | `.text` | one section name | an unknown name is a 404 |
 | `/api/targets/<target>/asm` | `format` | `text` | `text`, `json` | any other value |
-| `/api/targets/<target>/sections/<section>/bytes` | `offset` | `0` | decimal or `0x`-prefixed hex | negative or unparseable |
-| `/api/targets/<target>/sections/<section>/bytes` | `size` | `256` | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
+| `/api/targets/<target>/sections/<section>/bytes` | `offset` | `0` | decimal or `0x`-prefixed hex | negative or unparseable (400); past the section end (422) |
+| `/api/targets/<target>/sections/<section>/bytes` | `size` | `256` | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable (400); slice past the section end (422) |
 
 An enum the server does not have (`status`, `sort`, `format`, `index`) is a
 400: the caller asked for a value the server cannot honour, and answering 200
@@ -675,19 +675,20 @@ Query-parameter rules, the same on every endpoint:
   text. `size` is a byte count, decimal or 0x-prefixed, clamped to 4096.
 - `/sections/<section>/bytes` takes `offset` (default 0) and `size` (default
   256, clamped to 4096); both are decimal unless 0x-prefixed. A slice that
-  would run past the section end is a 400 naming the section's size.
+  would run past the section end is a 422 naming the section's size.
 - Both of those read the original binary, and a target whose binary is
   missing or has no `[targets.<id>].binary` in `rebrew-project.toml` is a 404
   (`DLL not found`, detail naming the key to add) whichever `format` you ask
   for. A 422 means the binary loaded and the requested window ran past its
-  end.
+  end, or the section has no file backing to slice.
 - `/functions` (list) takes `limit` (1..500, default 50) and `offset`
   (0..10000000, default 0). A numeric value outside its range is clamped, an
   unparseable one falls back to the default, and the response echoes the
   `limit` and `offset` actually used.
 - `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
   string (with or without `0x`) or an integer. The body must be under 64 KiB
-  (413) and the list non-empty (400). VAs with no match are omitted from the
+  (413), the list at most 500 entries (413) and non-empty (400). VAs with no
+  match are omitted from the
   response rather than reported as an error. A `Content-Type` header, if
   sent, must be `application/json` (or any `application/*+json`); anything
   else is a 415 `unsupported_media_type`. Omitting the header entirely is

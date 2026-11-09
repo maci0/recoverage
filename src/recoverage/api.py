@@ -1415,7 +1415,6 @@ def handle_api_events() -> Any:
             503,
             {
                 "error": "too many event-stream clients",
-                "code": "rate_limited",
                 "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
                 "retry_after": int(_SSE_POLL_INTERVAL_SECONDS),
             },
@@ -2575,7 +2574,7 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
         )
     if len(vas) > _MAX_BATCH_LOOKUP:
         return [], _json_err(
-            400,
+            413,
             {
                 "error": f"vas list too large (max {_MAX_BATCH_LOOKUP})",
                 "detail": f"received {len(vas)} entries",
@@ -2851,14 +2850,14 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
         if va is None:
             if va_candidates[0] < sec_va:
                 return _json_err(
-                    400,
+                    422,
                     {
                         "error": "va is before section start",
                         "detail": f"section {section!r} starts at va 0x{sec_va:x}",
                     },
                 )
             return _json_err(
-                400,
+                422,
                 {
                     "error": "va is beyond section end",
                     "detail": f"section {section!r} spans va 0x{sec_va:x}"
@@ -2884,7 +2883,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
             # foreign document carrying a negative offset would otherwise
             # slice from before the start of the file.
             return _json_err(
-                400,
+                422,
                 {
                     "error": "va is before section start",
                     "detail": f"section {section!r} maps va 0x{va:x} to file offset "
@@ -2988,7 +2987,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
         sec = _file_backed_section(coverage, section)
         if req_offset >= sec["size"]:
             return _json_err(
-                400,
+                422,
                 {
                     "error": "offset beyond section bounds",
                     "detail": f"offset {req_offset} is past the end of section "
@@ -2999,7 +2998,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
         # slice past the section's file range.
         if req_offset + req_size > sec["size"]:
             return _json_err(
-                400,
+                422,
                 {
                     "error": "offset+size beyond section bounds",
                     "detail": f"offset {req_offset} + size {req_size} exceeds section "
@@ -3021,7 +3020,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
             # empty `detail` is the one answer in this endpoint a caller cannot
             # act on, and here the actionable part IS the number.
             return _json_err(
-                400,
+                422,
                 {
                     "error": "offset beyond section bounds",
                     "detail": f"section {section!r} maps offset {req_offset} to "

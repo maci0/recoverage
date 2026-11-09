@@ -1148,14 +1148,14 @@ class TestApiAsmVaBoundaries:
         the section as if they were at va was the bug."""
         target = require_target()
         status, headers, body = self._asm(target, "va=0x10000F80&size=16")
-        assert status.startswith("400")
+        assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is before section start"
 
     def test_negative_va_rejected(self) -> None:
         target = require_target()
         status, headers, body = self._asm(target, "va=-0x10&size=16")
-        assert status.startswith("400")
+        assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is before section start"
 
@@ -1163,14 +1163,14 @@ class TestApiAsmVaBoundaries:
         """VA equal to sec_va + sec_size is the first out-of-bounds address."""
         target = require_target()
         status, headers, body = self._asm(target, "va=0x10002000&size=16")
-        assert status.startswith("400")
+        assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is beyond section end"
 
     def test_va_one_past_end_rejected(self) -> None:
         target = require_target()
         status, headers, body = self._asm(target, "va=0x10002001&size=16")
-        assert status.startswith("400")
+        assert status.startswith("422")
         # The message, not the 400: a guard that refused for the wrong
         # reason answers the same status code.
         data = json.loads(decode_body(body, headers))
@@ -1179,7 +1179,7 @@ class TestApiAsmVaBoundaries:
     def test_va_far_beyond_end_rejected(self) -> None:
         target = require_target()
         status, headers, body = self._asm(target, "va=0xFFFFFFFF&size=16")
-        assert status.startswith("400")
+        assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is beyond section end"
 
@@ -1450,19 +1450,19 @@ class TestApiBytes:
         assert data["offset"] == 8
 
     @pytest.mark.parametrize(
-        "query",
+        ("query", "status", "code"),
         [
-            "offset=-1&size=4",
-            "offset=abc&size=4",
-            "size=abc",
-            "offset=4096&size=4",  # >= section size (0x1000)
+            ("offset=-1&size=4", "400", "bad_request"),
+            ("offset=abc&size=4", "400", "bad_request"),
+            ("size=abc", "400", "bad_request"),
+            ("offset=4096&size=4", "422", "unprocessable_entity"),  # >= section size (0x1000)
         ],
     )
-    def test_bad_offset_or_size_400(self, query: str) -> None:
+    def test_bad_offset_or_size(self, query: str, status: str, code: str) -> None:
         status, headers, body = self._get(query)
-        assert status.startswith("400")
+        assert status.startswith(status)
         data = json.loads(decode_body(body, headers))
-        assert data["code"] == "bad_request"
+        assert data["code"] == code
 
     def test_oversized_size_is_clamped_not_fatal(self) -> None:
         """An over-long ?size= clamps, it does not truncate to whatever a
@@ -1532,9 +1532,9 @@ class TestApiBytes:
             {"va": 4096, "size": 4096, "fileOffset": -4096, "unitBytes": 16, "columns": 8},
         )
         status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=8&size=4")
-        assert status.startswith("400"), body
+        assert status.startswith("422"), body
         data = json.loads(decode_body(body, headers))
-        assert data["code"] == "bad_request"
+        assert data["code"] == "unprocessable_entity"
         assert data["error"] == "offset beyond section bounds"
         assert data["detail"], "a refusal with no reason is not actionable"
 
@@ -3691,14 +3691,15 @@ class TestBatchFunctionLookup:
         assert data["detail"] == "VAs must be hex strings or integers"
         assert len(data["error"]) < 200
 
-    def test_batch_too_many_vas_400(self) -> None:
+    def test_batch_too_many_vas_413(self) -> None:
         import recoverage.api as api
 
         target = require_target()
         vas = ["0x10001000"] * (api._MAX_BATCH_LOOKUP + 1)
         status, headers, body = self._post(target, json.dumps({"vas": vas}))
-        assert status.startswith("400")
+        assert status.startswith("413")
         data = json.loads(decode_body(body, headers))
+        assert data["code"] == "payload_too_large"
         assert str(api._MAX_BATCH_LOOKUP) in data["error"]
 
     def test_batch_va_past_the_address_space_is_reported_as_out_of_range(self) -> None:
@@ -7398,7 +7399,7 @@ class TestSliceValidationDetail:
         status, headers, body = wsgi_get(
             "/api/targets/FAKEDLL/sections/.text/bytes?offset=4096&size=4"
         )
-        assert status.startswith("400")
+        assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "offset beyond section bounds"
         assert ".text" in data["detail"]
