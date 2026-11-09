@@ -615,7 +615,7 @@ export function CoverageMap({
         // The map and the detail panel beside it share the action corner
         // and the hairline; two boxes in one row with different corners
         // read as two layouts.
-        className="grid max-w-full overflow-x-auto rounded-action border border-border bg-surface"
+        className="grid max-w-full overflow-x-auto rounded-hair border border-border bg-surface"
         id={`grid-${section.name.replaceAll(".", "")}`}
         data-cols={declaredColumns}
         // The canvas carries no accessible children, so this is a labelled

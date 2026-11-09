@@ -7552,6 +7552,31 @@ class TestSpaFirstPaint:
         assert declared, f"the token file names no {prefix} scale"
         assert sorted(re.findall(r'"([a-z]+)"', listed.group(1))) == sorted(declared)
 
+    def test_the_empty_stack_height_comes_from_the_palette_not_the_class(self) -> None:
+        """The empty map's measure is a palette value, not a Tailwind step.
+
+        The guidance line caps at one reading line (`max-w-empty`); a stock
+        `max-w-prose` stretch would run the short message to the panel's
+        full width and read as a wide card — the template-card look the bench
+        identity exists to avoid. The empty stack is the de-templated surface
+        where the height and rhythm are the deliberate choice, so its measure
+        is held against the palette rather than left to the class.
+        """
+        tokens = _web("system/tokens.css")
+        assert "--container-empty:" in tokens, "the empty stack names no palette measure"
+        app = _web("App.tsx")
+        assert app.count("max-w-empty") >= 3, "the empty stacks do not read the palette measure"
+        # The three stacks whose guidance line is the verb-led heading's own
+        # measure: no targets, a declared-but-empty target, and an empty
+        # section. The unreadable-document arms keep their wider list, so
+        # only those three are named here.
+        for marker in (
+            "No coverage available",
+            'No coverage data for <span className="font-mono">{target}</span>\n        </p>\n        <p className="m-0 max-w-empty">',
+            "No blocks in",
+        ):
+            assert marker in app, f"an empty stack lost its palette-measure read: {marker[:32]}"
+
 
 class TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8:
     """A target id is a FILENAME, and the SPA builds every request for one.

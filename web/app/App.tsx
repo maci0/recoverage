@@ -1582,9 +1582,9 @@ function MapArea({
   }
   if (noTargets) {
     return (
-      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
+      <div className="flex max-w-empty flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">No coverage available</p>
-        <p className="m-0 max-w-prose">
+        <p className="m-0 max-w-empty">
           Check the project configuration and target binaries, or the selected offline
           snapshots. Project input changes refresh the view automatically.
         </p>
@@ -1627,11 +1627,11 @@ function MapArea({
     // the next action that writes it — naming it is what gives the reader a
     // path onward instead of a dead end.
     return (
-      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
+      <div className="flex max-w-empty flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">
           No coverage data for <span className="font-mono">{target}</span>
         </p>
-        <p className="m-0 max-w-prose">
+        <p className="m-0 max-w-empty">
           {portable
             ? "This dashboard serves read-only portable snapshots, so this target cannot be built from here. Point the server at a live project to run the analysis."
             : "This target has no coverage yet — either its first build has not run, or this section holds no blocks. Use Regenerate to run the analysis now."}
@@ -1649,11 +1649,11 @@ function MapArea({
   // section exists and the emptiness is its content, not a missing build.
   if (active !== null && active.cells !== undefined && active.cells.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
+      <div className="flex max-w-empty flex-col items-start gap-2 border-t-2 border-border-strong px-1 py-6 text-data text-text-muted">
         <p className="m-0 text-intro font-semibold text-text">
           No blocks in <span className="font-mono">{active.name}</span>
         </p>
-        <p className="m-0 max-w-prose">
+        <p className="m-0 max-w-empty">
           This section exists for {target} but holds no coverage blocks.
           Pick another section tab, or check whether the build that wrote
           this target covered it.

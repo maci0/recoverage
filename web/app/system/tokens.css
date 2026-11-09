@@ -172,12 +172,22 @@
   /* Corners, ascending. A literal radius in a class is a rung this ladder does
      not have. The ladder stops at `action` (10px): a coverage instrument
      reads as a bench, not a card stack, so no rung above a control exists
-     to soft-bound a panel. */
+     to soft-bound a panel. Panels, the map and modal content therefore read
+     `radius-action` rather than `rounded-none`: the hairline takes the bench
+     corner, and the stock `rounded-md` the library default would have used
+     was never a choice this surface made. */
   --radius-hair: 1px;
   --radius-cell: 3px;
   --radius-chip: 5px;
   --radius-control: 9px;
   --radius-action: 10px;
+
+  /* The empty map's stack: one verb-led heading, one guidance line, one
+     action. The measure caps the guidance at a reading line so a short
+     message does not stretch to the panel's full width and read as a wide
+     card; the vertical padding is the pause that separates the state from
+     the column it sits in. */
+  --container-empty: 46ch;
 
   /* The one shadow: floating popovers only (search results, the code modal,
      the regen notice). Panels and the map take a border instead, never
