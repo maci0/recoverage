@@ -166,11 +166,14 @@ export async function fetchTargets(signal?: AbortSignal): Promise<TargetsPayload
   // `recoverage.api.handle_api_targets` pins to `{"targets": [...],
   // "unreadable": [...]}`.
   const body = await decodeJson<Partial<TargetsPayload>>(res, "GET /api/targets");
-  return {
+  const payload: TargetsPayload = {
     targets: body.targets ?? [],
     unreadable: body.unreadable ?? [],
-    ...(body.portable === undefined ? {} : { portable: body.portable }),
   };
+  if (body.portable !== undefined) {
+    payload.portable = body.portable;
+  }
+  return payload;
 }
 
 export async function fetchData(
@@ -441,9 +444,9 @@ export function newRegenKey(): RegenKey {
   if (crypto.randomUUID !== undefined) {
     return crypto.randomUUID();
   }
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function sendRegen(key: RegenKey): Promise<Response> {
