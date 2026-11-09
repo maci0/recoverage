@@ -1449,7 +1449,6 @@ export function App() {
               onGridReady={(focus) => {
                 gridFocus.current = focus;
               }}
-              onRegenerate={reload}
             />
           )}
           <ul
@@ -1562,7 +1561,6 @@ function MapArea({
   onGridReady,
   onClearFilters,
   onClearSearch,
-  onRegenerate,
 }: MapAreaProps): ComponentChildren {
   if (noTargets && unreadable.length > 0) {
     const one = unreadable.length === 1;
@@ -1646,8 +1644,6 @@ function MapArea({
         {!portable && (
           <Button size="sm" disabled={regenBusy} onClick={onRegenerate}>
             {regenBusy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
-          </Button>
-        )}
           </Button>
         )}
       </div>
