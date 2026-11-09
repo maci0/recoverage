@@ -669,6 +669,12 @@ export function CoverageMap({
           Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
           selects the block under the cursor, Escape closes the block that is open.
         </p>
+        {/* The pixel chunking is visual only; the block state is what a
+            screen reader is asked to judge. Chunked numbers here would
+            invent coverage no other view serves. */}
+        <p className="sr-only" role="note">
+          This map shows block states for the whole section.
+        </p>
         <p className="sr-only" role="status" aria-live="polite">
           {cursor}
         </p>
