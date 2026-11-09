@@ -230,6 +230,10 @@ jobs:
     needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -350,6 +354,14 @@ jobs:
           # no artifact attached.
           if-no-files-found: error
           retention-days: 30
+      # SLSA provenance for the wheel and sdist: a consumer can verify the
+      # artifact came from this commit without trusting the runner. The
+      # attestation requires the job's id-token and attestations permissions
+      # above; without them the step fails and the job goes red rather than
+      # shipping unattested.
+      - uses: actions/attest@e2dc94b522df6de90a4a87cec02e97ca01494a81 # v4.1.0
+        with:
+          subject-path: dist/*
 
   smoke:
     # Same gate as `build`: a smoke run boots the dashboard against a
@@ -403,6 +415,10 @@ jobs:
     # runs of one commit have to produce the same bytes for it to be diffable.
     env:
       PYTHONHASHSEED: "0"
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -513,3 +529,11 @@ jobs:
           # is the same silent gap this job exists to close.
           if-no-files-found: error
           retention-days: 30
+      # SLSA provenance for the SBOMs: they are security artifacts a scanner
+      # consumes, so their origin is as worth attesting as the wheel's.
+      - uses: actions/attest@e2dc94b522df6de90a4a87cec02e97ca01494a81 # v4.1.0
+        with:
+          subject-path: |
+            recoverage-python-sbom.txt
+            recoverage-browser-sbom.txt
+            recoverage-browser-spdx.json
