@@ -47,7 +47,7 @@ this command with its default settings.
 |------|---------|-------------|
 | `--port` | `8001` | HTTP port to serve on; `0` binds a free port and prints the one it got |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
-| `--allow-remote` / `--no-allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
+| `--allow-remote` / `--no-allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network; a remote bind also requires `--token` |
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Refresh the live project view before starting |
@@ -94,7 +94,8 @@ recoverage serve --no-open
 `USERPROFILE` it resolves against on Windows work as they do on POSIX.
 
 `RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
-it exits 1, whether the address came from the flag or the environment. Set
+it, or without a token, exits 1, whether the address came from the flag or
+the environment. Set
 against a loopback bind it does the opposite of what it says, so both `serve`
 and `recoverage config` warn: the dashboard stays reachable only from that
 machine, and a `systemctl stop` or `docker stop` reaches it.
@@ -131,7 +132,8 @@ not stopped by the unknown-name check, and they change nothing `serve` does.
 `recoverage serve` prints the settings it resolved on startup, with the token
 reported as `token=set`. `recoverage config` prints the same settings without
 binding a port, as `key=value` lines or `--json`, and ends the way `serve`
-ends: a non-loopback bind without `RECOVERAGE_ALLOW_REMOTE` exits 1, the CORS
+ends: a non-loopback bind without `RECOVERAGE_ALLOW_REMOTE` or without
+`RECOVERAGE_TOKEN` exits 1, the CORS
 and empty-coverage-directory warnings go to stderr, and the token is never
 printed. Use it as the preflight a unit file can gate on.
 

@@ -635,7 +635,7 @@ class TestHealthActiveConfig:
         assert data["config"] is None
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage database")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestHealthDbMtime:
     """/api/health's freshness stamp names the newest coverage document.
 
@@ -819,7 +819,7 @@ class TestHealthDbMtime:
         assert data["mtime_utc"] == (epoch + timedelta(seconds=data["mtime"])).isoformat()
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestApiTargets:
     """Test /api/targets returns target list."""
 
@@ -865,7 +865,7 @@ class TestApiTargets:
         assert real is not None
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestApiFunctions:
     @pytest.mark.parametrize("search", ["00401000", "0x00401000", "0x401000", "4198400"])
     def test_address_search_matches_padded_and_bare_forms(
@@ -1100,7 +1100,7 @@ class TestFunctionStatusVocabulary:
 # ── VA boundary validation (/asm endpoint) ─────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestApiAsmVaBoundaries:
     """handle_api_asm's VA window checks, exercised through the endpoint.
 
@@ -1309,7 +1309,7 @@ class TestApiAsmVaBoundaries:
         assert "zzz" in data["detail"]
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestApiAsm:
     """Test /api/targets/<target>/asm request validation via actual endpoint."""
 
@@ -1365,7 +1365,7 @@ class TestApiAsm:
 # ── Raw byte slices (/sections/<section>/bytes) ────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestApiBytes:
     """GET /api/targets/<t>/sections/<section>/bytes.
 
@@ -2160,7 +2160,7 @@ class TestServeBindFlag:
         assert "127.0.0.1" in help_text
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestLastVerify:
     """/functions/<va> attaches the last `rebrew verify -o` record.
 
@@ -3272,7 +3272,7 @@ class TestThreadingServer:
 # ── Batch function lookup ─────────────────────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestBatchFunctionLookup:
     """POST /api/targets/<target>/functions batch VA lookup."""
 
@@ -4140,7 +4140,7 @@ class TestCorsOriginAllowlist:
 class TestUnknownTarget:
     """Target-scoped endpoints 404 on unknown targets instead of empty 200s."""
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_stats_unknown_target_404(self) -> None:
         status, headers, body = wsgi_get("/api/targets/DOESNOTEXIST/stats")
         assert status.startswith("404")
@@ -4148,21 +4148,21 @@ class TestUnknownTarget:
         assert data["error"] == "Target not found"
         assert "DOESNOTEXIST" in data["detail"]
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_functions_unknown_target_404(self) -> None:
         status, headers, body = wsgi_get("/api/targets/DOESNOTEXIST/functions")
         assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "Target not found"
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_known_target_still_200(self) -> None:
         target = require_target()
         status, _, _ = wsgi_get(f"/api/targets/{target}/stats")
         assert status.startswith("200")
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestOfflineIgnoresConfiguredTargets:
     """A target declared in rebrew-project.toml but absent from coverage.db
     must stay addressable: _require_target counts config membership as valid
@@ -4244,7 +4244,7 @@ class TestPostResolveReadFailure:
     replaced between the stat and the parse) must keep the JSON 503 contract
     instead of surfacing Bottle's HTML 500."""
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage database")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_read_failure_returns_json_503(self, monkeypatch: Any) -> None:
         import recoverage.server as server_mod
 
@@ -6503,7 +6503,7 @@ class TestRepoFileCompression:
         assert _repo_file_type(".c") == "text/plain; charset=utf-8"
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestVaOverflowValidation:
     """VAs beyond SQLite's INTEGER range must be rejected (or cleanly miss),
     never reach sqlite3 as an OverflowError 500."""
@@ -7227,7 +7227,7 @@ class TestApiRoutingErrors:
 # ── /asm and /bytes validation detail ─────────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestSliceValidationDetail:
     """Every 400 from the two binary-slice endpoints names the offending
     parameter and its accepted range.
@@ -7452,7 +7452,7 @@ class TestSliceValidationDetail:
 # ── URL component decoding ─────────────────────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestUnicodeUrlComponents:
     """A target id or section name with a space or a non-ASCII character.
 
@@ -7547,7 +7547,7 @@ NFC_NAME = "caf\u00e9_render"
 NFD_NAME = "cafe\u0301_render"
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestSearchCaseFolding:
     """A name the operator can read must be findable by typing it.
 
@@ -7695,7 +7695,7 @@ class TestSearchCaseFolding:
         assert b"Check the spelling" not in body
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage database")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestLookupSnapshotsArePinned:
     """A function lookup route answers from ONE frozen CoverageSnapshot.
 
@@ -8028,7 +8028,7 @@ class TestDataSearchIndexOptOut:
             assert payload["error"] == "invalid index"
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestSectionFilterKeepsDocumentWhitespace:
     """``?section=`` is trimmed of ASCII whitespace only, like every term here.
 

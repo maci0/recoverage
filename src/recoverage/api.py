@@ -705,11 +705,9 @@ def _filtered_functions(
     target on every character typed for a set that cannot change until the next
     build.  *functions* is therefore already the marker-free set.
 
-    Search folds BOTH sides through :func:`server.fold_match`, over the same
-    four columns the SQL matched: the name, the symbol, the decimal VA text and
-    the ``vaStart`` hex spelling Potato Mode matches.  The old statement needed
-    two disjuncts — SQLite's ASCII-only ``LIKE`` plus an ``rc_fold`` arm — only
-    because the comparison happened in SQL; one folding in Python matches what
+    Search folds BOTH sides through :func:`server.fold_match`, over four
+    columns: the name, the symbol, the decimal VA text and the ``vaStart``
+    hex spelling Potato Mode matches.  One folding in Python matches what
     the SPA highlights, which is the guarantee the fuzz campaigns assert.
 
     *folded* is :func:`server.folded_row_columns` for *functions*, the three

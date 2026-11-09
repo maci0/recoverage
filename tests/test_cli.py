@@ -161,7 +161,7 @@ class TestColorOptOut:
         assert result.exit_code == 2, result.output
         assert "\x1b[" not in result.stderr
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_stats_table_honors_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`stats` renders through Rich, which detects NO_COLOR and TERM=dumb
         itself but cannot see the --no-color flag; the table is the widest
@@ -592,7 +592,7 @@ class TestStructuredFormatter:
 # ── Export command (actual CLI) ───────────────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestExportCommand:
     """Test the actual `export` CLI command output."""
 
@@ -719,7 +719,7 @@ class TestExportCommand:
 # ── Stats command ─────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestStatsCommand:
     def test_stats_runs(self) -> None:
         """The table is the deliverable, so read it: exit code 0 says only
@@ -844,7 +844,7 @@ def _write_sections(
     return write_coverage(directory, FIXTURE_TARGET, definitions)
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestCheckCommand:
     def test_check_with_zero_threshold(self) -> None:
         """0% threshold should always pass."""
@@ -1057,7 +1057,7 @@ class TestExportNoDb:
 # ── Export CSV (exercises recoverage's CSV writer) ─────────────────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestExportCsv:
     def test_csv_export_has_header_and_rows(self) -> None:
         """export --format csv must emit the header + one row per section."""
@@ -1314,7 +1314,7 @@ class TestExportCsvStdoutEncoding:
             monkeypatch.setattr(sys, "stdout", real_stdout)
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestCheckFailureExit:
     def test_below_threshold_exits_1(self) -> None:
         """A tracked section under the threshold must exit 1 (the CI gate's
@@ -1329,7 +1329,7 @@ class TestCheckFailureExit:
         assert any(r["status"] == "FAIL" for r in payload["results"])
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestStatsJson:
     def test_stats_json_output(self) -> None:
         """stats --json must emit a parseable list of per-target stat dicts."""
@@ -1562,7 +1562,7 @@ class TestJsonErrorEnvelope:
         assert result.stdout == ""
         assert self.MISSING in result.stderr
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
     def test_unknown_target_is_an_envelope(self) -> None:
         for argv in (
             ["stats", "--json", "--target", "no-such-target"],
@@ -1588,7 +1588,7 @@ class TestHelpMarkup:
         assert "``" not in result.output
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestStatsOutputStart:
     def test_first_target_heading_starts_the_output(self) -> None:
         """The first heading carried a leading newline no later heading did,
@@ -3008,7 +3008,7 @@ def _unicode_dir(tmp_path: Path) -> Path:
     return directory
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestExportStdoutEncoding:
     """The export must not inherit the locale's codec.
 

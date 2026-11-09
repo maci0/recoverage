@@ -1621,12 +1621,11 @@ def _section_summary(section: Any) -> dict[str, Any]:
 
 
 def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
-    """The ``summary`` blob ``build_db`` stored, rebuilt from the snapshot.
+    """The ``summary`` blob, rebuilt from the snapshot.
 
-    ``build_db`` took rebrew's catalog-grid summary, added one entry per
-    non-``.text`` section, and stored the result; the TOML writer stores the
-    facts and drops the blob, because every number in it is a pure function of
-    the cells and functions beside it.  The top level is the grid summary (the
+    The TOML writer stores the facts and drops the blob, because every number
+    in it is a pure function of the cells and functions beside it.  The top
+    level is the grid summary (the
     ``.text`` fallback the SPA and Potato read) and the section entries are
     :func:`_section_summary`, so a client sees the keys and the values it always
     did.
@@ -3021,11 +3020,10 @@ def _measure(value: Any) -> int | float | None:
 def _cell_json(cell: Cell) -> dict[str, Any]:
     """One coverage cell as the SPA and Potato Mode read it.
 
-    The optional keys are OMITTED rather than null, which is what the SQLite
-    reader this replaced emitted: `json_patch` removed a key whose patch value
-    was null, and every consumer reads them with a truthiness test, so absent
-    and null are the same thing to them.  Keeping the omission keeps the served
-    bytes of a multi-megabyte payload where they were.
+    The optional keys are OMITTED rather than null, and every consumer reads
+    them with a truthiness test, so absent and null are the same thing to
+    them.  Keeping the omission keeps the served bytes of a multi-megabyte
+    payload down.
     """
     obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
     obj["state"] = _plain(cell.state)
@@ -3041,11 +3039,10 @@ def _cell_json(cell: Cell) -> dict[str, Any]:
 def cells_json(cells: Sequence[Cell]) -> str:
     """One section's cells as a JSON array in spatial order.
 
-    The replacement for ``SECTION_CELLS_AGG_SQL``: a section's cells arrive in
-    spatial order (the writer sorts them), and the array is serialized once so
-    the response builder can splice the text instead of re-encoding it.
-    ``ensure_ascii=False`` matches the SQLite JSON functions, which emit UTF-8
-    rather than escapes.
+    A section's cells arrive in spatial order (the writer sorts them), and
+    the array is serialized once so the response builder can splice the text
+    instead of re-encoding it.  ``ensure_ascii=False`` emits UTF-8 rather
+    than escapes.
     """
     return json.dumps(
         [_cell_json(cell) for cell in cells], ensure_ascii=False, separators=(",", ":")
@@ -3055,10 +3052,8 @@ def cells_json(cells: Sequence[Cell]) -> str:
 def function_json(fn: Function) -> dict[str, Any]:
     """The function-detail object, one key per ``functions`` column.
 
-    The same names and the same order as ``build_db``'s ``json_object``
-    projection, including the two v6 columns (`updated_by`/`updated_at`) that
-    used to be added only when the database carried them: a coverage document
-    always carries every column, so the shape is the full one.
+    A coverage document always carries every column, so the shape is the
+    full one (including ``updated_by``/``updated_at``).
     """
     return {
         "va": fn.va,
@@ -3489,12 +3484,11 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
 def load_metadata(snap: CoverageSnapshot) -> dict[str, Any]:
     """The metadata the /data payload carries, rebuilt from the snapshot.
 
-    ``build_db`` wrote four metadata rows per target — ``db_version``, the
-    derived ``function_stats``, the catalog's ``summary`` blob and ``paths`` —
-    and the TOML writer stores the facts instead, so two of the four are
-    recomputed here (:func:`_summary`, :func:`coverage_version`) and the other
-    two (``function_stats``, which rebrew derives at load, and ``paths``) are
-    read straight off the document.
+    The TOML writer stores the facts, not the precomputed answers, so the
+    ``summary`` blob and ``db_version`` are recomputed here
+    (:func:`_summary`, :func:`coverage_version`), while ``function_stats``
+    (which rebrew derives at load) and ``paths`` are read straight off the
+    document.
     """
     return {
         "db_version": coverage_version(snap),

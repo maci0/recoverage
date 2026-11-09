@@ -534,7 +534,7 @@ TARGET_SEEDS = [
 ]
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestBatchLookupBody:
     """POST /api/targets/<t>/functions — the only endpoint that parses a
     whole attacker-supplied body (bounded read, JSON decode, per-entry VA
@@ -619,7 +619,7 @@ _NESTING_TOKENS = tuple(
 )
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestBatchBodyNesting:
     """POST bodies whose *nesting* is the payload, not their bytes."""
 
@@ -828,7 +828,7 @@ _CONTENT_TYPE_SEEDS = (
 )
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestBatchContentType:
     """A declared media type decides whether the body is read at all, so it
     is an input surface in its own right: a wrong answer is either a body
@@ -898,7 +898,7 @@ class TestBatchContentType:
             _assert_envelope(payload, str(code), path)
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestListQuery:
     """GET /functions — limit/offset go through int() and into sqlite3, where
     a value wider than 64 bits raises OverflowError (a raw 500)."""
@@ -933,7 +933,7 @@ def _query_value(query: bytes, key: str) -> str:
     return found
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestDataQuery:
     """GET /data — `section` names a row and `index` is a two-spelling flag.
 
@@ -986,7 +986,7 @@ def _limit_of(query: bytes) -> int | None:
     return None
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestSliceEndpoints:
     """GET /asm and GET /sections/<section>/bytes share the ?size= clamp and
     both feed a VA through rebrew's parse_va_candidates."""
@@ -1080,7 +1080,7 @@ def _size_of(query: bytes) -> int | None:
     return None
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestTargetSegment:
     """Every /api/targets/<target>/ route is keyed on a path segment that
     reaches SQL and the DLL path resolver.  Unicode, NUL, traversal and
@@ -2275,7 +2275,7 @@ _POTATO_500_BODY = potato._RENDER_ERROR_BODY
 _POTATO_REFLECTED = ("search", "target")
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestPotatoQuery:
     """GET /potato — nine query parameters parsed and re-rendered as HTML."""
 
@@ -3433,7 +3433,7 @@ class _FramedStream:
         return self._pos
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestChunkedBodyFraming:
     """``POST /api/targets/<t>/functions`` is the one route that reads a body
     with no ``Content-Length`` to check it against, so the reader parses the
@@ -3633,7 +3633,7 @@ def _names_served_etag(raw: str, etag: str) -> bool:
     return False
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestConditionalRequestComparison:
     """Every cacheable DB-derived endpoint answers revalidation through
     ``server._if_none_match_matches``, so a client-chosen header decides
@@ -4711,7 +4711,7 @@ _CONFIG_TOKENS = (
 )
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="no coverage documents")
 class TestProjectConfigDocument:
     """``rebrew-project.toml`` is the other untrusted document this package reads.
 

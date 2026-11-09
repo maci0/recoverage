@@ -91,10 +91,10 @@ def _clean_regen_gate() -> None:
 
 @pytest.fixture(autouse=True)
 def _clean_derived_caches() -> None:
-    """Drop every coverage.db-derived cache before each test.
+    """Drop every coverage-document-derived cache before each test.
 
-    Those caches are process globals keyed on nothing DB-specific, so a test
-    that re-points `coverage_source` at its own fixture database (the Potato Mode
+    Those caches are process globals keyed on nothing document-specific, so a test
+    that re-points `coverage_source` at its own fixture directory (the Potato Mode
     NULL-va cases do) leaves its rows behind for the next test: the resolved
     target list memoized the fixture's single target, and the next test's
     `/api/targets/<id>/...` came back 404 against a target the memo no longer
