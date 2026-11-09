@@ -27,7 +27,7 @@ lazy import json
 lazy from collections.abc import Callable
 lazy from wsgiref.types import InputStream
 
-from recoverage import config, metrics
+from recoverage import clock, config, metrics
 
 if TYPE_CHECKING:
     # _typeshed ships with mypy, not with CPython: the annotations below are
@@ -106,6 +106,13 @@ def on_listening(callback: Callable[[], None] | None) -> None:
     """
     global _ON_LISTENING
     _ON_LISTENING = callback
+
+
+#: Bound on DNS resolution for the listener.  ``getaddrinfo`` carries no
+#: timeout, so a wedged resolver parks startup before watcher, banner and
+#: listener exist; 5 seconds matches the opener's listen wait.
+_LISTEN_RESOLVE_TIMEOUT_SECONDS = 5.0
+_LISTEN_RESOLVE_POLL_SECONDS = 0.05
 
 
 def listen_family(host: str) -> socket.AddressFamily:

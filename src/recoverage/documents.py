@@ -166,7 +166,14 @@ def _stat_key(db_dir: Path) -> tuple[_StatKey, ...]:
     for path in db_dir.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _log.warning(
+                "coverage cache: cannot stat %s to build the change token: %s",
+                str(path),
+                exc.strerror or exc,
+            )
             continue
         entries.append((path.name, st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns))
     entries.sort()

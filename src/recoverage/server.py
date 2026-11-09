@@ -1186,12 +1186,19 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     for path in source.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
-        except OSError as exc:
+        except FileNotFoundError:
             _log.debug(
-                "coverage file %s vanished before its stat: %s: %s",
+                "coverage file %s vanished before its stat",
+                _log_safe(path.name),
+            )
+            continue
+        except OSError as exc:
+            _log.warning(
+                "cannot stat coverage file %s for the freshness stamp: %s: %s",
                 _log_safe(path.name),
                 type(exc).__name__,
                 _log_safe(str(exc)),
+            )
             )
             continue
         entries.append((path.name, st.st_mtime_ns, st.st_size))
