@@ -87,7 +87,7 @@ lazy import tempfile
 lazy from typing import Any, Final
 
 from recoverage.config import RecoError, json_depth_exceeds
-lazy from recoverage import clock
+lazy from recoverage import clock, metrics
 lazy from recoverage.documents import COVERAGE_GLOB
 
 _log = logging.getLogger("recoverage")
@@ -330,12 +330,30 @@ def _fsync_dir(path: Path) -> None:
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError as exc:
-        _log.warning("Cannot fsync directory %r for durability: %r", str(path), str(exc))
+        _log.warning(
+            "Cannot fsync directory %r for durability: %r",
+            str(path),
+            str(exc),
+            extra=metrics.log_fields(
+                event="backup_fsync_failed",
+                path=str(path),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
         return
     try:
         os.fsync(fd)
     except OSError as exc:
-        _log.warning("Cannot fsync directory %r for durability: %r", str(path), str(exc))
+        _log.warning(
+            "Cannot fsync directory %r for durability: %r",
+            str(path),
+            str(exc),
+            extra=metrics.log_fields(
+                event="backup_fsync_failed",
+                path=str(path),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
     finally:
         with contextlib.suppress(OSError):
             os.close(fd)
@@ -411,7 +429,16 @@ def _atomic_write(path: Path, data: bytes) -> None:
     try:
         tmp.unlink()
     except OSError as exc:
-        _log.warning("backup: cannot remove temp file %r after publish: %r", str(tmp), str(exc))
+        _log.warning(
+            "backup: cannot remove temp file %r after publish: %r",
+            str(tmp),
+            str(exc),
+            extra=metrics.log_fields(
+                event="backup_cleanup_failed",
+                path=str(tmp),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
     _fsync_dir(path.parent)
 
 
@@ -702,6 +729,11 @@ def _prune_old_archives(archive_dir: Path) -> None:
             "backup: cannot list archives in %r to prune old ones: %r",
             str(archive_dir),
             str(exc),
+            extra=metrics.log_fields(
+                event="backup_prune_failed",
+                path=str(archive_dir),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
         )
         return
     stale = (
@@ -713,7 +745,17 @@ def _prune_old_archives(archive_dir: Path) -> None:
         try:
             stale_archive.unlink()
         except OSError as exc:
-            _log.warning("backup: cannot prune old archive %r: %r", str(stale_archive), str(exc))
+            _log.warning(
+                "backup: cannot prune old archive %r: %r",
+                str(stale_archive),
+                str(exc),
+                extra=metrics.log_fields(
+                    event="backup_prune_failed",
+                    path=str(stale_archive),
+                    archive=stale_archive.name,
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+            )
 
 
 def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
@@ -1111,7 +1153,14 @@ def _newest_stamped_archive(directory: Path) -> Path | None:
         ]
     except OSError as exc:
         _log.warning(
-            "Cannot list backup directory %r for newest archive: %r", str(directory), str(exc)
+            "Cannot list backup directory %r for newest archive: %r",
+            str(directory),
+            str(exc),
+            extra=metrics.log_fields(
+                event="backup_list_failed",
+                path=str(directory),
+                error=f"{type(exc).__name__}: {exc}",
+            ),
         )
         raise BackupError(f"cannot list backup directory {directory}: {exc}") from exc
     stamped = [
@@ -1390,6 +1439,13 @@ def _restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list
                 shutil.rmtree(staging)
             except OSError as exc:
                 _log.warning(
-                    "Cannot remove restore staging directory %r: %r", str(staging), str(exc)
+                    "Cannot remove restore staging directory %r: %r",
+                    str(staging),
+                    str(exc),
+                    extra=metrics.log_fields(
+                        event="restore_cleanup_failed",
+                        path=str(staging),
+                        error=f"{type(exc).__name__}: {exc}",
+                    ),
                 )
     return written

@@ -304,6 +304,11 @@ class RequestStats:
                 if self._total
                 else None,
                 "slow": self._slow,
+                # The slow share of finished requests, beside error_rate:
+                # a latency regression reads as every request slow, not as
+                # an error spike, and the alert has to be tuned on the one
+                # number that moves.  ``None`` until the first timed request.
+                "slow_rate": round(self._slow / self._timed, RATE_DIGITS) if self._timed else None,
                 "in_flight": self._in_flight,
                 "stale_claims": self._stale_claims,
                 "transport_rejected": self._transport_rejected,

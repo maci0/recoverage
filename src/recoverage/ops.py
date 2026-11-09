@@ -52,7 +52,7 @@ lazy from rebrew.coverage_toml import CoverageTomlError
 lazy from rebrew.workspace import CONFIG_NAME
 
 from recoverage.config import RecoError, json_depth_exceeds
-lazy from recoverage import reporting
+lazy from recoverage import metrics, reporting
 lazy from recoverage._paths import project_override
 
 __all__ = [
@@ -746,7 +746,11 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
             f"recoverage refused {name} (exit {exc.exit_code})", code=ENGINE_ERROR
         ) from None
     except Exception:  # the engine is a trust boundary: log the cause, answer a fixed detail
-        _log.exception("%s failed", name)
+        _log.exception(
+            "%s failed",
+            name,
+            extra=metrics.log_fields(event="ops_failed", op=name),
+        )
         raise OpsError(f"{name} failed; the worker log has the cause") from None
 
 
@@ -770,7 +774,11 @@ def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
     except OpsError as exc:
         return exc.status, error_body(exc.code, str(exc), exc.status)
     except TypeError, ValueError:
-        _log.exception("%s produced a reply that is not JSON", name)
+        _log.exception(
+            "%s produced a reply that is not JSON",
+            name,
+            extra=metrics.log_fields(event="ops_invalid_reply", op=name),
+        )
         return 500, error_body(ENGINE_ERROR, f"{name} produced a reply that is not JSON", 500)
     if len(reply) > MAX_REPLY_BYTES:
         return 500, error_body(ENGINE_ERROR, f"reply exceeds {MAX_REPLY_BYTES} bytes", 500)
@@ -1030,6 +1038,11 @@ def serve_command(
                 _log.warning(
                     "Ops server shutdown: %d request(s) still active after 30s drain timeout",
                     server.active,
+                    extra=metrics.log_fields(
+                        event="ops_shutdown_drain_timeout",
+                        active_requests=server.active,
+                        drain_timeout_s=30,
+                    ),
                 )
         for _signum, _handler in _previous.items():
             signal.signal(_signum, _handler)

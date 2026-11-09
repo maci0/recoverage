@@ -28,7 +28,7 @@ from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
 from rich.theme import Theme
 
-from recoverage import clock, config, ops
+from recoverage import clock, config, metrics, ops
 from recoverage._paths import coverage_source
 from recoverage.config import parse_ascii_int
 from recoverage.devserver import (
@@ -1196,7 +1196,16 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
         try:
             proc.kill()
         except OSError as exc:
-            _log.warning("Browser opener pid %s could not be killed: %s", proc.pid, exc)
+            _log.warning(
+                "Browser opener pid %s could not be killed: %s",
+                proc.pid,
+                exc,
+                extra=metrics.log_fields(
+                    event="browser_opener_kill_failed",
+                    pid=proc.pid,
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+            )
     try:
         proc.wait(timeout=_BROWSER_OPEN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -1204,9 +1213,23 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
             "Browser opener pid %s did not exit within %.1fs of SIGKILL; leaving it unreaped",
             proc.pid,
             float(_BROWSER_OPEN_TIMEOUT_SECONDS),
+            extra=metrics.log_fields(
+                event="browser_opener_reap_timeout",
+                pid=proc.pid,
+                timeout_s=float(_BROWSER_OPEN_TIMEOUT_SECONDS),
+            ),
         )
     except OSError as exc:
-        _log.warning("Browser opener pid %s could not be reaped: %s", proc.pid, exc)
+        _log.warning(
+            "Browser opener pid %s could not be reaped: %s",
+            proc.pid,
+            exc,
+            extra=metrics.log_fields(
+                event="browser_opener_reap_failed",
+                pid=proc.pid,
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
 
 
 def _open_and_reap(url: str, args: list[str]) -> bool:
@@ -1259,9 +1282,22 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
             args[0],
             type(exc).__name__,
             exc,
+            extra=metrics.log_fields(
+                event="browser_opener_start_failed",
+                opener=args[0],
+                error=f"{type(exc).__name__}: {exc}",
+            ),
         )
         if not webbrowser.open(url):
-            _log.warning("webbrowser.open(%s): no usable browser found", url)
+            _log.warning(
+                "webbrowser.open(%s): no usable browser found",
+                url,
+                extra=metrics.log_fields(
+                    event="browser_opener_not_found",
+                    opener="webbrowser",
+                    url=url,
+                ),
+            )
             return False
         return True
     try:
@@ -1274,6 +1310,11 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
             args[0],
             type(exc).__name__,
             exc,
+            extra=metrics.log_fields(
+                event="browser_opener_wait_failed",
+                opener=args[0],
+                error=f"{type(exc).__name__}: {exc}",
+            ),
         )
         _kill_and_reap(proc)
     return True
@@ -1315,6 +1356,12 @@ def open_browser(url: str) -> bool:
             url,
             type(exc).__name__,
             exc,
+            extra=metrics.log_fields(
+                event="browser_opener_failed",
+                opener="webbrowser",
+                url=url,
+                error=f"{type(exc).__name__}: {exc}",
+            ),
         )
         return False
 

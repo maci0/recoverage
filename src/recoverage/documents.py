@@ -343,6 +343,11 @@ def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
                 "parsed on every start",
                 root,
                 exc.strerror or exc,
+                extra=metrics.log_fields(
+                    event="document_cache_write_failed",
+                    path=str(root),
+                    error=f"{type(exc).__name__}: {exc.strerror or exc}",
+                ),
             )
     finally:
         if tmp_name is not None:
@@ -392,7 +397,15 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
             # bug) must not make a good document read as unreadable: the TOML
             # is parsed instead, and its own error, if any, is the one reported.
             _log.warning(
-                "coverage cache: discarding the cached parse of %r: %r", str(path), str(exc)
+                "coverage cache: discarding the cached parse of %r: %r",
+                str(path),
+                str(exc),
+                extra=metrics.log_fields(
+                    event="document_cache_discarded",
+                    path=str(path),
+                    document=path.name,
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
             )
         else:
             metrics.CACHES.hit(metrics.DOCUMENT_CACHE)
@@ -550,7 +563,11 @@ def _rebuild(db_dir: Path, key: tuple[_StatKey, ...]) -> _State:
                 str(path),
                 reason,
                 extra=metrics.log_fields(
-                    event="document_unreadable", path=str(path), reason=reason
+                    event="document_unreadable",
+                    path=str(path),
+                    document=name,
+                    target=target,
+                    reason=reason,
                 ),
             )
             continue

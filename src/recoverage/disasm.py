@@ -207,7 +207,14 @@ def capstone_unavailable_reason() -> str | None:
                 # the class and message, and the request paths answer with
                 # this reason rather than a bare "not installed".
                 _probe_reason = f"{type(exc).__name__}: {exc}"
-                _log.warning("capstone is installed but unusable: %s", _probe_reason)
+                _log.warning(
+                    "capstone is installed but unusable: %s",
+                    _probe_reason,
+                    extra=metrics.log_fields(
+                        event="disassembly_unavailable",
+                        reason=_probe_reason,
+                    ),
+                )
             _probed = True
         return _probe_reason
 

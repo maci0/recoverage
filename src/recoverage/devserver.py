@@ -162,6 +162,12 @@ def listen_family(host: str) -> socket.AddressFamily:
             "DNS resolution for bind host %r timed out after %.1fs; using AF_INET",
             host,
             _LISTEN_FAMILY_TIMEOUT_SECONDS,
+            extra=metrics.log_fields(
+                event="dns_resolution_timeout",
+                host=host,
+                timeout_s=_LISTEN_FAMILY_TIMEOUT_SECONDS,
+                family="AF_INET",
+            ),
         )
         return socket.AF_INET
     if errors:
@@ -172,6 +178,12 @@ def listen_family(host: str) -> socket.AddressFamily:
                 host,
                 type(exc).__name__,
                 exc,
+                extra=metrics.log_fields(
+                    event="dns_resolution_failed",
+                    host=host,
+                    error=f"{type(exc).__name__}: {exc}",
+                    family="AF_INET",
+                ),
             )
             return socket.AF_INET
         raise exc
@@ -327,6 +339,12 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
             # and the saturation reading cannot be two numbers that disagree.
             metrics.CONNECTIONS.open,
             _MAX_CONNECTIONS,
+            extra=metrics.log_fields(
+                event="connection_admission_refused",
+                peer=((client_address[0] if client_address else "") or "unknown peer"),
+                open_connections=metrics.CONNECTIONS.open,
+                max_connections=_MAX_CONNECTIONS,
+            ),
         )
         self.shutdown_request(request)
 
@@ -467,6 +485,11 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
             "Transport rejected a request from %s: %r",
             self.address_string() or "unknown peer",
             format % args,
+            extra=metrics.log_fields(
+                event="transport_rejected",
+                peer=self.address_string() or "unknown peer",
+                reason=format % args,
+            ),
         )
         # Counted, because this line is the only trace and one rejection reads
         # like a misbehaving client while a scanner produces the same line

@@ -157,6 +157,10 @@ def _clear_derived_caches_logged(where: str) -> None:
         _log.exception(
             "Cache invalidation %s failed; derived data may be stale",
             where,
+            extra=_metrics.log_fields(
+                event="cache_invalidation_failed",
+                location=where,
+            ),
         )
 
 
@@ -1100,11 +1104,20 @@ def _db_watcher_loop(stop: threading.Event) -> None:
                     _broadcast_db_updated(snapshot)
                     last = snapshot
             except Exception:
-                _log.exception("DB watcher iteration failed; continuing to poll")
+                _log.exception(
+                    "DB watcher iteration failed; continuing to poll",
+                    extra=_metrics.log_fields(
+                        event="db_watcher_iteration_failed",
+                    ),
+                )
     except BaseException:
         _log.exception(
             "DB watcher stopped after an unhandled error; live reload is off "
-            "until the server restarts"
+            "until the server restarts",
+            extra=_metrics.log_fields(
+                event="db_watcher_stopped",
+                error="unhandled",
+            ),
         )
         raise
     _log.debug("DB watcher stopped on request")
@@ -1184,6 +1197,10 @@ def _stop_db_watcher() -> None:
                     "DB watcher did not stop within %.1fs; leaving it referenced "
                     "so no second poller starts alongside it",
                     _DB_WATCHER_JOIN_TIMEOUT,
+                    extra=_metrics.log_fields(
+                        event="db_watcher_stop_timeout",
+                        timeout_s=_DB_WATCHER_JOIN_TIMEOUT,
+                    ),
                 )
             else:
                 _DB_WATCHER_THREAD = None
@@ -1372,6 +1389,11 @@ def handle_api_events() -> Any:
             "Refusing /api/events: %d/%d streams already connected",
             connected,
             _SSE_MAX_CLIENTS,
+            extra=_metrics.log_fields(
+                event="sse_stream_refused",
+                connected=connected,
+                max_clients=_SSE_MAX_CLIENTS,
+            ),
         )
         return _json_err(
             503,
