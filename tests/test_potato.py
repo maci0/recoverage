@@ -1964,8 +1964,8 @@ def test_similarity_near_complete_does_not_render_as_100(
         ("0.5", None),
         (None, None),
         # Out of the 0..1 fraction range: judged here, never printed as
-        # "500.0%" / "-10.0%" (the SPA's similarityPct has no such guard;
-        # see test_server.py's similarity test, which pins the divergence).
+        # "500.0%" / "-10.0%" (the SPA's similarityPct holds the same guard;
+        # see test_server.py's similarity test).
         (-0.1, None),
         (1.1, None),
         (5, None),

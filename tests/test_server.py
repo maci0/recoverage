@@ -4526,13 +4526,9 @@ class TestSpaNumericBoundaries:
         of flooring (99.99% -> "100.0%"), or a locale formatter that dropped
         the bidi isolation would all pass them and render a wrong figure.
         The table below is the execution oracle: in-range fractions floor at
-        1dp, non-numbers and non-finite values are null. The known
-        divergence from Potato is pinned in the second half: the SPA has no
-        0..1 range guard, so an out-of-range stored fraction renders a
-        scaled percentage here while `potato._similarity_pct` returns None
-        for it — both surfaces agree on every in-range value and on every
-        non-number, and disagree only where the document spelled a fraction
-        that is not one.
+        1dp, non-numbers, non-finite values and out-of-range fractions are
+        null. The 0..1 guard matches `potato._similarity_pct`, so both
+        surfaces agree on every value the document can spell.
         """
         bun = shutil.which("bun")
         if bun is None:
@@ -4565,13 +4561,11 @@ class TestSpaNumericBoundaries:
                 check=False,
             )
         assert proc.returncode == 0, f"similarityPct harness failed: {proc.stdout} {proc.stderr}"
-        # Out-of-range fractions are scaled, not refused (no 0..1 guard here).
+        # Out-of-range fractions are refused (the 0..1 guard both surfaces hold).
         out_of_range = json.loads(proc.stdout)["outOfRange"]
-        for value, rendered in zip((-0.1, 1.1, 5), out_of_range, strict=True):
-            assert rendered is not None and f"{value * 100:.1f}%" in rendered, (
-                f"similarityPct({value}) = {rendered!r}: the divergence from "
-                "potato._similarity_pct (None for out-of-range) moved"
-            )
+        assert out_of_range == [None, None, None], (
+            f"similarityPct refused the wrong values: {out_of_range!r}"
+        )
 
     def test_the_search_row_the_box_names_cannot_be_off_the_list(self) -> None:
         """`aria-activedescendant` and Enter both name the row the arrows walked to.

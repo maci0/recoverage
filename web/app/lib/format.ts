@@ -39,12 +39,34 @@ export function errorMessage(error: unknown): string {
  * negative carries no width of its own, so the caller's supplies it, and -1 is
  * the 32-bit reading `0xffffffff` at width 8. Lowercase, as `server.hex_addr`,
  * Potato Mode and the disassembly print it, so one address reads one way on
- * every surface. */
+ * every surface.
+ *
+ * A non-finite value has no address: `Math.trunc(NaN).toString(16)` is `"NaN"`
+ * and `(-Infinity)` takes the two's-complement arm, where `BigInt(Infinity)`
+ * throws `RangeError: Not an integer` and takes the whole render down. The
+ * fallback is the width of zeros — the address this package prints for an
+ * absent one (`CoveragePanel`'s `fn.fileOffset ?? 0`) — so the column stays
+ * hex. A positive past the safe-integer bound (`Number.isSafeInteger`) has
+ * already lost digits to the double: `18446744073709551615` is
+ * `0x10000000000000000` by the time `toString(16)` sees it, which is not the
+ * value the document stored. Past that bound the two's-complement arm keeps
+ * the width the caller supplied, so a 64-bit image reads back the low bits
+ * the precision did not lose rather than a 17-digit widening. */
 export function hex(address: number, width: number): string {
   const digits = Math.max(1, width);
+  if (!Number.isFinite(address)) {
+    return `0x${"0".repeat(digits)}`;
+  }
+  const truncated = Math.trunc(address);
   // A negative needs the two's-complement reading, which only a BigInt holds
   // all 64 bits of; a positive needs none of that and keeps every digit it has.
-  const text = address < 0 ? twoComplement(address, digits) : Math.trunc(address).toString(16);
+  // Past the safe bound a positive also takes the arm: the width the caller
+  // supplies is 16 for a 64-bit image, and reading it at that width keeps the
+  // low bits instead of a 17th digit the double invented.
+  const text =
+    truncated < 0 || !Number.isSafeInteger(truncated)
+      ? twoComplement(truncated, digits)
+      : truncated.toString(16);
   return `0x${text.padStart(digits, "0")}`;
 }
 
@@ -58,7 +80,7 @@ export function hex(address: number, width: number): string {
  *  exponentiation, not a shift, and needs no exemption. */
 function twoComplement(address: number, digits: number): string {
   const mask = 2n ** BigInt(digits * 4) - 1n;
-  const truncated = BigInt(Math.trunc(address));
+  const truncated = BigInt(address);
   // oxlint-disable-next-line no-bitwise -- BigInt two's-complement; no arithmetic spelling of it holds all 64 bits
   return (truncated & mask).toString(16);
 }
@@ -77,8 +99,22 @@ const PERCENT_SLACK = 1e-9;
 /** A served percentage, floored and written the way the reader's locale writes
  * a decimal. `toFixed` would do neither: it rounds 99.99 up to "100.0", which
  * is the figure `server.coverage_pct` exists to keep off the page, and it emits
- * a `.` decimal separator to a reader whose locale writes a `,`. */
+ * a `.` decimal separator to a reader whose locale writes a `,`.
+ *
+ * A non-finite figure is document data (`server._plain` maps a stored
+ * non-finite float to `null`, but a served percentage that arrives as one
+ * still reaches here on the `coveragePercent` path): `NaN` floored is `NaN`,
+ * and `Infinity` rendered through `toLocaleString` is the locale's infinity
+ * glyph, which on an `ar-EG` reader is the same shape as a real figure. The
+ * write is the zero the other surfaces fall back on for an absent figure,
+ * so the column stays numeric. */
 export function percent1(percentage: number): string {
+  if (!Number.isFinite(percentage)) {
+    return (0).toLocaleString(undefined, {
+      minimumFractionDigits: PERCENT_DECIMALS,
+      maximumFractionDigits: PERCENT_DECIMALS,
+    });
+  }
   const floored = Math.floor(percentage * PERCENT_SCALE + PERCENT_SLACK) / PERCENT_SCALE;
   return floored.toLocaleString(undefined, {
     minimumFractionDigits: PERCENT_DECIMALS,
@@ -103,8 +139,16 @@ export function percentLabel(percentage: number): string {
   return isolate(`${percent1(percentage)}%`);
 }
 
-/** A count, grouped the way the reader's locale groups digits. */
+/** A count, grouped the way the reader's locale groups digits.
+ *
+ * A non-finite amount has no count: `NaN.toLocaleString()` is `"NaN"` and
+ * `Infinity` is the locale's infinity glyph, beside a sibling's real count.
+ * The write is the zero the other fallbacks use for an absent count, so the
+ * figure stays numeric. */
 export function count(amount: number): string {
+  if (!Number.isFinite(amount)) {
+    return (0).toLocaleString();
+  }
   return amount.toLocaleString();
 }
 
@@ -294,11 +338,17 @@ function readersClockAgreesWith(parsed: Date, literal: NaiveStamp): boolean {
  * a row reading `8,730.0%` where Potato omits the row entirely.  A bool is the
  * same shape (`true * 100 === 100`) and rendered as a real `100.0%`.  A value
  * this cannot scale is one the caller omits, which is what both surfaces do
- * for the same field. */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the declared `similarity?: number` is the caller's assumption; the value arrives from the coverage document with whatever width it spells, and narrowing it here is the point
+ * for the same field.
+ *
+ * Out of `0..1` is the same judgment: `5` scaled is `500.0%`, and a
+ * percentage that cannot describe a fraction is the false completion the
+ * flooring exists to keep off the page. Both surfaces now refuse it. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the boundary is exactly "whatever the coverage document carried", and the declared type is the caller's assumption, not this one
 export function similarityPct(fraction: unknown): string | null {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary is exactly "whatever the coverage document carried", and the declared type is the caller's assumption, not this one
   if (typeof fraction !== "number" || !Number.isFinite(fraction)) {
+    return null;
+  }
+  if (fraction < 0 || fraction > 1) {
     return null;
   }
   return percentLabel(fraction * 100);
@@ -471,10 +521,42 @@ export function isolate(documentText: string): string {
 
 /** VAs cross the API boundary as hex strings ("0x10001000") or plain numbers
  * (/functions/<va> emits a decimal number). Parse only strings as hex: routing
- * a number through parseInt(x, 16) reads its decimal digits as base-16. */
+ * a number through parseInt(x, 16) reads its decimal digits as base-16.
+ *
+ * The string arm must take the whole spelling or none of it. `parseInt` stops
+ * at the first non-hex character and returns the prefix: `"12.5"` gave `0x12`,
+ * `"1aZZ"` gave `0x1a`, and `"12.5"`/`"1aZZ"` are the spellings a hostile or
+ * truncated document carries. A VA that resolves to the wrong function is
+ * worse than one that resolves to none, so the arm is a full match:
+ * optional sign, optional `0x`, at least one hex digit, nothing else.
+ * Whitespace is at either end (the wire trims it), a `0x` after the sign is
+ * accepted (`"-0x1000"` is the sign, then the prefix), and an empty remainder
+ * after the prefix is not a VA. The sign on a negative VA is document data
+ * (`Function.va` may be negative); a positive past the safe bound has already
+ * lost digits to the double and is returned as the double the wire gave. */
 export function toVa(raw: string | number): number {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary contract is exactly "hex string | number"; decode here so no call site re-parses
-  return typeof raw === "string" ? Number.parseInt(raw, 16) : raw;
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  const text = trimSearch(raw);
+  if (text === "") {
+    return Number.NaN;
+  }
+  let sign = 1;
+  let body = text;
+  if (text.startsWith("-")) {
+    sign = -1;
+    body = text.slice(1);
+  } else if (text.startsWith("+")) {
+    body = text.slice(1);
+  }
+  const digitsText = body.startsWith("0x") || body.startsWith("0X") ? body.slice(2) : body;
+  if (digitsText === "" || !/^[0-9a-fA-F]+$/u.test(digitsText)) {
+    return Number.NaN;
+  }
+  const value = Number.parseInt(digitsText, 16);
+  return sign === -1 ? -value : value;
 }
 
 /** Note and blocker from the function's dedicated metadata row.
