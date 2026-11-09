@@ -1466,6 +1466,11 @@ def test_skip_link():
     target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="#grid-container"' in html
+    # The skip link's target is focusable, so activating it moves focus as
+    # well as the reading position (WCAG 2.4.1). A table is not focusable by
+    # default, which left focus on the link and the next Tab inside the
+    # topbar. tabindex="-1" makes it a programmatic destination only.
+    assert '<table id="grid-container" tabindex="-1"' in html
     # Inside the topbar frame, not above it: the link outside the page wrapper
     # was painted over the viewport's top edge with the header starting below
     # it. Potato Mode ships no stylesheet, so it cannot be hidden until focus
@@ -4897,7 +4902,7 @@ class TestRenderedPageNamesAndStates:
         functions = self._render(tmp_path, monkeypatch, "&view=functions")
         assert re.findall(r"<table(?![^>]*role=)[^>]*>", grid) == [
             (
-                '<table id="grid-container" border="1" cellpadding="8" cellspacing="0" '
+                '<table id="grid-container" tabindex="-1" border="1" cellpadding="8" cellspacing="0" '
                 f'bordercolor="{BORDER_COLOR}" bgcolor="{BG_COLOR}" width="100%">'
             ),
         ]

@@ -1204,7 +1204,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             </tr>
           % end
           </table>
-          <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%">
+          <table id="grid-container" tabindex="-1" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%">
           <!-- Labels the grid for the "[Skip to grid]" target, which lands here.
                It deliberately does NOT repeat the panel header directly above
                ("Coverage Map - {{section}} ({{block_count}} blocks)"): rendered
