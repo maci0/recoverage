@@ -258,7 +258,7 @@ def _stamp(now: float | None = None) -> str:
 
 def _created_stamp(now: float | None = None) -> str:
     """The manifest's ``created`` field: the same instant, ISO-8601."""
-    return _instant(now).isoformat()
+    return _instant(now).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _instant(now: float | None = None) -> datetime:
