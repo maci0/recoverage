@@ -78,8 +78,11 @@ def _get_zstd_compressor() -> zstd.ZstdCompressor:
 # The shared Bottle application.  Defined up front — above the helpers and
 # the auth/hooks section below — so a first top-down read of this module
 # finds its central object early: api.py/ui.py import it and mount routes on
-# it at import time; webapp.py composes both onto it.
-app = Bottle()
+# it at import time; webapp.py composes both onto it.  The explicit
+# ``Bottle`` annotation gives consumers of ``recoverage.app`` a named type
+# instead of ``Any`` (bottle ships no ``py.typed``, so without it mypy
+# infers the constructor as untyped).
+app: Bottle = Bottle()
 
 HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
