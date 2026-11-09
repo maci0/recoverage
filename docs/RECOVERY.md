@@ -152,7 +152,13 @@ retention change: a restore never exercised is a hypothesis.
 Archives are POSIX tar files containing flat members — the `coverage-<target>.toml` documents,
 any referenced original binaries (`originalDll`) the documents named, and `manifest.json`.
 They never carry a source tree (`sourceRoot`): a document naming one is a backup refusal,
-so an archive that exists was taken from a set with nothing to exclude. Extract into an
+so an archive that exists was taken from a set with nothing to exclude. They also flatten
+referenced binaries: a document naming a `metadata.paths` value with a path separator
+(such as `sub/blob.bin`) is archived under its basename (`blob.bin`), and the restore
+places it at the snapshot root. Recreating the original subdirectory by hand is not
+required for `recoverage` readers (the server resolves `originalDll` beside the
+restored documents), but a consumer that opens the value at its original relative path
+must copy the flat member back into that subdirectory first. Extract into an
 offline snapshot directory. The manifest records each member’s size and
 SHA256; verify those digests before serving restored data.
 
