@@ -453,6 +453,16 @@ refusals are the ones `ops call` prints, with the refusal status as the HTTP
 status. A retained request does not read its `project_dir` (it need not exist);
 the worker writes its private snapshots under the workspace.
 
+With `--otlp-endpoint URL` (or `RECOVERAGE_OTLP_ENDPOINT`, an `http(s)` URL without
+credentials; empty leaves export off) each `POST` exports one OTLP/HTTP server
+span to `URL/v1/traces`, resource `service.name=relumea-recoverage`, continuing
+the caller's `traceparent`. The span is named `POST /<op>` for a recoverage op
+and `POST /unknown` for anything else (a refusal before dispatch, an unknown
+op), with `http.request.method`, `http.route` and `http.response.status_code`;
+a 5xx marks it failed. A full export queue drops spans and a request never
+waits for the collector. The cluster collector derives the RED metrics from
+these spans. An invalid endpoint stops `serve` before it binds.
+
 A request is refused, with a JSON `{"error", "code", "detail", "status"}` on stdout and
 exit 2, when it is not JSON, names an unknown field, misses a required one, or
 names an op that does not exist. The `code` is the machine-readable key

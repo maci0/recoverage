@@ -7,6 +7,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `recoverage ops serve --otlp-endpoint` (or `RECOVERAGE_OTLP_ENDPOINT`, an
+  `http(s)` URL without credentials) exports one OTLP/HTTP server span per
+  request, `service.name=relumea-recoverage`, named `POST /<op>` (`POST /unknown`
+  for a refusal before dispatch or an unknown op) and continuing the caller's
+  `traceparent`. An invalid endpoint stops the server before it binds. Export is
+  off when the variable is unset.
 - `recoverage restore-drill` proves a backup archive restores into a fresh
   drill directory and that the restored set is readable, without touching
   the live snapshot directory or needing a `RECOVERAGE_SNAPSHOTS` selection.
@@ -55,7 +61,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   archive past 30. A corrupt survivor skips the prune (logged, not raised)
   instead of discarding the recovery point a logical-corruption restore
   would reach for; the freshness monitor surfaces the corruption instead.
-- Pin the verified Rebrew release to 6.23.1, the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; the retained tests no longer skip.
+- Pin the verified Rebrew release to 6.24.0 (6.23.1 was the first with `retained_target_snapshot`, `coverage_input_contract` and the trusted coverage types the retained ops use; 6.24.0 adds the span exporter `ops serve` uses).
 - Dependency ranges now carry an upper bound (`bottle>=0.13,<1`, `rich>=15.0.0,<16`, `capstone>=5.0,<6`, and the like), so a future major of a runtime dependency is not selected silently.
 - The sdist normalizer now clears the per-member PAX mtime headers, so two builds of one commit under the same `SOURCE_DATE_EPOCH` produce byte-identical archives.
 - A backup destination inside the coverage directory is refused, and a repeat write to an existing archive path is refused rather than overwriting the earlier backup.

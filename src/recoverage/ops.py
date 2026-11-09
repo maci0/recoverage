@@ -861,6 +861,9 @@ PORT_ENV = "RECOVERAGE_OPS_PORT"
 HOST_ENV = "RECOVERAGE_OPS_HOST"
 MIN_TOKEN_BYTES = 32
 
+#: ``service.name`` resource attribute of the spans ``serve`` exports.
+OTEL_SERVICE_NAME = "relumea-recoverage"
+
 #: Calls answered at once; the next is refused 503 with Retry-After.  A map call peaks near 115 MiB.
 DEFAULT_CONCURRENCY = 2
 
@@ -895,18 +898,29 @@ def serve_command(
         envvar="RECOVERAGE_OPS_ALLOWED_HOSTS",
         help="Comma-separated exact additional HTTP Host authorities, including ports",
     ),
+    otlp_endpoint: str = typer.Option(
+        "",
+        "--otlp-endpoint",
+        envvar="RECOVERAGE_OTLP_ENDPOINT",
+        help="OTLP/HTTP collector base URL for trace export; empty leaves export off",
+    ),
 ) -> None:
     """Serve POST /<op> over HTTP until interrupted or terminated.
 
     Every request needs Authorization: Bearer $RECOVERAGE_OPS_TOKEN.  --workspace
     is required: every project path a request names must lie inside it, and the
-    retained snapshots a call builds are written under it.
+    retained snapshots a call builds are written under it.  With --otlp-endpoint,
+    each POST exports one server span (``POST /<op>``) continuing the caller's
+    traceparent to that OTLP/HTTP collector.
     """
     import os
     import signal
     import threading
 
     from rebrew import ops as rebrew_ops
+    from rebrew import telemetry
+
+    from recoverage import __version__
 
     from recoverage import config as _config
 
@@ -1023,7 +1037,27 @@ def serve_command(
         )
         raise typer.Exit(EXIT_ERROR)
 
+    endpoint = otlp_endpoint.strip()
+    try:
+        stop_telemetry = (
+            telemetry.configure(endpoint, OTEL_SERVICE_NAME, __version__)
+            if endpoint
+            else lambda: None
+        )
+    except ValueError:
+        typer.secho(
+            "Error: RECOVERAGE_OTLP_ENDPOINT must be an http(s) URL without credentials",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR) from None
+
     def answer(config: rebrew_ops.WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
+        # rebrew names the server span from its own op set: ours would all read "POST /unknown".
+        opened = telemetry.current()
+        if opened is not None and name in OPS:
+            opened.name = f"POST /{name}"
+            opened.set("http.route", f"/{name}")
         return dispatch(worker, name, body)
 
     # rebrew's handler calls its module-level dispatch for every POST; this process serves only
@@ -1069,5 +1103,6 @@ def serve_command(
                         drain_timeout_s=30,
                     ),
                 )
+        stop_telemetry()
         for _signum, _handler in _previous.items():
             signal.signal(_signum, _handler)
