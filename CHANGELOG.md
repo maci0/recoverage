@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A coverage document whose cell runs past the end of its section (`end > size`, offsets into the section as Rebrew's grid writes them) is refused as unreadable. 8.11.0 checked only the cell's length, so a cell written as an address (offset plus the section's va) was read, and `ops.py`, which adds the section's va to every cell, looked at bytes outside the section. The test documents that wrote cells as addresses now write offsets.
+
 ## [8.11.0] - 2026-11-10
 
 ### Changed

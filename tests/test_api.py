@@ -655,7 +655,7 @@ class TestHealthDbMtime:
         write_coverage(
             directory,
             "FRESH",
-            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0, 16, "exact")]}},
         )
         monkeypatch.setattr(api, "coverage_source", lambda: directory)
         monkeypatch.setattr(server_mod, "coverage_source", lambda: directory)
@@ -682,7 +682,7 @@ class TestHealthDbMtime:
         other = write_coverage(
             directory,
             "OTHER",
-            {".text": {"va": 0x2000, "size": 16, "cells": [cell(0x2000, 0x2010, "exact")]}},
+            {".text": {"va": 0x2000, "size": 16, "cells": [cell(0, 16, "exact")]}},
         )
         os.utime(other, ns=(new_ns, new_ns))
         status, headers, body = wsgi_get("/api/health")
@@ -963,7 +963,7 @@ class TestApiFunctions:
         first = _snapshot_mapping(
             tmp_path / "one",
             "GAME",
-            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0, 16, "exact")]}},
             functions=[
                 {"va": va, "name": name, "vaStart": hex(va), "size": 16, "status": "EXACT"}
                 for va, name in ((0x1000, "_a"), (0x1010, "_b"), (0x1020, "_c"))
@@ -972,7 +972,7 @@ class TestApiFunctions:
         second = _snapshot_mapping(
             tmp_path / "two",
             "GAME",
-            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0, 16, "exact")]}},
             functions=[{"va": 0x1000, "name": "_only", "vaStart": "0x1000", "size": 16}],
         )
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(coverage_dir(tmp_path / "one")))
@@ -2755,7 +2755,7 @@ class TestSseEvents:
         write_coverage(
             directory,
             "GAME",
-            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0, 16, "exact")]}},
         )
         monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(directory))
         before = api._snapshot_db_mtime()
@@ -4410,23 +4410,21 @@ def _game_coverage(
     cells: tuple[tuple[str, int, int, str], ...] = (),
     functions: tuple[dict[str, Any], ...] = (),
     globals_: tuple[dict[str, Any], ...] = (),
-    *,
-    sections: dict[str, dict[str, Any]] | None = None,
 ) -> Path:
     """Write a ``GAME`` coverage document and return the coverage DIRECTORY.
 
     The SQLite era built a schema-gate-valid database here; the reader takes a
     document now, so the same fixture is a ``coverage-GAME.toml``.  *cells* is
     the compact ``(section, start, end, state)`` tuple list the old helper
-    seeded: a section named only there gets a row anchored at its first cell.
+    seeded, in addresses: each section is anchored at its first cell and runs
+    to its last cell's end, and the document stores the cells as offsets from
+    that anchor, as rebrew writes them.
     """
-    built: dict[str, dict[str, Any]] = {
-        name: {**definition, "cells": list(definition.get("cells", []))}
-        for name, definition in (sections or {}).items()
-    }
+    built: dict[str, dict[str, Any]] = {}
     for section_name, start, end, state in cells:
-        row = built.setdefault(section_name, {"va": start, "size": end - start, "cells": []})
-        row["cells"].append(cell(start, end, state))
+        row = built.setdefault(section_name, {"va": start, "size": 0, "cells": []})
+        row["size"] = max(row["size"], end - row["va"])
+        row["cells"].append(cell(start - row["va"], end - row["va"], state))
     directory = coverage_dir(tmp_path)
     write_coverage(
         directory,
@@ -6113,8 +6111,8 @@ class TestServedCellsComeFromTheSnapshot:
                     "unitBytes": 16,
                     "columns": 8,
                     "cells": [
-                        cell(0x1000, 0x1004, "exact", functions=("f",)),
-                        cell(0x1004, 0x1008, "padding"),
+                        cell(0, 4, "exact", functions=("f",)),
+                        cell(4, 8, "padding"),
                     ],
                 },
                 ".data": {
@@ -6123,7 +6121,7 @@ class TestServedCellsComeFromTheSnapshot:
                     "fileOffset": 0x1200,
                     "unitBytes": 16,
                     "columns": 8,
-                    "cells": [cell(0x2000, 0x2004, "none")],
+                    "cells": [cell(0, 4, "none")],
                 },
             },
         )
@@ -7519,8 +7517,8 @@ class TestUnicodeUrlComponents:
                     "unitBytes": 16,
                     "columns": 8,
                     "cells": [
-                        cell(0x10003000, 0x10003010, "exact"),
-                        cell(0x10003010, 0x10003020, "none"),
+                        cell(0, 16, "exact"),
+                        cell(16, 32, "none"),
                     ],
                 }
             },
@@ -7613,10 +7611,7 @@ class TestSearchCaseFolding:
                     "fileOffset": 0x300,
                     "unitBytes": 16,
                     "columns": 8,
-                    "cells": [
-                        cell(0x10003000 + i * 16, 0x10003000 + (i + 1) * 16, "exact")
-                        for i in range(3)
-                    ],
+                    "cells": [cell(i * 16, (i + 1) * 16, "exact") for i in range(3)],
                 }
             },
             # The NFD row is what a macOS-side tool writes; the user pastes the
@@ -7769,7 +7764,7 @@ class TestLookupSnapshotsArePinned:
                         "fileOffset": 0x200,
                         "unitBytes": 16,
                         "columns": 8,
-                        "cells": [cell(0x1000, 0x1010, "exact", functions=(build["name"],))],
+                        "cells": [cell(0, 16, "exact", functions=(build["name"],))],
                     }
                 },
                 functions=[
@@ -8097,8 +8092,8 @@ class TestSectionFilterKeepsDocumentWhitespace:
                     "unitBytes": 16,
                     "columns": 2,
                     "cells": [
-                        cell(0x10003000, 0x10003010, "exact"),
-                        cell(0x10003010, 0x10003020, "none"),
+                        cell(0, 16, "exact"),
+                        cell(16, 32, "none"),
                     ],
                 }
             },

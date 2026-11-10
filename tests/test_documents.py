@@ -347,6 +347,35 @@ def test_an_unreadable_document_is_reported_by_name_and_reason(db: Path) -> None
     assert documents.unreadable(db) == ()
 
 
+@pytest.mark.parametrize(
+    ("cells", "reason"),
+    [
+        # Written as an address (va 0x1000 plus offset 0), the cell starts past the section.
+        ([cell(0x1000, 0x1010, "exact")], "runs past the end of section '.text' (16 bytes)"),
+        ([cell(8, 17, "exact")], "runs past the end of section '.text' (16 bytes)"),
+        ([cell(8, 4, "exact")], "in section '.text' is reversed"),
+    ],
+)
+def test_a_cell_outside_its_section_makes_the_document_unreadable(
+    db: Path, cells: list[dict[str, Any]], reason: str
+) -> None:
+    write_coverage(db, "BROKEN", {".text": {"va": 0x1000, "size": 16, "cells": cells}})
+
+    assert sorted(documents.load_all(db)) == ["GAME", "TOOL"]
+    [(name, target, why)] = documents.unreadable(db)
+    assert (name, target) == ("coverage-BROKEN.toml", "BROKEN")
+    assert reason in why
+
+
+def test_a_cell_ending_at_the_section_end_is_read(db: Path) -> None:
+    write_coverage(
+        db, "EDGE", {".text": {"va": 0x1000, "size": 16, "cells": [cell(0, 16, "exact")]}}
+    )
+
+    assert sorted(documents.load_all(db)) == ["EDGE", "GAME", "TOOL"]
+    assert documents.unreadable(db) == ()
+
+
 def test_a_deeply_nested_document_is_reported_unreadable_not_a_crash(db: Path) -> None:
     """Deeply-nested TOML is a malformed document, not a 500."""
     depth = 600

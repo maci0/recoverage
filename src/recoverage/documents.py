@@ -412,27 +412,26 @@ def _parse_toml(path: Path, data: bytes, digest: str) -> dict[str, Any]:
 
 
 def _check_cells(path: Path, snapshot: CoverageSnapshot) -> CoverageSnapshot:
-    """*snapshot* with no cell longer than its section, else ``CoverageTomlError``.
+    """*snapshot* with every cell inside its section, else ``CoverageTomlError``.
 
-    A cell's ``start``/``end`` are offsets into its section (``ops.py`` adds
-    ``section.va`` to them; ``end`` is exclusive, ``Cell.size`` is ``end - start``).
-    Rebrew reads the rows without a bound check, so a cell longer than its whole
-    section (a corrupt or hand-edited file) is refused here as unreadable rather
-    than folded into every snapshot-keyed route.  A section whose size the
-    catalog did not record reads as 0 and bounds nothing.
+    A cell's ``start``/``end`` are offsets into its section (rebrew's grid builds
+    them from section offsets; ``ops.py`` adds ``section.va`` to them; ``end`` is
+    exclusive, ``Cell.size`` is ``end - start``).  Rebrew reads the rows without a
+    bound check, so a cell past its section's end (a corrupt or hand-edited file,
+    or one that wrote addresses) is refused here as unreadable rather than folded
+    into every snapshot-keyed route.  A section whose size the catalog did not
+    record reads as 0 and bounds nothing.
     """
-    # ponytail: length only. The position check (end <= size) waits for the test
-    # documents that still write cells as addresses to be rewritten as offsets.
     for name, section in snapshot.sections.items():
         for cell in section.cells:
             if cell.start < 0 or cell.end < cell.start:
                 raise CoverageTomlError(
                     f"{path}: cell {cell.start}..{cell.end} in section {name!r} is reversed"
                 )
-            if section.size > 0 and cell.end - cell.start > section.size:
+            if section.size > 0 and cell.end > section.size:
                 raise CoverageTomlError(
-                    f"{path}: cell {cell.start}..{cell.end} is longer than section {name!r} "
-                    f"({section.size} bytes)"
+                    f"{path}: cell {cell.start}..{cell.end} runs past the end of section "
+                    f"{name!r} ({section.size} bytes)"
                 )
     return snapshot
 

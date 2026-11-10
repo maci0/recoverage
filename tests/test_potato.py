@@ -5086,7 +5086,7 @@ class TestCellStateSpellingInTheDetailPanel:
                     "fileOffset": 0x200,
                     "unitBytes": 16,
                     "columns": 1,
-                    "cells": [cell(0x1000, 0x1010, "Exact")],
+                    "cells": [cell(0, 16, "Exact")],
                 }
             },
         )
