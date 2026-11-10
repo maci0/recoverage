@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.11.0] - 2026-11-10
+
 ### Changed
 
 - The bundled Rebrew is 6.30.0 (was 6.24.0; `pyproject.toml`, `uv.lock`, the CI clone pin and `REBREW_FLOOR`). It stops Rebrew's `coverage_inputs` from scanning a retained target's absent `src/shared`, which logged "skipping unreadable source directory" on every coverage op in production (about 218 lines a day). Rebrew 6.26.0 removed `coverage_input_contract.plan_coverage_config`, so `recoverage.coverage_plan` now builds the `config` and `source_paths` members of its reply itself from Rebrew's config and source walkers; the reply is unchanged.
