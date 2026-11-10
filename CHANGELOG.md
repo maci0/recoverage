@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled Rebrew is 6.30.0 (was 6.24.0; `pyproject.toml`, `uv.lock`, the CI clone pin and `REBREW_FLOOR`). It stops Rebrew's `coverage_inputs` from scanning a retained target's absent `src/shared`, which logged "skipping unreadable source directory" on every coverage op in production (about 218 lines a day). Rebrew 6.26.0 removed `coverage_input_contract.plan_coverage_config`, so `recoverage.coverage_plan` now builds the `config` and `source_paths` members of its reply itself from Rebrew's config and source walkers; the reply is unchanged.
+
+### Fixed
+
+- A coverage document with a cell longer than its section (`start < 0`, `end < start` or `end - start > size`; `end` is exclusive) is refused as unreadable (503 on its routes) instead of being folded into every snapshot. Rebrew reads the row without a bound check, and since 6.30.0 no longer overflows on an absurd value, so the check is recoverage's own.
+
 ## [8.10.0] - 2026-11-09
 
 ### Added

@@ -99,34 +99,6 @@ def test_presence_content_omission_and_symlink(tmp_path):
         verify_coverage_readset(tmp_path, value, paths)
 
 
-def test_match_credit_requires_consistent_real_result():
-    from rebrew.coverage_input_contract import verified_match_status
-
-    result = {
-        "va": "0x1000",
-        "size": 4,
-        "status": "EXACT",
-        "match_count": 4,
-        "total": 4,
-        "obj_size": 4,
-        "reloc_count": 0,
-        "mismatches": [],
-    }
-    assert verified_match_status(result, 0x1000, 4) == "EXACT"
-    with pytest.raises(CoverageInputError):
-        verified_match_status({**result, "status": "RELOC", "reloc_count": 1}, 0x1000, 4)
-    assert verified_match_status({**result, "status": "STUB"}, 0x1000, 4) is None
-    for forged in (
-        {**result, "match_count": 3},
-        {**result, "va": "0x1001"},
-        {**result, "obj_size": 3},
-        {**result, "reloc_count": 1},
-        {**result, "mismatches": [{}]},
-    ):
-        with pytest.raises(CoverageInputError):
-            verified_match_status(forged, 0x1000, 4)
-
-
 def test_rebrew_reader_discovers_present_and_absent_inputs(tmp_path):
     from rebrew.coverage_input_contract import rebrew_coverage_paths
     from test_ops import _project

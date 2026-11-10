@@ -4087,9 +4087,10 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
     def test_a_byte_count_wider_than_a_float_is_unreadable_not_a_500(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A cell size of 10**400 overflows the percentage fold rebrew runs
-        while building the snapshot, and that OverflowError must file as
-        unreadable (503) rather than escape as a 500 on every route."""
+        """A cell ending at 10**400 lies past its 10-byte section.  Rebrew reads
+        the row without a bound check (and since 6.30.0 folds it without the
+        OverflowError that used to refuse it), so recoverage's own check must
+        file the document as unreadable (503) rather than a 500 on every route."""
         from conftest import wsgi_get
 
         import recoverage.server as srv

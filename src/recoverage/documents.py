@@ -411,6 +411,32 @@ def _parse_toml(path: Path, data: bytes, digest: str) -> dict[str, Any]:
     return doc
 
 
+def _check_cells(path: Path, snapshot: CoverageSnapshot) -> CoverageSnapshot:
+    """*snapshot* with no cell longer than its section, else ``CoverageTomlError``.
+
+    A cell's ``start``/``end`` are offsets into its section (``ops.py`` adds
+    ``section.va`` to them; ``end`` is exclusive, ``Cell.size`` is ``end - start``).
+    Rebrew reads the rows without a bound check, so a cell longer than its whole
+    section (a corrupt or hand-edited file) is refused here as unreadable rather
+    than folded into every snapshot-keyed route.  A section whose size the
+    catalog did not record reads as 0 and bounds nothing.
+    """
+    # ponytail: length only. The position check (end <= size) waits for the test
+    # documents that still write cells as addresses to be rewritten as offsets.
+    for name, section in snapshot.sections.items():
+        for cell in section.cells:
+            if cell.start < 0 or cell.end < cell.start:
+                raise CoverageTomlError(
+                    f"{path}: cell {cell.start}..{cell.end} in section {name!r} is reversed"
+                )
+            if section.size > 0 and cell.end - cell.start > section.size:
+                raise CoverageTomlError(
+                    f"{path}: cell {cell.start}..{cell.end} is longer than section {name!r} "
+                    f"({section.size} bytes)"
+                )
+    return snapshot
+
+
 def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
     if old is not None and old.stat == stat:
         return old
@@ -424,7 +450,7 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
     cached = _read_cached(path, digest)
     if cached is not None:
         try:
-            snapshot = snapshot_from_document(path, cached, target)
+            snapshot = _check_cells(path, snapshot_from_document(path, cached, target))
         except Exception as exc:
             # The cache is not the document.  A slot whose hash matches but whose
             # content rebrew refuses (hand-edited, or written by a build with a
@@ -446,7 +472,7 @@ def _load(path: Path, target: str, stat: _StatKey, old: _Doc | None) -> _Doc:
             return _Doc(stat, digest, snapshot)
     parsed = _parse_toml(path, data, digest)
     try:
-        return _Doc(stat, digest, snapshot_from_document(path, parsed, target))
+        return _Doc(stat, digest, _check_cells(path, snapshot_from_document(path, parsed, target)))
     except CoverageTomlError:
         raise
     except ArithmeticError as exc:
