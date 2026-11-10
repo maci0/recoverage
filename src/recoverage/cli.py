@@ -52,11 +52,12 @@ from recoverage.status_colors import RICH_STYLES
 #: The root help's examples, as (command, what it does), printed as one block
 #: with the comments in a column: typer hands the epilog to Rich as written, so
 #: a single newline stays a line break and the padding survives. Every line
-#: fits the 80 columns a terminal opens at.
+#: fits the 80 columns a terminal opens at, and the widest stays 78 wide or less:
+#: a 79-column line wrapped on the Windows runner (CI run 42755913889).
 _HELP_EXAMPLES: tuple[tuple[str, str], ...] = (
-    ("recoverage", f"start the dashboard on port {config.DEFAULT_PORT}"),
+    ("recoverage", f"start the dashboard on :{config.DEFAULT_PORT}"),
     ("recoverage serve --port 3000", "the same, on another port"),
-    ("recoverage stats", "coverage per section, as a table"),
+    ("recoverage stats", "coverage per section (table)"),
     ("recoverage export --format csv > cov.csv", "the same rows as CSV"),
     ("recoverage check --min-coverage 50", "CI gate: exit 1 below 50%"),
     ("recoverage regen", "refresh the live view"),

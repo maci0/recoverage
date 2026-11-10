@@ -164,6 +164,17 @@ class ConflictError(OpsError):
         super().__init__(detail, code="coverage-input-invalid", status=409)
 
 
+# Rebrew's retained-snapshot confinement (rebrew.coverage_input_contract.confined_snapshot_config)
+# refuses any path whose text holds a backslash, which is every Windows path. The managed scope
+# is glibc linux x86_64 (pyproject.toml, [tool.uv]), so retained operations are not served on
+# Windows and the refusal names the platform instead of the unsupported path.
+_ON_WINDOWS = sys.platform == "win32"
+_RETAINED_ON_WINDOWS = (
+    "retained snapshot operations are not supported on Windows: the pinned rebrew refuses "
+    "every project path that holds a backslash"
+)
+
+
 def _invalid(detail: str) -> OpsError:
     return InvalidRequestError(detail)
 
@@ -723,6 +734,8 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
             "verification_records",
         )
         if any(key in raw for key in snapshot_fields):
+            if _ON_WINDOWS:
+                raise _invalid(_RETAINED_ON_WINDOWS)
             # The backend supplies a complete retained manifest; never use project_dir here.
             try:
                 from rebrew.ops import (

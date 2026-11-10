@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_ops_retained import request_for
+from test_ops_retained import request_for, retained_unsupported_on_windows
 
 from recoverage import __version__, ops
 
@@ -81,6 +81,7 @@ def _post(port: int, path: str, body: bytes, token: str | None) -> tuple[int, by
     return response.status, response.read()
 
 
+@retained_unsupported_on_windows
 def test_serve_answers_ops_with_the_bearer_token(tmp_path: Path) -> None:
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()
@@ -223,6 +224,7 @@ def _attributes(span: dict[str, Any]) -> dict[str, str]:
     return {item["key"]: next(iter(item["value"].values())) for item in span.get("attributes", [])}
 
 
+@retained_unsupported_on_windows
 def test_serve_exports_one_server_span_per_post_to_the_collector(tmp_path: Path) -> None:
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()

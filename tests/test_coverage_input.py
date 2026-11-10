@@ -5,6 +5,7 @@ import hashlib
 import json
 
 import pytest
+from test_ops_retained import retained_unsupported_on_windows
 
 contract = pytest.importorskip(
     "rebrew.coverage_input_contract", reason="requires Rebrew 6.23.1 with coverage_input_contract"
@@ -99,6 +100,7 @@ def test_presence_content_omission_and_symlink(tmp_path):
         verify_coverage_readset(tmp_path, value, paths)
 
 
+@retained_unsupported_on_windows
 def test_rebrew_reader_discovers_present_and_absent_inputs(tmp_path):
     from rebrew.coverage_input_contract import rebrew_coverage_paths
     from test_ops import _project
@@ -116,6 +118,7 @@ def test_rebrew_reader_discovers_present_and_absent_inputs(tmp_path):
     assert any(not (root / name).exists() for name in paths)
 
 
+@retained_unsupported_on_windows
 def test_raw_link_compile_commands_are_confined_before_discovery(tmp_path):
     from rebrew.coverage_input_contract import rebrew_coverage_paths
     from test_ops import _project
@@ -173,6 +176,7 @@ def test_verification_record_set_requires_qualified_exact_results():
         verification_records_digest([row, {**row, "verification_id": "v2"}])
 
 
+@retained_unsupported_on_windows
 def test_execution_rechecks_plan_target_and_verification_set(tmp_path):
     from rebrew.coverage_input_contract import (
         coverage_input_digest,
@@ -230,6 +234,7 @@ def test_execution_rechecks_plan_target_and_verification_set(tmp_path):
         validate_coverage_execution(root, "FAKEDLL", SHA256, value, digest, [])
 
 
+@retained_unsupported_on_windows
 def test_execution_requires_unambiguous_analysis_inventory_extent(tmp_path):
     from rebrew.coverage_input_contract import (
         coverage_input_digest,
