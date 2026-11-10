@@ -734,8 +734,6 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
             "verification_records",
         )
         if any(key in raw for key in snapshot_fields):
-            if _ON_WINDOWS:
-                raise _invalid(_RETAINED_ON_WINDOWS)
             # The backend supplies a complete retained manifest; never use project_dir here.
             try:
                 from rebrew.ops import (
@@ -751,6 +749,8 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
                 )
             except ImportError:
                 raise OpsError("retained snapshots require the pinned rebrew worker") from None
+            if _ON_WINDOWS:
+                raise _invalid(_RETAINED_ON_WINDOWS)
             try:
                 worker = RebrewWorkerConfig(filestore=config.filestore, workspace=config.workspace)
                 files = [
