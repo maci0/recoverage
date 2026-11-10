@@ -359,7 +359,7 @@ jobs:
       # attestation requires the job's id-token and attestations permissions
       # above; without them the step fails and the job goes red rather than
       # shipping unattested.
-      - uses: actions/attest@e2dc94b522df6de90a4a87cec02e97ca01494a81 # v4.1.0
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*
 
@@ -531,7 +531,7 @@ jobs:
           retention-days: 30
       # SLSA provenance for the SBOMs: they are security artifacts a scanner
       # consumes, so their origin is as worth attesting as the wheel's.
-      - uses: actions/attest@e2dc94b522df6de90a4a87cec02e97ca01494a81 # v4.1.0
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             recoverage-python-sbom.txt
