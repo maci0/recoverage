@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,15 @@ from recoverage import documents, ops
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("rebrew.coverage_input_contract") is None,
     reason="requires Rebrew 6.23.1 with coverage_input_contract",
+)
+
+
+# ops._ON_WINDOWS: rebrew's snapshot confinement refuses the backslash in every Windows path, so
+# a test that needs a retained snapshot to be accepted cannot run there. Each marked test is
+# named; the tests that never reach the confinement still run on Windows.
+retained_unsupported_on_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="retained snapshots are not supported on Windows (rebrew refuses backslash paths)",
 )
 
 
@@ -89,6 +99,7 @@ def bound_request(config, request):
     }
 
 
+@retained_unsupported_on_windows
 @pytest.mark.parametrize(
     "op,extra",
     [
@@ -134,6 +145,7 @@ def test_ops_use_project_specific_retained_snapshot(tmp_path, monkeypatch, op, e
     assert seen == ["one", "two"]
 
 
+@retained_unsupported_on_windows
 def test_snapshot_tamper_and_changed_during_operation_are_refused(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -175,6 +187,22 @@ def test_snapshot_without_helper_fails_closed(tmp_path, monkeypatch):
     )
     assert status == 500
     assert "pinned rebrew" in body["detail"]
+
+
+@retained_unsupported_on_windows
+def test_windows_refuses_retained_snapshots_and_names_the_platform(tmp_path, monkeypatch):
+    monkeypatch.setattr(ops, "_ON_WINDOWS", True)
+    workspace = tmp_path / "workspace"
+    store = tmp_path / "store"
+    workspace.mkdir()
+    store.mkdir()
+    request = request_for(workspace / "project", store, "retained")
+    status, body = call(
+        ops.WorkerConfig(workspace=workspace, filestore=store), "recoverage.coverage_map", request
+    )
+    assert status == 400, body
+    assert body["code"] == "invalid-request"
+    assert "Windows" in body["detail"]
 
 
 def test_external_inventory_is_refused(tmp_path):
@@ -304,6 +332,7 @@ def test_real_retained_project_map(tmp_path):
     assert untrusted["stats"]["by_status"].get("EXACT", 0) > 0
 
 
+@retained_unsupported_on_windows
 def test_coverage_plan_reports_staged_readset_and_absences(tmp_path):
     workspace = tmp_path / "workspace"
     store = tmp_path / "store"
@@ -343,6 +372,7 @@ def test_coverage_plan_reports_staged_readset_and_absences(tmp_path):
     )
 
 
+@retained_unsupported_on_windows
 def test_retained_scoring_requires_bound_envelope(tmp_path):
     from rebrew.coverage_input_contract import coverage_input_digest
 
@@ -379,6 +409,7 @@ def test_retained_scoring_requires_bound_envelope(tmp_path):
     )
 
 
+@retained_unsupported_on_windows
 def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
     from rebrew.coverage_input_contract import coverage_input_digest, verification_records_digest
 

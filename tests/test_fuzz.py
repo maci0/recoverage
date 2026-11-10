@@ -7193,7 +7193,16 @@ class TestBackupStampParsing:
             hand = directory / name
             if hand.name != name or hand.exists():
                 return
-            hand.write_bytes(b"OPERATOR")
+            try:
+                hand.write_bytes(b"OPERATOR")
+            except OSError as refused:
+                # A filesystem that cannot represent the name (APFS: EILSEQ on a surrogate-escaped
+                # byte; NTFS: EINVAL on a reserved character) cannot hold the file the prune must
+                # spare, so the round is vacuous there. Linux filesystems accept any byte, so the
+                # case stays meaningful where they run it. Any other OSError is a real failure.
+                if refused.errno in (errno.EILSEQ, errno.EINVAL):
+                    return
+                raise
             backup._prune_old_archives(directory)
             if backup._archive_stamp_instant(name) is None:
                 assert hand.exists(), (
