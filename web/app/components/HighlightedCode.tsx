@@ -111,7 +111,7 @@ export function HighlightedCode({
 
   return (
     <pre
-      className={cn("code m-0 rounded-action border border-border bg-code p-3", className, {
+      className={cn("m-0 rounded-action border border-border bg-code p-3", className, {
         "max-h-80 overflow-auto": region,
       })}
       // A scroll container that is not focusable cannot be scrolled from the

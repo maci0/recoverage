@@ -7,7 +7,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The bundled Rebrew is 6.32.0 (was 6.30.0; `pyproject.toml`, `uv.lock`, the CI clone pin, `REBREW_FLOOR` and the supply-chain test pins). It carries Rebrew's toolchain mirror pins, the corrected `doctor` download hints and the reply-size caps that now stream; recoverage uses none of the Python names 6.31.0 and 6.32.0 removed or changed (`rebrew.decompiler.kuna_spec_dir`, `rebrew.wibo.close_response`, `rebrew.compiler.toolchain_data.SOURCES`).
+- Every dependency is at its newest release. The bundled Rebrew is 6.32.1 (was 6.30.0 in 8.11.0; `pyproject.toml`, `uv.lock`, the CI clone pin, `REBREW_FLOOR` and the supply-chain test pins). It carries Rebrew's toolchain mirror pins, the corrected `doctor` download hints, the reply-size caps that now stream, and the Detect It Easy backend that takes the compiler family from a real scan; recoverage uses none of the Python names 6.31.0 to 6.32.1 removed or changed (`rebrew.decompiler.kuna_spec_dir`, `rebrew.wibo.close_response`, `rebrew.compiler.toolchain_data.SOURCES`). `uv lock --upgrade` also moves click 8.5.1, typer 0.29.1, tree-sitter 0.26.1, playwright 1.65.0, ruff 0.17.4 and their trees (pyee dropped out); `bun update --latest` moves the web build's direct packages to their latest releases.
 
 ### Fixed
 
