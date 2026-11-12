@@ -7350,6 +7350,57 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
 
 
+class TestSpaReconnectNoticeOwnership:
+    """A recovered event stream clears only its own disconnect message."""
+
+    def test_reconnect_preserves_a_newer_notice(self, tmp_path: Path) -> None:
+        hook = _web("hooks/useLiveReload.ts")
+        effect = hook.split("  useEffect(() => {", 1)[1].split(
+            "  }, [enabled, onDbUpdated, onNotice]);", 1
+        )[0]
+        driver = (
+            """
+for (const replacement of [null, 'regeneration failed', 'regeneration in progress']) {
+  let notice = null;
+  const handlers = new Map();
+  const EventSource = class {
+    addEventListener(name, handler) { handlers.set(name, handler); }
+    close() {}
+  };
+  const enabled = true;
+  const onDbUpdated = () => {};
+  const onNotice = update => {
+    notice = typeof update === 'function' ? update(notice) : update;
+  };
+  const MSG = { LIVE_RELOAD_OFF: 'live reload unavailable' };
+  const EVENTS_DEBOUNCE_MS = 300;
+  const effect = () => {
+"""
+            + effect
+            + """
+  };
+  const cleanup = effect();
+  handlers.get('error')();
+  if (replacement !== null) notice = replacement;
+  handlers.get('open')();
+  cleanup();
+  console.log(JSON.stringify(notice));
+}
+"""
+        )
+        script = tmp_path / "reconnect-notice.ts"
+        script.write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            ["bun", "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [json.loads(line) for line in proc.stdout.splitlines()] == [
+            None,
+            "regeneration failed",
+            "regeneration in progress",
+        ]
+
+
 class TestSpaSupersededCoverageReads:
     """Already-decoded replies cannot republish retired coverage cells."""
 

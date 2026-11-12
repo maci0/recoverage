@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A live-reload reconnect clears its own disconnect notice while preserving a newer regeneration failure or progress message.
+
 - Delayed coverage replies cannot restore a previous build's cells or error state after reload, even when their response was decoded before cancellation.
 
 - Returning to a target after another target's binary download fails or is cancelled loads its bytes again instead of keeping an empty byte pane under a stale cache marker.

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/compat";
+import type { StateUpdater } from "preact/hooks";
 
 import { postRegen, newRegenKey } from "@/api";
 import { MSG } from "@/lib/format";
@@ -32,7 +33,7 @@ export function useLiveReload({
   onDbUpdated: () => void;
   /** A message that stays until something replaces it: an in-flight line and a
    * failure both have to outlive the read that raised them. */
-  onNotice: (text: string | null) => void;
+  onNotice: (text: StateUpdater<string | null>) => void;
   /** A regen failure, which must not expire unseen like a transient notice. */
   onFailure?: ((text: string) => void) | undefined;
   /** A transient confirmation, which the shell clears on its own. */
@@ -80,7 +81,7 @@ export function useLiveReload({
     events.addEventListener("open", () => {
       if (reloadNotice) {
         reloadNotice = false;
-        onNotice(null);
+        onNotice((current) => (current === MSG.LIVE_RELOAD_OFF ? null : current));
       }
     });
     return () => {
