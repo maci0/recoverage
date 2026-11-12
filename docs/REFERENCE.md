@@ -696,7 +696,8 @@ Query-parameter rules, the same on every endpoint:
   unparseable one falls back to the default, and the response echoes the
   `limit` and `offset` actually used.
 - `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
-  string (with or without `0x`) or an integer. The body must be under 64 KiB
+  string (with or without `0x`) or an integer. A body shorter than its declared `Content-Length` is refused with 400 and
+  `Connection: close`, even when the received prefix is valid JSON. The body must be under 64 KiB
   (413), the list at most 500 entries (413) and non-empty (400). VAs with no
   match are omitted from the
   response rather than reported as an error. A `Content-Type` header, if

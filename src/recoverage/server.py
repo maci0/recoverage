@@ -1147,9 +1147,7 @@ def read_request_body(limit: int) -> bytes:
         while len(body) < declared:
             part = stream.read(min(_BODY_READ_CHUNK, declared - len(body)))
             if not part:
-                # The peer closed mid-body: hand back what arrived and let the
-                # caller reject it as the unparseable payload it is.
-                break
+                raise RequestBodyMalformedError("body ended before its declared length")
             body += part
         return bytes(body)
     # No Content-Length to compare: read up to the cap and one byte, so an

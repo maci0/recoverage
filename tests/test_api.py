@@ -4335,6 +4335,20 @@ class TestFramedBodyIsReadToItsDeclaredLength:
         assert stream.overshoot == []
         assert stream.tell() == len(payload)
 
+    def test_valid_json_prefix_does_not_complete_a_short_body(self) -> None:
+        target = require_target()
+        payload = b'{"vas": ["0x10001000"]}'
+        status, headers, body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            headers={"Content-Type": "application/json"},
+            body=payload,
+            content_length=str(len(payload) + 1),
+        )
+        assert status.startswith("400"), (status, body)
+        assert headers.get("Connection") == "close"
+        assert json.loads(decode_body(body, headers))["error"] == "Malformed request body"
+
     def test_oversize_declaration_reads_nothing(self) -> None:
         stream = _ExactStream(b"x" * 10)
         status, _headers, _body = wsgi_request(
