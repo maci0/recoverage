@@ -62,6 +62,7 @@ export function useOriginalBinary(
     // slice the previous binary at this target's offsets for as long as the
     // download takes.
     const control = new AbortController();
+    loaded.current = null;
     setBuffer(null);
     setFailed(false);
     setLoading(true);

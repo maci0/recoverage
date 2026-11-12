@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Returning to a target after another target's binary download fails or is cancelled loads its bytes again instead of keeping an empty byte pane under a stale cache marker.
+
 - Dashboard JSON reads reject null, scalar and array success bodies with the operation and request ID. A null error body falls back to the HTTP status and request ID instead of throwing while rendering the refusal.
 - A coverage section named `__proto__` remains visible after data loads and reloads instead of disappearing from the section list. Cached cells still survive partial section loads.
 - Batch lookup accepts only a single `chunked` transfer coding, matched case-insensitively. Unsupported or malformed transfer-encoding headers are rejected with 400 and a closed connection before reading the body.

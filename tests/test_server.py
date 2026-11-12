@@ -7350,6 +7350,67 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
 
 
+class TestSpaOriginalBinaryReturn:
+    """A discarded buffer must not keep its old cache hit marker."""
+
+    def test_returning_to_a_target_after_an_interrupted_download(self, tmp_path: Path) -> None:
+        hook = _web("hooks/useOriginalBinary.ts")
+        effect = hook.split("  useEffect(() => {", 1)[1].split(
+            "  }, [enabled, path, reloadToken]);", 1
+        )[0]
+        driver = (
+            """
+for (const pending of [false, true]) {
+  const loaded = { current: null };
+  let buffer = null;
+  let failed = false;
+  let loading = false;
+  const requests = [];
+  const setBuffer = value => { buffer = value; };
+  const setFailed = value => { failed = value; };
+  const setLoading = value => { loading = value; };
+  const fetchArrayBufferSafe = path => {
+    requests.push(path);
+    if (path === '/b') return pending ? new Promise(() => {}) : Promise.resolve(null);
+    return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
+  };
+  const effect = (path, enabled, reloadToken) => {
+"""
+            + effect
+            + """
+  };
+  const a = effect('/a', true, 0);
+  await Promise.resolve();
+  a?.();
+  const b = effect('/b', true, 0);
+  await Promise.resolve();
+  b?.();
+  effect('/a', true, 0);
+  await Promise.resolve();
+  console.log(JSON.stringify({ pending, requests, failed, loading,
+    bytes: buffer === null ? null : Array.from(new Uint8Array(buffer)) }));
+}
+"""
+        )
+        script = tmp_path / "binary-return.ts"
+        script.write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            ["bun", "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        rows = [json.loads(line) for line in proc.stdout.splitlines()]
+        assert rows == [
+            {
+                "pending": pending,
+                "requests": ["/a", "/b", "/a"],
+                "failed": False,
+                "loading": False,
+                "bytes": [1, 2, 3],
+            }
+            for pending in (False, True)
+        ]
+
+
 class TestSpaTargetFileUrlsArePercentEncoded:
     """Target and source names reach same-origin routes as encoded components."""
 
