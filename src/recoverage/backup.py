@@ -1068,13 +1068,8 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     try:
         for entry in entries:
             name = entry["name"]
-            # The member name is checked against the coverage glob rather
-            # than merely joined onto the destination.  A manifest is a
-            # file an operator can edit and a tar member is a name an
-            # extractor honours, so a `../../etc/x` here would write outside
-            # the directory the restore was pointed at.  `Path(name).name !=
-            # name` is the containment half: no separator, no drive, no
-            # parent hop, whatever the platform's idea of one is.
+            # Names come from the archive's editable manifest. Refuse path
+            # components in either platform's spelling before joining the destination.
             if (
                 not isinstance(name, str)
                 or Path(name).name != name
