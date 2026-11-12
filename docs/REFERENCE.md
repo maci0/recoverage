@@ -301,11 +301,12 @@ retaining them; a process or machine crash can also leave an interrupted restore
 Inspect its `previous/` files and complete manual recovery before removing the
 staging directory and retrying, as described in [the recovery runbook](RECOVERY.md).
 
-`--force` replaces differing selected offline snapshots; the refusal names every
-document it would overwrite. Canonical live verdicts and `status_history` stay
-unchanged. Archives may also contain the original binaries the coverage documents
-reference. A corrupt archive, an invalid member, a member name that would escape
-the directory and an unreadable file are refused either way.
+`--force` replaces differing archived files and removes stale coverage documents;
+the refusal names every file it would overwrite or remove. Canonical live verdicts
+and `status_history` stay unchanged. Restore publishes every verified manifest
+member with a safe flat name, which can include original binaries as well as
+coverage documents. A corrupt archive, an invalid member, a member name that would
+escape the directory and an unreadable file are refused either way.
 
 Offline readers detect restored bytes automatically; `regen` is a live-project
 operation. The full procedure is in [the recovery runbook](RECOVERY.md).
