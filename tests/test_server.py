@@ -7609,6 +7609,52 @@ for (const pending of [false, true]) {
             for pending in (False, True)
         ]
 
+    def test_render_never_labels_old_bytes_with_a_new_path_or_build(self, tmp_path: Path) -> None:
+        """Before effects run, the hook must expose only the requested binary."""
+        hook = (
+            "function useOriginalBinary("
+            + _web("hooks/useOriginalBinary.ts").split("export function useOriginalBinary(", 1)[1]
+        )
+        driver = (
+            """
+const loaded = { current: { path: '/a', token: 0 } };
+const bytes = new Uint8Array([1, 2, 3]).buffer;
+let states;
+const useState = () => [states.shift(), () => {}];
+const useRef = () => loaded;
+const useMemo = factory => factory();
+// Passive effects have not run for the newly rendered props.
+const useEffect = () => {};
+"""
+            + hook
+            + """
+for (const enabled of [false, true]) {
+  const answers = [];
+  for (const [path, token] of [['/a', 0], ['/b', 0], ['/a', 1], ['', 0]]) {
+    states = [bytes, false, false];
+    const result = useOriginalBinary(path, enabled, token);
+    answers.push({ path: result.path,
+      bytes: result.buffer === null ? null : Array.from(new Uint8Array(result.buffer)) });
+  }
+  console.log(JSON.stringify(answers));
+}
+"""
+        )
+        script = tmp_path / "binary-render.ts"
+        script.write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            ["bun", "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [json.loads(line) for line in proc.stdout.splitlines()] == [
+            [
+                {"path": "/a", "bytes": [1, 2, 3]},
+                {"path": "/b", "bytes": None},
+                {"path": "/a", "bytes": None},
+                {"path": "", "bytes": None},
+            ]
+        ] * 2
+
 
 class TestSpaTargetFileUrlsArePercentEncoded:
     """Target and source names reach same-origin routes as encoded components."""

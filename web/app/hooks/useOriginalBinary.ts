@@ -98,8 +98,15 @@ export function useOriginalBinary(
     };
   }, [enabled, path, reloadToken]);
 
+  // New props render before the effect clears the previous binary's state.
+  const currentBuffer =
+    loaded.current?.path === path && loaded.current.token === reloadToken ? buffer : null;
+
   // Memoized on the values: a fresh object every render would re-run every
   // effect that takes it as a dependency, which cancelled the selection's
   // fetches before they could land.
-  return useMemo(() => ({ path, buffer, loading, failed }), [buffer, failed, loading, path]);
+  return useMemo(
+    () => ({ path, buffer: currentBuffer, loading, failed }),
+    [currentBuffer, failed, loading, path],
+  );
 }
