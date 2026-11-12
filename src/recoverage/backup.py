@@ -1444,17 +1444,14 @@ def _is_converged_drill(drill_dir: Path, entries: list[Path], members: dict[str,
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
     """Put every verified member of *archive* into *db_dir*; return the paths.
 
-    Every refusal happens first: the archive is verified in full, then the
-    destination is checked, and only then is the first file written.  A refusal
-    after a partial write would leave the coverage directory in a state no
-    reader can distinguish from a rebuild, which is the one outcome this
-    command exists to avoid.
+    Archive and destination validation finish before publication. Files are
+    published one at a time; handled failures attempt rollback. If rollback
+    fails, the error identifies the retained originals for manual recovery.
 
-    ``force`` overrides the "a document here differs from the one you are
-    restoring" refusal and nothing else: a corrupt archive, a member that is not
-    a coverage document and an unreadable file are still refusals, because a
-    force flag a reader has to trust about data integrity is the flag that
-    eventually turns a routine restore into the disaster.
+    ``force`` permits replacing differing archived files and removing stale
+    coverage documents. A corrupt archive, an unsafe member name and an
+    unreadable file are still refusals. Archived members can include original
+    binaries as well as coverage documents.
 
     A leftover staging directory from a killed restore (process or machine
     crash between publication steps) is refused rather than overwritten: its
@@ -1466,7 +1463,8 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     Coverage documents in *db_dir* the archive does not hold are removed
     (under ``force``) as part of the restore: the restored set is the
     archive's set, so a target deleted from the source or added by a bad
-    build does not survive. Non-coverage files are untouched.
+    build does not survive. Non-coverage files absent from the archive are
+    untouched.
     """
     with _BACKUP_LOCK, _backup_file_lock(db_dir):
         return _restore_backup(archive, db_dir, force=force)
