@@ -76,7 +76,8 @@ export function useCoverage(target: string, section: string): Coverage {
   // coverage memo publishes through.
   const merge = useCallback((payload: DataPayload, wanted: string, token: number): void => {
     setSections((current) => {
-      const merged = { ...current };
+      // Binary section names such as __proto__ must remain ordinary keys.
+      const merged: Record<string, Section> = Object.assign(Object.create(null), current);
       for (const [name, row] of Object.entries(payload.sections)) {
         const { [name]: prior } = current;
         // A sibling row arrives without cells; keep the cells already loaded
@@ -279,7 +280,7 @@ export function useCoverage(target: string, section: string): Coverage {
     // the strip never states a coverage figure for a map it is no longer over.
     setStats(null);
     setSections((current) => {
-      const next: Record<string, Section> = {};
+      const next: Record<string, Section> = Object.create(null);
       for (const [name, row] of Object.entries(current)) {
         const { cells: _dropped, ...rest } = row;
         next[name] = rest;

@@ -8019,3 +8019,53 @@ console.log(JSON.stringify(out));
             ["deadline", True, True],
             ["component", True, True],
         ]
+
+
+class TestSpaSectionDictionaryKeys:
+    """Section names from a binary must survive both state-update callbacks."""
+
+    def test_proto_name_survives_merge_and_reload(self, tmp_path: Path) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        coverage = _web("hooks/useCoverage.ts")
+        callbacks = re.findall(
+            r"setSections\(\(current\) => \{(.*?)\n    \}\);", coverage, re.DOTALL
+        )
+        assert len(callbacks) == 2
+        row = {
+            "target": "T",
+            "name": "__proto__",
+            "va": 0,
+            "size": 1,
+            "fileOffset": 0,
+            "unitBytes": 1,
+            "columns": 1,
+            "cells": [{"start": 0, "end": 1, "span": 1, "state": "none"}],
+        }
+        payload = json.dumps({"sections": {"__proto__": row}})
+        script = tmp_path / "section-keys.ts"
+        script.write_text(
+            "function merge(current, payload) {"
+            + callbacks[0]
+            + "}\n"
+            + "function reload(current) {"
+            + callbacks[1]
+            + "}\n"
+            + "const payload = JSON.parse("
+            + json.dumps(payload)
+            + ");\n"
+            + "const merged = merge({}, payload);\n"
+            + "const reloaded = reload(payload.sections);\n"
+            + "const noCells = JSON.parse(JSON.stringify(payload));\n"
+            + 'delete noCells.sections["__proto__"].cells;\n'
+            + "const kept = merge(merged, noCells);\n"
+            + "console.log(JSON.stringify([Object.keys(merged), Object.keys(reloaded), "
+            + 'kept["__proto__"]?.cells ?? null, reloaded["__proto__"]?.cells ?? null]));\n',
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == [["__proto__"], ["__proto__"], row["cells"], None]
