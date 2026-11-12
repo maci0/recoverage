@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.13.1] - 2026-11-13
+
+### Fixed
+
+- Install the pinned Bun runtime in every CI test job so dashboard regression tests run on Linux, macOS and Windows.
+
 ## [8.13.0] - 2026-11-13
 
 ### Fixed

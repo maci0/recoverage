@@ -147,7 +147,7 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__version__ = "8.13.0"
+__version__ = "8.13.1"
 
 __all__ = [
     "LOOPBACK_HOSTS",

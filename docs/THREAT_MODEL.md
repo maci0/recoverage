@@ -337,7 +337,7 @@ admitted only where the filesystem is case-insensitive; and a tilde spelling
 whose home cannot be determined is a named `ConfigError`/`BackupError`
 (`src/recoverage/config.py`, `src/recoverage/backup.py`, `src/recoverage/cli.py`)
 where `Path.expanduser` raised a bare `RuntimeError` out of startup. The document is maintained for
-`__version__ = "8.13.0"` (`src/recoverage/__init__.py`); releases since the
+`__version__ = "8.13.1"` (`src/recoverage/__init__.py`); releases since the
 review were not re-reviewed as a whole. For 8.7.1, only the basename-only
 health control below was re-checked, against its `/api/health` `config.source` fix.
 The historical whole-surface review below was recorded against commit `5fe9ea7` on 2026-10-03.
