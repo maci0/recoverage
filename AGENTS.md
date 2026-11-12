@@ -628,7 +628,7 @@ Required (`[project].dependencies`; `uv.lock` pins the resolved set):
 - `bottle>=0.13,<1` (web server)
 - `brotli>=1.1,<2` (Brotli compression)
 - `rcssmin>=1.1,<2` (CSS minification)
-- Rebrew 6.23.1 (public GitHub wheel URL and SHA-256 in the manifest): shared
+- Rebrew (public GitHub wheel URL and SHA-256 pinned in `pyproject.toml`): shared
   live accounting, format-3 function metadata, source provenance and portable exports
 - `rich>=15.0.0,<16` (terminal tables)
 - `typer>=0.27.2,<1` (CLI framework)

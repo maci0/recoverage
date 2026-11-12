@@ -428,7 +428,7 @@ with `path`, `digest`, `size`, and exactly one of `key` or `url`), and exactly
 one of `binary_key` or `binary_url`. The worker verifies and stages these
 objects privately and checks them again after the operation. Set `--workspace`
 and, for object keys, `--filestore` (or `RECOVERAGE_OPS_FILESTORE`). Snapshot
-requests require the pinned Rebrew 6.23.1 dependency, which carries
+requests use the Rebrew dependency pinned in `pyproject.toml`, which carries
 `retained_target_snapshot` and `coverage_input_contract`.
 The backend must verify the published source, analysis capture and current
 verification records, then pass `coverage_input`, `coverage_input_digest` and
