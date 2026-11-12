@@ -1032,7 +1032,11 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     # a tar member the manifest never names is bytes no digest covers,
     # and a restore that silently ignores it proves less than it claims.
     # Refuse rather than verify a subset and restore around the rest.
-    manifest_names = {entry.get("name") for entry in entries if isinstance(entry, dict)}
+    manifest_names = {
+        entry["name"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+    }
     unlisted = sorted(
         name for name in members if name != MANIFEST_NAME and name not in manifest_names
     )

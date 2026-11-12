@@ -1432,6 +1432,44 @@ class TestBackupCli:
             restore_backup(archive, db)
         assert (leftover / "previous" / "coverage-a.toml").read_bytes() == b"original"
 
+    @pytest.mark.parametrize("bad_name", [[], {}], ids=["array", "object"])
+    @pytest.mark.parametrize("command", ["verify", "restore"])
+    def test_non_text_manifest_names_use_the_json_error_envelope(
+        self,
+        db: Path,
+        archive: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        bad_name: object,
+        command: str,
+    ) -> None:
+        """An editable manifest must be validated before names become set keys."""
+        monkeypatch.setenv("RECOVERAGE_SNAPSHOTS", str(db))
+        good = runner.invoke(app, ["verify", str(archive), "--json"])
+        assert good.exit_code == 0, good.output
+        assert json.loads(good.output)["members"]
+        before = {p.name: p.read_bytes() for p in db.iterdir()}
+        malformed = tmp_path / "malformed-name.tar"
+        with tarfile.open(archive) as source, tarfile.open(malformed, "w") as sink:
+            for member in source.getmembers():
+                data = source.extractfile(member).read()  # type: ignore[union-attr]
+                if member.name == MANIFEST_NAME:
+                    manifest = json.loads(data)
+                    manifest["members"].append({"name": bad_name, "size": 0, "sha256": ""})
+                    data = json.dumps(manifest).encode()
+                info = tarfile.TarInfo(member.name)
+                info.size = len(data)
+                sink.addfile(info, io.BytesIO(data))
+        args = [command, str(malformed), "--json"]
+        if command == "restore":
+            args.append("--force")
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, TypeError), result.exception
+        error = json.loads(result.output)["error"]
+        assert "not a safe flat member name" in error["message"]
+        assert {p.name: p.read_bytes() for p in db.iterdir()} == before
+
     def test_verify_command_proves_an_archive_without_restoring_it(
         self, db: Path, archive: Path, tmp_path: Path
     ) -> None:
