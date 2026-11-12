@@ -1031,8 +1031,13 @@ def _declared_content_length() -> int | None:
 
 
 def _body_is_chunked() -> bool:
-    """Whether the request declares a chunked transfer encoding (RFC 9112 7.1)."""
-    return "chunked" in request.environ.get("HTTP_TRANSFER_ENCODING", "").lower()
+    """Return whether the body is chunked; reject unsupported transfer codings."""
+    encoding = request.environ.get("HTTP_TRANSFER_ENCODING")
+    if encoding is None:
+        return False
+    if not encoding.isascii() or encoding.strip(" \t").lower() != "chunked":
+        raise RequestBodyMalformedError("unsupported Transfer-Encoding")
+    return True
 
 
 def _read_chunked_body(limit: int) -> bytes:

@@ -3458,6 +3458,41 @@ class TestBatchFunctionLookup:
         assert status.startswith("413")
         assert headers.get("Connection") == "close"
 
+    @pytest.mark.parametrize(
+        "encoding", ["xchunked", "chunkedx", "gzip, chunked", "chunked, gzip", "gzip", ""]
+    )
+    def test_batch_refuses_unsupported_transfer_encoding(self, encoding: str) -> None:
+        target = require_target()
+        payload = b'{"vas":["0x10001000"]}'
+        framed = f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n"
+        stream = _CountingStream(framed)
+        status, headers, body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Content-Type": "application/json", "Transfer-Encoding": encoding},
+            body=framed,
+            wsgi_input=stream,
+            content_length=None,
+        )
+        assert status.startswith("400"), (encoding, status, body)
+        assert headers.get("Connection") == "close"
+        assert stream.reads == 0
+        assert json.loads(decode_body(body, headers))["error"] == "Malformed request body"
+
+    def test_batch_accepts_case_insensitive_chunked_encoding(self) -> None:
+        target = require_target()
+        payload = b'{"vas":["0x10001000"]}'
+        framed = f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n"
+        status, headers, body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Content-Type": "application/json", "Transfer-Encoding": " ChUnKeD\t"},
+            body=framed,
+            content_length=None,
+        )
+        assert status.startswith("200"), (status, body)
+        assert json.loads(decode_body(body, headers))[0]["name"] == "_func_a"
+
     def test_batch_refuses_a_chunk_size_int_would_widen(self) -> None:
         """A chunk size is a request-supplied number, so it takes the ASCII parse.
 
