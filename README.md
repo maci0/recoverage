@@ -68,8 +68,8 @@ browsers without loading the SPA.
 
 Install the published GitHub wheel into a virtual environment. Its dependency
 metadata fetches the exact hash-pinned Rebrew wheel automatically; no local
-Rebrew checkout is required. The example uses the published 8.8.2 wheel;
-newer Git tags do not necessarily have downloadable release assets.
+Rebrew checkout is required. Tags v8.9.0 through v8.12.0 have no GitHub release,
+so the example installs the latest published wheel, 8.8.2.
 
 ```bash
 uv venv --python 3.15.2

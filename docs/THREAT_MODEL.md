@@ -103,13 +103,13 @@ HEAD were re-checked against the model below. `cli._remote_bind_gate`
 (`src/recoverage/cli.py`, `d2523da`) now REQUIRES a token beside
 `--allow-remote`: a non-loopback bind refuses at startup (exit 1, shared by
 `serve` and `recoverage config`) unless both `--allow-remote` and a token
-are present, so risk 1's CLI arm is closed — the WSGI-mount arm
+are present, so risk 1's CLI arm is closed, the WSGI-mount arm
 (`recoverage.app` without `configure_security`) is unchanged, and
 `--token` still has no length floor. `server.load_dll`
 (`src/recoverage/server.py`, `85d6c24`, renamed from `_load_dll` by `feb4841`) now reads the binary in bounded
 `_DLL_READ_CHUNK` (1 MiB) chunks capped at `_MAX_DLL_SIZE + 1` through the
 opened descriptor, so a file grown between stat and read is never fully
-materialised past the cap — risk 9 / unmitigated 7's `read_bytes()` arm is
+materialised past the cap; risk 9 / unmitigated 7's `read_bytes()` arm is
 closed. `server._security_headers` (`src/recoverage/server.py`, `85d6c24`)
 drops `Cross-Origin-Embedder-Policy: require-corp` (COEP), keeping COOP and
 CORP. `backup._name_key` (`src/recoverage/backup.py`, `62e9f5e`) refuses
@@ -124,7 +124,7 @@ is serialized by `backup._BACKUP_LOCK` (`1e20bee`), and a stamped-default
 retry with identical member digests returns the existing archive instead
 of minting a new one (`backup._find_identical_archive`, `1efad69`). The
 package root now exports `ConfigError` beside `RecoError`
-(`src/recoverage/__init__.py`, `7c42e1a`) — a wider mount, not a new
+(`src/recoverage/__init__.py`, `7c42e1a`), a wider mount, not a new
 boundary. The `/data` single-flight wait and the deferred-opener timer
 park on the injected `clock` (`src/recoverage/api.py`, `f62d8ad`;
 `src/recoverage/cli.py`, `6175880`), so both are driven by a patched clock
@@ -157,10 +157,10 @@ No entry point, trust boundary or mitigation below changed in a way that moves
 the risk ranking.
 Eighth pass at HEAD `c25016c` (2026-11-09): the changes between `4d9c307` and
 HEAD were re-checked against the model below. The integer-parse and
-percentage helpers moved off `server` to their owning modules — `parse_ascii_int`/
+percentage helpers moved off `server` to their owning modules, `parse_ascii_int`/
 `strip_sign` now live in `config` (`src/recoverage/config.py`), `coverage_pct`/
 `pct_1dp` in `reporting` (`src/recoverage/reporting.py`), with `api.py`,
-`potato.py`, `ops.py` and `cli.py` importing them from there — so every
+`potato.py`, `ops.py` and `cli.py` importing them from there, so every
 `server.parse_ascii_int` / `server.coverage_pct` / `server.pct_1dp` citation
 below is re-pointed at the new module. `/api/targets` now also serves a
 `portable` flag (`src/recoverage/api.py`, `config.snapshot_override() is not
@@ -169,7 +169,7 @@ None`) naming whether the served set is portable exports or the live project.
 not hold (`src/recoverage/backup.py`): without `--force` a restore naming
 stale documents is refused, and under `--force` they are moved to `previous/`
 with the rest of the restored set, so the restored set is the archive's set
-rather than a merge — non-coverage files in the directory are untouched.
+rather than a merge, non-coverage files in the directory are untouched.
 `regen.RegenError` carries a `precondition` flag (`src/recoverage/regen.py`)
 so a portable-mode refresh refusal is answered 400 `Regenerate unavailable`
 with a `rejected` counter and WARNING, not a 500 `failed` (`src/recoverage/api.py`
@@ -182,7 +182,7 @@ the JSON envelope for config errors on commands run with `--json`
 changed in a way that moves the risk ranking.
 Seventh pass at HEAD `4d9c307` (2026-11-09): the changes between `cf1218a` and
 HEAD were re-checked against the model below. `ops._ALLOWED_HOST`
-(`src/recoverage/ops.py`, `0208607`) now refuses `:0` and `:99999` — the port
+(`src/recoverage/ops.py`, `0208607`) now refuses `:0` and `:99999`, the port
 is a real port, not any five digits, so the allowlist cannot name a spelling
 no client can legitimately send. The package root now exports `RecoError` and
 `app` lazily (`src/recoverage/__init__.py`, `459fe53`; `recoverage.app` is
@@ -195,7 +195,7 @@ fail-fast integer parsing through `config.parse_ascii_int` (`src/recoverage/cli.
 `src/recoverage/ops.py:873`), so no float/Unicode-digit value reaches a port
 or coverage threshold. `backup._referenced_files` collects every
 `metadata.paths` reference that resolves inside the snapshot directory
-(`src/recoverage/backup.py`), not only `originalDll` — tracked by
+(`src/recoverage/backup.py`), not only `originalDll`, tracked by
 `tests/test_fuzz.py` (`2e6df64`, `_referenced_paths` returning `(refs, ok)`).
 The `/asm`, `/bytes` and `/files` 404 bodies now use static `error` labels
 with the caller-supplied target/section in `detail` (`src/recoverage/api.py`
@@ -208,7 +208,7 @@ boundary or mitigation below changed in a way that moves the risk ranking.
 Sixth pass at HEAD `cf1218a` (2026-11-09): the changes between `91a3264` and
 HEAD were re-checked against the model below. `backup._source_root_refusal`
 (`src/recoverage/backup.py`, `217badd`) refuses a document naming
-`metadata.paths.sourceRoot` at backup time — the flat tar cannot carry a tree,
+`metadata.paths.sourceRoot` at backup time: the flat tar cannot carry a tree,
 so the refusal names the exclusion rather than archiving around it and
 restoring a map with no source pane. `server._plain` (`src/recoverage/server.py`,
 `9c0a4a6`, `fea5e3a`) now sanitizes lone surrogates to U+FFFD and `_plain_key`
@@ -263,7 +263,7 @@ re-checked against the model below. `config.RecoError`
 (`src/recoverage/config.py`) is now the common base of `ConfigError`,
 `BackupError`, `OpsError`, `RequestBodyError` and `CapstoneUnavailableError`;
 each subclass keeps its builtin base so existing `except ValueError`/`except
-RuntimeError` handlers keep working — a catch-shape change, not a new
+RuntimeError` handlers keep working, a catch-shape change, not a new
 boundary. `ops.dispatch_json` (`src/recoverage/ops.py`) is a dict-in/dict-out
 convenience over `ops.dispatch` for in-process callers; it does not add a
 listener or a credential. `server.origin_is_this_dashboard`
@@ -380,7 +380,7 @@ this update does not claim to refresh every older file/line reference below.
 | 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader | `src/recoverage/server.py`, `src/recoverage/api.py` | `_MAX_DLL_SIZE` (512 MiB, `src/recoverage/server.py`) checked on `stat()` and enforced DURING the read: `server.load_dll` reads in `_DLL_READ_CHUNK` (1 MiB) chunks through the opened descriptor capped at `_MAX_DLL_SIZE + 1` (`src/recoverage/server.py`, `85d6c24`), so a file that grows between stat and read is never materialised past one byte over the cap. On the decode side, a negative VA, file offset or size is refused before a byte is sliced (`disasm._disassemble_loaded`, `src/recoverage/disasm.py:338`), so a negative index cannot count back from the end of the buffer into unrelated bytes, and the image width comes from a range-checked container header rather than a constant (unmitigated 10) |
 | 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `src/recoverage/server.py` | Rejected-token and rejected-Host events are logged with the peer address (`src/recoverage/server.py`); regen start, replay, completion and failure are logged (`src/recoverage/api.py`) |
 | 11 | TWENTY-ONE `RECOVERAGE_*` environment variables are accepted under the prefix. Fifteen select the bind address, the token, the snapshot selection, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project; `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected. SEVEN of the twenty-one belong to the ops worker rather than to the dashboard: `RECOVERAGE_OPS_TOKEN`, `RECOVERAGE_OPS_WORKSPACE`, `RECOVERAGE_OPS_FILESTORE`, `RECOVERAGE_OPS_CONCURRENCY`, `RECOVERAGE_OPS_ALLOWED_HOSTS`, `RECOVERAGE_OPS_PORT` and `RECOVERAGE_OPS_HOST` (`src/recoverage/ops.py`), which `ops serve` reads and nothing `serve` resolves. FOUR are read by nothing in either server and are accepted only so an operator or a tool that exported one can still run a command: `RECOVERAGE_FUZZ_SEED` and `RECOVERAGE_FUZZ_ITERATIONS` (the test suite), `RECOVERAGE_DEV_API` (the origin `web/vite.config.ts` proxies `/api`, `/files`, `/src` and `/original` to in `make web-dev`, which also accepts a `host:port` form that Vite parses), and `RECOVERAGE_BACKUP_DIR` (where `recoverage backup` writes, `src/recoverage/backup.py`). Membership in `config.KNOWN_VARS` (`src/recoverage/config.py`) is therefore NOT a claim that a name is a dashboard setting, and a reader who treats the set as the settings table will miscount the environment. A TWENTY-SECOND environment input, `XDG_CACHE_HOME`, selects where a copy of every parsed document is written, and it sits outside the set entirely: no startup validation, no banner line, and a parse cache in whatever directory the parent environment names | `src/recoverage/config.py`, `src/recoverage/cli.py`, `src/recoverage/backup.py`, `src/recoverage/ops.py`, `web/vite.config.ts` | Every value `serve` resolves is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.check_unknown_vars`, `src/recoverage/config.py`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose; the ops and tool knobs are validated by their own readers (`ops.serve_command` requires a token of at least `MIN_TOKEN_BYTES` and an existing `--workspace`, `src/recoverage/ops.py`) and by nothing `serve` resolves. `RECOVERAGE_BACKUP_DIR` was accepted by name but REFUSED by the same gate until `86ef853`, which is the one case where the set and the reader disagreed: a deployment whose crontab exported it had every command exit non-zero as a misspelling |
-| 12 | **An offline restore WRITES the selected portable read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage export --output <directory>` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`), `src/recoverage/backup.py` (`drill_restore`, `1bc9d11`) | Every refusal happens before the first write: the archive is verified in full — every member read, size and digest checked against `manifest.json`, a member absent from the manifest refused, a manifest naming no coverage document refused — and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked. The manifest itself is depth-bounded (`config.json_depth_exceeds`, `src/recoverage/config.py`) before `json.loads` allocates it. Since `4117251` `write_backup`/`restore_backup` also take a cross-process advisory lock (`backup._backup_file_lock`, `src/recoverage/backup.py`), and `cli.restore_drill` (`1bc9d11`) exercises the same path against a fresh drill directory rather than the live snapshot directory. The retained-edge prune now verifies before deleting (`155731d`) |
+| 12 | **An offline restore WRITES the selected portable read path from a file the operator supplies, and that file is a tar whose names and sizes the holder chooses.** `recoverage restore` replaces every coverage document the archive names, which is the same path `/api/targets`, `/data`, `/stats` and the Potato map all read, and the dashboard serves the result with no indication that the bytes arrived from an archive rather than from `rebrew coverage export --output <directory>` | `src/recoverage/backup.py` (`restore_backup`, `_read_archive`), `src/recoverage/cli.py` (`restore`), `src/recoverage/backup.py` (`drill_restore`, `1bc9d11`) | Every refusal happens before the first write: the archive is verified in full, every member read, size and digest checked against `manifest.json`, a member absent from the manifest refused, a manifest naming no coverage document refused, and only then is each document replaced through a temp file and an atomic rename, so a restore either lands whole or leaves the previous documents exactly as they were. A member name must be a plain basename AND match the coverage glob (`Path(name).name != name`, `_is_coverage`), so a `../../etc/x` cannot escape the destination. A tar header's declared size is checked against `_MAX_MEMBER_BYTES`/`_MAX_ARCHIVE_BYTES` (1 GiB each) before any member bytes are read, a member that delivers more bytes than its header declares is refused, and a name appearing twice is refused rather than one being picked. The manifest itself is depth-bounded (`config.json_depth_exceeds`, `src/recoverage/config.py`) before `json.loads` allocates it. Since `4117251` `write_backup`/`restore_backup` also take a cross-process advisory lock (`backup._backup_file_lock`, `src/recoverage/backup.py`), and `cli.restore_drill` (`1bc9d11`) exercises the same path against a fresh drill directory rather than the live snapshot directory. The retained-edge prune now verifies before deleting (`155731d`) |
 | 13 | Portable backup archives copy exported reverse-engineering facts outside their snapshot directory, without encryption | `backup.write_backup`, `default_backup_dir`, `backup_dir_from_env` | File modes `0o600` and verified manifest; symlink document refusal (`backup._members`) and fail-closed `_require_outside_coverage_dir` (`OSError` → `BackupError`); archive retention prunes to `_RETENTION_COUNT` (30) stamped archives (`backup._prune_old_archives`), with a prune list or delete failure WARNING-logged rather than swallowed (`backup._prune_old_archives`); filesystem access remains a deployment control |
 
 | 14 | Portable-mode parsed-document caches copy exported facts under an operator-selected XDG cache location | `documents._load`, `_read_cached`, `_write_cached` | Content-digest association, schema revalidation, private new directory and best-effort slot pruning. Live reads bypass this cache; existing directory permissions are not rechecked |
@@ -426,8 +426,8 @@ Network (all on the single Bottle app, all threaded):
   `allowed_hosts` as functions over that snapshot, and its DEFAULTS are off in every direction: no token,
   no CORS, and `ALLOWED_HOSTS is None`, which is no `Host` validation at all. A host
   that mounts the app and omits the call serves the whole project to every peer that can
-  reach it — risk 1 with `cli._remote_bind_gate` (`src/recoverage/cli.py`), the only
-  thing between a bind address and a published project, gone with it. The admission cap
+  reach it, because `cli._remote_bind_gate` (`src/recoverage/cli.py`), risk 1's only control
+  between a bind address and a published project, goes with the call. The admission cap
   (`devserver._MAX_CONNECTIONS`, `src/recoverage/devserver.py:64`), the per-connection
   deadline (`devserver._CLIENT_SOCKET_TIMEOUT_SECONDS`,
   `src/recoverage/devserver.py:372`) and the keep-alive framing live in
@@ -514,7 +514,7 @@ Non-network entry points:
   `restore`'s positional, and it writes nothing. `verify-backups DIRECTORY
   [--json]` (`src/recoverage/cli.py`) re-reads every stamped archive in the
   retention set through `backup.verify_all_backups`
-  (`src/recoverage/backup.py`) — the drill `docs/RECOVERY.md` names for a
+  (`src/recoverage/backup.py`), the drill `docs/RECOVERY.md` names for a
   logical-corruption restore, which reaches for the oldest archive that
   predates the corruption rather than the newest `check-backup` verifies; it
   skips symlinks and non-stamped names, writes nothing, needs no
@@ -581,7 +581,7 @@ Non-network entry points:
   joins the set of accepted names that `serve` resolves nothing from: it is read
   by `recoverage backup` alone (`backup.backup_dir_from_env`,
   `src/recoverage/backup.py`), and it is in `config.KNOWN_VARS` so that a cron
-  line exporting it is not refused as a misspelling — which is how a deployment
+  line exporting it is not refused as a misspelling, which is how a deployment
   found out that the documented schedule was broken, at the hour it ran
   (`86ef853`). `XDG_CACHE_HOME` is the
   other non-prefixed environment read and it relocates the persisted parse cache
@@ -602,7 +602,7 @@ Non-network entry points:
   `recoverage backup` and `recoverage restore` (`src/recoverage/cli.py`, the two
   commands added in 4.3) read/write explicitly selected portable exports, and `restore` is the only entry point in this list whose bytes were
   not produced by this package or by rebrew. The untrusted input is a whole tar
-  — member names, member sizes and payload — named by the operator (`restore`'s
+  (member names, member sizes and payload) named by the operator (`restore`'s
   positional `ARCHIVE`, expanded with `~` and taken as a path, so a value with a
   parent hop in it names another file, which is intended: the operator chooses
   which archive to roll back). `--force` is the one flag that changes what is
@@ -828,8 +828,8 @@ describe, not a wrong one.
    `Host` allowlist (`server.configure_security`, `src/recoverage/server.py:203`,
    whose defaults are all off), the admission cap, the per-connection deadline
    and the keep-alive framing (`src/recoverage/devserver.py`). The boundaries
-   above are unchanged — the same routes, the same parsers, the same
-   documents — but every control named as living in this process is now one a
+   above are unchanged (the same routes, the same parsers, the same
+   documents), but every control named as living in this process is now one a
    differently-written process may not have installed, and nothing in the app
    can tell: there is no handshake, no marker and no refusal for an
    unconfigured mount. The loopback acknowledgement (`cli._remote_bind_gate`)
@@ -1088,7 +1088,7 @@ boundary where the untrusted side supplies a FILE FORMAT rather than a string,
 and the classes differ in kind from every one above. Tampering: a tar can name
 the same member twice, declare a size that does not match what follows, carry
 a name with a parent hop in it, or smuggle a member the manifest never names
-carrying a payload that replaces a document the manifest does name — each is
+carrying a payload that replaces a document the manifest does name, each is
 refused before anything is written
 (`backup._read_archive`, `src/recoverage/backup.py`: duplicate names refused
 rather than one picked, a member delivering more bytes than its header declares
@@ -1100,7 +1100,7 @@ allocates it. Denial of service: a tar's size fields are
 attacker-chosen integers, and a header claiming 10 GiB is the primitive, so both
 a per-member and an archive-wide bound are checked from the HEADERS before any
 member bytes are read (`_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`,
-`src/recoverage/backup.py:94`) — a check after `extractfile` would already have
+`src/recoverage/backup.py:94`), a check after `extractfile` would already have
 allocated the thing it was meant to bound. Elevation of privilege: a restore is
 a write to the explicitly selected portable read path. It is a local command,
 and the holder of the filesystem is trusted to choose the archive. A mistaken
@@ -1108,7 +1108,7 @@ archive can replace offline facts after the differing-file refusal is explicitly
 overridden with `--force`; canonical live metadata and history are unchanged.
 Repudiation: an archive carries a
 `created` stamp and per-member digests, so WHAT was restored and WHEN is
-recoverable from the file itself, but nothing records WHO ran the command —
+recoverable from the file itself, but nothing records WHO ran the command,
 unmitigated 17. Information disclosure: none beyond the archive's own contents,
 since the operator supplies the file and learns its members.
 
@@ -1122,9 +1122,9 @@ Offline readers detect restored files; live refresh refuses
 `RECOVERAGE_OPS_TOKEN` is the backend; there is no per-caller identity, no
 nonce, and no request signature, so a leaked token is a standing capability
 until the process restarts (`src/recoverage/ops.py`). Tampering: a request
-names `project_dir` and a binary digest, and both are confined — the path to
+names `project_dir` and a binary digest, and both are confined, the path to
 `--workspace` (`ops.project_root`, `src/recoverage/ops.py`) and the target to
-the digest rebrew resolves through that project's own config — so the caller
+the digest rebrew resolves through that project's own config, so the caller
 cannot steer the worker at a tree it was not pointed at. Information
 disclosure: a gate or export reply carries the target's coverage verdicts,
 and a retained-input reply carries the staged files and binary the backend
@@ -1301,7 +1301,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Single-flight admission + cooldown on refresh | `src/recoverage/api.py` | Duplicate expensive analysis and request floods |
 | `Idempotency-Key` ledger: charset-validated (`[A-Za-z0-9._:-]`, 128 chars), 600 s TTL, 128-slot eviction, a completed run replayed and an in-flight run answered 202 with `in_progress` before the cooldown | `src/recoverage/api.py` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy` (empty allowlist: camera, mic, geolocation, payment, USB/serial, fullscreen, web-share, xr-spatial-tracking), `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin` (no COEP: `Cross-Origin-Embedder-Policy` was removed in `85d6c24`, `src/recoverage/server.py`) | `src/recoverage/server.py` (`_security_headers`) | Injection, framing, token leak via Referer, powerful-feature reach, cross-origin embedding and opener severance. The isolation headers cost the SPA nothing: no popups, no cross-origin embeds. `Cross-Origin-Embedder-Policy` was removed (`85d6c24`), so no `SharedArrayBuffer` dependency is claimed. `clipboard-write` is deliberately not listed, so the copy buttons keep working behind the browser's own user-gesture gate |
-| The `/files/`, `/src` and `/original` file routes answer under an INERT policy rather than the dashboard's own: `server.csp_for_path` (`src/recoverage/server.py:4627`) picks `server._INERT_CSP` (`default-src 'none'; sandbox; base-uri 'none'; form-action 'none'`, `src/recoverage/server.py:4624`) for any path under `_REPO_FILE_PREFIXES`, and `_CSP` everywhere else | `src/recoverage/server.py` | A file the project tree picked up — a vendored `.html`, a generated `.svg` — is served with a content type guessed from its own suffix, so the browser renders it AS a document at this origin, under a policy whose `script-src` allows `'unsafe-inline'`. Such a file could read every `/api/*` response, and with `--token` on the auth cookie rides along on those requests even though the script cannot read it. `sandbox` puts the document in an opaque origin with scripting and forms off, and `default-src 'none'` denies what is left; the files stay readable, which is what the code panes are for |
+| The `/files/`, `/src` and `/original` file routes answer under an INERT policy rather than the dashboard's own: `server.csp_for_path` (`src/recoverage/server.py:4627`) picks `server._INERT_CSP` (`default-src 'none'; sandbox; base-uri 'none'; form-action 'none'`, `src/recoverage/server.py:4624`) for any path under `_REPO_FILE_PREFIXES`, and `_CSP` everywhere else | `src/recoverage/server.py` | A file the project tree picked up, a vendored `.html`, a generated `.svg`, is served with a content type guessed from its own suffix, so the browser renders it AS a document at this origin, under a policy whose `script-src` allows `'unsafe-inline'`. Such a file could read every `/api/*` response, and with `--token` on the auth cookie rides along on those requests even though the script cannot read it. `sandbox` puts the document in an opaque origin with scripting and forms off, and `default-src 'none'` denies what is left; the files stay readable, which is what the code panes are for |
 | `Secure` on the auth cookie and `Strict-Transport-Security` beside it, both read off the request through `server.request_is_https` (`wsgi.url_scheme` alone; `X-Forwarded-Proto` is NOT read, `6c1e580`, so a TLS-terminating proxy must set `wsgi.url_scheme` itself or run a proxy-aware WSGI middleware that strips the client-supplied header, `src/recoverage/server.py`) | `server.set_auth_cookie`, `src/recoverage/server.py` | A cookie handed to whoever was on the wire when a reader followed an http link to a host that also answers https. A constant `Secure` would instead stop the cookie being stored at all on the plaintext loopback bind the bundled listener serves. A TLS-terminating proxy must set `wsgi.url_scheme` itself (or sit behind proxy-aware middleware that strips client-supplied forwarded headers); trusting the client-supplied header over plaintext made both answers stricter in a way that self-DoSes the legitimate user (a `Secure` cookie a plaintext browser will not store, an HSTS pin a plaintext browser discards) |
 | CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response; origins validated by `cli._is_browser_origin` (`src/recoverage/cli.py`), which rejects `@`, `\`, `%`, C0/C1 controls, whitespace, userinfo, path/query/fragment and unparseable URLs (including `urlsplit` `ValueError`) before `_normalize_origin` stores an entry | `src/recoverage/server.py`, `src/recoverage/cli.py` | Cross-origin reads; an operator allowlist entry carrying userinfo or a percent/backslash spelling that normalizes to a different origin than written |
 | CORS `Access-Control-Expose-Headers` names exactly `ETag, Retry-After, Idempotent-Replay, X-Request-ID`, and `X-Request-ID` joined `Access-Control-Allow-Headers` | `server._security_headers`, `src/recoverage/server.py` | Without the exposure a `--cors` frontend cannot do the conditional GET the ETag-bearing endpoints are built around, cannot read the `Idempotent-Replay` answer, and cannot read the request id it was told to send, so the preflight refuses the request before the header leaves the browser at all. Every exposed name is a validator or a correlation label, none is the token, and the echoed `Access-Control-Allow-Origin` is the allowlist entry rather than the request's `Origin` reflected |
@@ -1321,11 +1321,11 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | 65536-byte request-line cap, answered 414 | `src/recoverage/devserver.py` | Unbounded per-connection read |
 | Negative VA, file offset and size refused before the slice at the one function both the API and Potato arrive at; container-header width read over a bounded 4096-byte buffer with a range-checked `e_lfanew` and a checked `PE\0\0` signature, a floor rather than an error; per-slice disassembly memo hit/miss counted in `metrics.CACHES` as `DISASSEMBLY_CACHE` (`disasm.get_disassembly`, `src/recoverage/disasm.py`) so a panel that stopped hitting the memo is visible in `/api/health` caches | `src/recoverage/disasm.py` (`_disassemble_loaded`, `binary_width_bits`, `get_disassembly`) | A negative Python index counting back from the END of the binary, which answers a well-formed decode of bytes the reader never selected; an address capstone's unsigned `insn.address` cannot carry, rendered beside the byte dump of the bytes it claims to describe; and a sample steering the width reader to a `Machine` field it planted. The three refusals sit at the callee rather than in either caller, so a fourth route that reaches the decoder inherits them |
 | Documents are read as UTF-8 text and are written only whole: by `rebrew coverage export --output <directory>` and by `recoverage restore`, both landing each document through a temporary sibling and an atomic rename. NOTE the reader never writes; the only writers are those two, and this row said "the only writer" until a restore became the second | `src/recoverage/server.py`, `rebrew/coverage_toml.py`, `src/recoverage/backup.py` (`_atomic_write`) | Accidental writes, and a torn read of a document being rebuilt or restored. The restore arm also verifies the whole archive against its manifest before the first write, so a half-restored coverage directory is not reachable |
-| Backup archive integrity: every member's size and sha256 recorded in `manifest.json` and re-checked on read; the archive is verified in full before the first document is written, and each document lands by temp file plus `os.replace` (`backup._atomic_write`, `src/recoverage/backup.py`) | `src/recoverage/backup.py` (`_verify_archive`, `restore_backup`, `write_backup`) | A truncated or tampered archive reaching the authoritative read path, and a restore that lands half its members and leaves a directory no reader can distinguish from a rebuild. `write_backup` reads its own output back through `verify_backup` before reporting success, so a reported backup has been parsed once. The publish is fail-if-exists (`os.link` + unlink) rather than `os.replace`, so a repeat run at an explicit `--to` path refuses instead of silently replacing the earlier backup — unless the existing file holds identical bytes, in which case `write_backup` (`src/recoverage/backup.py`) verifies and returns that archive as a converged retry (different bytes still refuse), while a default stamped name is retried under the next free suffix (`_default_archive_path`, `src/recoverage/backup.py`) so a redelivery still yields a backup. `write_backup` and `restore_backup` both run under `backup._BACKUP_LOCK` (`src/recoverage/backup.py`) and, since `4117251`, under a cross-process advisory lock (`backup._backup_file_lock`, `src/recoverage/backup.py`: `.recoverage-backup.lock` beside the coverage documents, held on an open descriptor), so neither two in-process threads nor two processes can interleave reads or double-publish a restore. `backup._prune_old_archives` now verifies the retained edge before deleting it (`155731d`). The archive `created` stamp is unified on a `Z` suffix (`backup._created_stamp`, `src/recoverage/backup.py`). A directory-fsync failure is logged rather than swallowed (`backup._fsync_dir`, `src/recoverage/backup.py`) |
-| Backup refuses unreadable documents and symlinked documents rather than skipping them; a successful new backup prunes stamped archives beyond 30 (`_RETENTION_COUNT`, `src/recoverage/backup.py`); prune order is the stamped instant, not the lexicographic name, so same-instant `-2` suffixed archives keep their order (`cc76560`), and pruning runs only after the new archive's fsync and verify; an unreadable backup directory raises `BackupError` rather than reading as empty (`backup._newest_stamped_archive`, `src/recoverage/backup.py`), and `verify-backups`/`backup.verify_all_backups` verifies every stamped archive in the retention set, not only the newest `check-backup` reads back | `src/recoverage/backup.py` (`_members`, `_prune_old_archives`, `write_backup`, `verify_all_backups`) | A silently partial archive that verifies yet restores to a dashboard missing one target; a symlinked document followed out of the coverage directory; unbounded growth of the backup directory filling the volume until backup and dashboard fail; a crash before the new archive's directory entry is durable discarding a previous good one. Pruning is best-effort (a deletion failure is logged, not raised, so the verified new backup is not reported as failed) and touches only names the module writes (`coverage-*` + `.tar`, not symlinks). The whole-set verify exists because a corrupt older archive — the one a logical-corruption restore reaches for — was invisible until that restore, and a permission loss on the directory cannot masquerade as "no backup taken" |
-| Tar hardening on restore: a member name must be a plain basename AND match the coverage glob, matched case-sensitively (`fnmatchcase`, `src/recoverage/backup.py` `_is_coverage` — `fnmatch` lowercases on case-insensitive platforms, so `Coverage-X.toml` was admitted on Windows and refused on Linux for the same archive); per-member and archive-wide byte bounds are checked from the HEADERS before any payload is read (DATA members only: `manifest.json` is excluded from both caps in `backup._read_archive`, `src/recoverage/backup.py`, `cc76560`, since it is the verifier's own metadata and is bounded by `config.json_depth_exceeds` instead); a member delivering more bytes than its header declares is refused; a name appearing twice is refused. At backup time `backup._name_key` (`src/recoverage/backup.py`, `62e9f5e`) refuses two coverage documents or referenced files whose NFC-casefolded names collide, so a flat archive cannot carry two spellings of one file onto a case-insensitive restore target | `src/recoverage/backup.py` (`_read_archive`, `_is_coverage`, `_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`, `_name_key`, `_members`, `_referenced_files`) | Path traversal out of the coverage directory, an allocation bomb from a header claiming gigabytes, a member verified by prefix only, and a member substituted by taking whichever duplicate the map kept |
+| Backup archive integrity: every member's size and sha256 recorded in `manifest.json` and re-checked on read; the archive is verified in full before the first document is written, and each document lands by temp file plus `os.replace` (`backup._atomic_write`, `src/recoverage/backup.py`) | `src/recoverage/backup.py` (`_verify_archive`, `restore_backup`, `write_backup`) | A truncated or tampered archive reaching the authoritative read path, and a restore that lands half its members and leaves a directory no reader can distinguish from a rebuild. `write_backup` reads its own output back through `verify_backup` before reporting success, so a reported backup has been parsed once. The publish is fail-if-exists (`os.link` + unlink) rather than `os.replace`, so a repeat run at an explicit `--to` path refuses instead of silently replacing the earlier backup, unless the existing file holds identical bytes, in which case `write_backup` (`src/recoverage/backup.py`) verifies and returns that archive as a converged retry (different bytes still refuse), while a default stamped name is retried under the next free suffix (`_default_archive_path`, `src/recoverage/backup.py`) so a redelivery still yields a backup. `write_backup` and `restore_backup` both run under `backup._BACKUP_LOCK` (`src/recoverage/backup.py`) and, since `4117251`, under a cross-process advisory lock (`backup._backup_file_lock`, `src/recoverage/backup.py`: `.recoverage-backup.lock` beside the coverage documents, held on an open descriptor), so neither two in-process threads nor two processes can interleave reads or double-publish a restore. `backup._prune_old_archives` now verifies the retained edge before deleting it (`155731d`). The archive `created` stamp is unified on a `Z` suffix (`backup._created_stamp`, `src/recoverage/backup.py`). A directory-fsync failure is logged rather than swallowed (`backup._fsync_dir`, `src/recoverage/backup.py`) |
+| Backup refuses unreadable documents and symlinked documents rather than skipping them; a successful new backup prunes stamped archives beyond 30 (`_RETENTION_COUNT`, `src/recoverage/backup.py`); prune order is the stamped instant, not the lexicographic name, so same-instant `-2` suffixed archives keep their order (`cc76560`), and pruning runs only after the new archive's fsync and verify; an unreadable backup directory raises `BackupError` rather than reading as empty (`backup._newest_stamped_archive`, `src/recoverage/backup.py`), and `verify-backups`/`backup.verify_all_backups` verifies every stamped archive in the retention set, not only the newest `check-backup` reads back | `src/recoverage/backup.py` (`_members`, `_prune_old_archives`, `write_backup`, `verify_all_backups`) | A silently partial archive that verifies yet restores to a dashboard missing one target; a symlinked document followed out of the coverage directory; unbounded growth of the backup directory filling the volume until backup and dashboard fail; a crash before the new archive's directory entry is durable discarding a previous good one. Pruning is best-effort (a deletion failure is logged, not raised, so the verified new backup is not reported as failed) and touches only names the module writes (`coverage-*` + `.tar`, not symlinks). The whole-set verify exists because a corrupt older archive, the one a logical-corruption restore reaches for, was invisible until that restore, and a permission loss on the directory cannot masquerade as "no backup taken" |
+| Tar hardening on restore: a member name must be a plain basename AND match the coverage glob, matched case-sensitively (`fnmatchcase`, `src/recoverage/backup.py` `_is_coverage`, `fnmatch` lowercases on case-insensitive platforms, so `Coverage-X.toml` was admitted on Windows and refused on Linux for the same archive); per-member and archive-wide byte bounds are checked from the HEADERS before any payload is read (DATA members only: `manifest.json` is excluded from both caps in `backup._read_archive`, `src/recoverage/backup.py`, `cc76560`, since it is the verifier's own metadata and is bounded by `config.json_depth_exceeds` instead); a member delivering more bytes than its header declares is refused; a name appearing twice is refused. At backup time `backup._name_key` (`src/recoverage/backup.py`, `62e9f5e`) refuses two coverage documents or referenced files whose NFC-casefolded names collide, so a flat archive cannot carry two spellings of one file onto a case-insensitive restore target | `src/recoverage/backup.py` (`_read_archive`, `_is_coverage`, `_MAX_MEMBER_BYTES`, `_MAX_ARCHIVE_BYTES`, `_name_key`, `_members`, `_referenced_files`) | Path traversal out of the coverage directory, an allocation bomb from a header claiming gigabytes, a member verified by prefix only, and a member substituted by taking whichever duplicate the map kept |
 | | Backup writes refuse case-folded member collisions (`backup._name_key`, NFC + `casefold`, `62e9f5e`): two documents or referenced files whose names differ only by case/NFD spelling are one file on APFS/Windows and would overwrite each other on restore, so they are refused at backup time. Archive caps cover DATA members only; `manifest.json` is excluded and bounded by its JSON-depth check instead (`cc76560`). Retention is ordered by stamped instant (same-microsecond `-2` suffixes share one instant), and pruning runs only after the new archive's fsync+verify, so a crash cannot discard a previous good backup (`cc76560`). Concurrent in-process backup/restore is serialized by `_BACKUP_LOCK` (`1e20bee`), and a stamped-default retry with identical member digests returns the existing archive instead of minting a new one (`_find_identical_archive`, `1efad69`) | `src/recoverage/backup.py` (`_name_key`, `_members`, `_referenced_files`, `_prune_old_archives`, `write_backup`, `_find_identical_archive`, `_BACKUP_LOCK`) | A restore that silently overwrites one member with another on a case-insensitive filesystem, a legitimately-sized archive refused because its manifest pushed it over the total cap, a prune that deletes the previous good backup before the new one is durable, two in-process threads interleaving reads/publishes, and a cron redelivery pruning a distinct older archive |
-| Restore refuses differing portable documents and stale coverage documents the archive does not hold unless `--force` is selected; under `--force` stale documents are moved to `previous/` with the rest of the restored set, so the restored set is the archive's set, not a merge — non-coverage files in the directory are untouched; corruption and member bounds remain enforced | `backup.restore_backup` | Silent replacement of selected offline facts, and a target added by a bad build or deleted from the source surviving a restore that claims to re-establish the snapshot. Canonical verdicts/history are outside this operation. The restore itself is not logged through the package logger (unmitigated 16/17); only backup prune failures are WARNING-logged (`backup._prune_old_archives`) |
+| Restore refuses differing portable documents and stale coverage documents the archive does not hold unless `--force` is selected; under `--force` stale documents are moved to `previous/` with the rest of the restored set, so the restored set is the archive's set, not a merge, non-coverage files in the directory are untouched; corruption and member bounds remain enforced | `backup.restore_backup` | Silent replacement of selected offline facts, and a target added by a bad build or deleted from the source surviving a restore that claims to re-establish the snapshot. Canonical verdicts/history are outside this operation. The restore itself is not logged through the package logger (unmitigated 16/17); only backup prune failures are WARNING-logged (`backup._prune_old_archives`) |
 | Document gate: the format `version` must be the one this build reads, every array and table must have its documented shape, and the document's `target` must match its filename; a failure is answered 503 | `src/recoverage/server.py`, `rebrew/coverage_toml.py` | A truncated, foreign or hand-edited document reading as an empty target, and query-time 500s from a document the reader cannot use |
 | Restore staging is transactional and refuses a leftover staging directory: all members are staged under a private staging directory inside the coverage directory before any original is moved, originals are kept in `previous/` until publication completes, and a `BaseException` rolls written files back and restores the saved ones, keeping the staging directory (with a logged warning) when rollback itself fails. A pre-existing staging directory from a killed restore is refused rather than overwritten, since its `previous/` files are the only copy of the pre-restore state | `src/recoverage/backup.py` (`restore_backup`) | A restore that lands half its members and leaves a directory no reader can distinguish from a rebuild, and a second restore that would discard the only copy of the pre-restore documents. The staging directory is inside the coverage directory, so it shares that directory's failure domain |
 | Backup destination is refused when it resolves inside the coverage directory it archives; an `OSError` resolving either path fails closed (`BackupError`) | `src/recoverage/backup.py` (`_require_outside_coverage_dir`, `write_backup`) | An archive written into the tree it backs up, where one directory delete destroys data and backup together. An `OSError` resolving either path is a refusal (fail-closed: an unresolvable destination cannot be proven outside, so it is refused rather than admitted) |
@@ -1346,7 +1346,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
    non-loopback bind without both `--allow-remote` and a token
    (`cli._remote_bind_gate`, `src/recoverage/cli.py`, `d2523da`), so no
    `--bind 0.0.0.0 --allow-remote` can publish sources and binaries
-   unauthenticated over `serve` — but a mount bypasses that gate entirely.
+   unauthenticated over `serve`, but a mount bypasses that gate entirely.
    A loopback deployment with no token likewise remains unauthenticated,
    which is the documented deployment assumption (`SECURITY.md`) rather
    than a fixable gap on the CLI path.
@@ -1354,8 +1354,8 @@ generic STRIDE checklist. Each entry names the shipped fix in
    will serve a flood of `/data` or `/potato` renders, one thread each, until
    the connection cap refuses the next one. The `/data` single-flight claim
    map is now bounded by `_DATA_CACHE_BUILDING_MAX` (64, `dd0c64a`,
-   `src/recoverage/api.py`) — the concurrent-miss herd can no longer grow it
-   without limit while it waits — but the per-request CPU work it gates is
+   `src/recoverage/api.py`), the concurrent-miss herd can no longer grow it
+   without limit while it waits, but the per-request CPU work it gates is
    still unbounded per connection.
 3. The connection cap bounds how many threads exist, not how much work each one
    does: 128 connections of concurrent `/data` renders is 128 grid builds, and
@@ -1510,7 +1510,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
     token lives for the process lifetime, and a leaked `RECOVERAGE_OPS_TOKEN`
     is a standing capability until a restart. The 32-byte floor
     (`src/recoverage/ops.py`) is the only credential-strength control on
-    either surface, and it is not applied to `--token` — though since
+    either surface, and it is not applied to `--token`, though since
     `d2523da` the dashboard's remote bind requires *a* token, just not a
     long one.
 
@@ -1574,8 +1574,8 @@ generic STRIDE checklist. Each entry names the shipped fix in
   environment in risk 11: the variable names a directory, nothing `serve`
   resolves reads it, and the archive lands there with `0o600` members and no
   encryption (`backup.backup_dir_from_env`, `src/recoverage/backup.py`). A
-  schedule that exports it — the documented one does, and the environment is the
-  only channel a cron line has — is running a backup into a path nobody reading
+  schedule that exports it (the documented one does, and the environment is the
+  only channel a cron line has) is running a backup into a path nobody reading
   this file is thinking about.
 - A holder of `RECOVERAGE_OPS_TOKEN` can call the gate and export ops for any
   project inside `--workspace` by naming its directory and a binary digest,
@@ -1634,8 +1634,8 @@ generic STRIDE checklist. Each entry names the shipped fix in
   The restore logs nothing through the `recoverage` logger, writes no line
   into the coverage directory, and is counted nowhere in `/api/health`, so for
   the package's ONLY durable state there is nothing inside this tree that
-  records that the documents were replaced, by what, or by whom — unmitigated
-  16 and 17. Backup's prune failures are the exception in the other direction:
+  records that the documents were replaced, by what, or by whom (unmitigated
+  16 and 17). Backup's prune failures are the exception in the other direction:
   a failure to list or delete old archives is WARNING-logged by
   `backup._prune_old_archives` (`src/recoverage/backup.py`), so a retention
   failure is visible even though a successful backup still leaves no operator

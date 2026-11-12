@@ -33,8 +33,8 @@ this document does not fill them with a guess.
 `src/recoverage/config.py`) and is unauthenticated unless a token is
 configured. A non-loopback bind requires BOTH `--allow-remote` and a token
 (`--token` / `RECOVERAGE_TOKEN`): `cli._remote_bind_gate`
-(`src/recoverage/cli.py`) refuses at startup — exit 1, shared by `serve` and
-`recoverage config` — without the acknowledgement, and without the token even
+(`src/recoverage/cli.py`) refuses at startup with exit 1 (shared by `serve` and
+`recoverage config`) without the acknowledgement, and without the token even
 with it, so a remote `serve` cannot publish sources and binaries
 unauthenticated. The token has no length floor on either bind (the ops worker's
 32-byte floor has no dashboard equivalent), and a WSGI host mounting

@@ -1,4 +1,4 @@
-# AGENTS.md — recoverage
+# AGENTS.md: recoverage
 
 ## Overview
 
@@ -147,9 +147,9 @@ recoverage/
     ├── webapp.py            # Composition root: imports api+ui+potato so app has every route
     └── assets/
         ├── index.html       # SPA shell
-        ├── style.css        # built Tailwind output — generated, never hand-edited
+        ├── style.css        # built Tailwind output, generated, never hand-edited
         ├── print.css        # Print stylesheet
-        ├── app.js           # built bundle — generated, never hand-edited
+        ├── app.js           # built bundle, generated, never hand-edited
         ├── highlight.js     # the standalone highlighter, a SECOND build (`web/build.ts`):
         │                    #   app.js is an IIFE, so it cannot code-split the grammars out
         ├── archivo.woff2    # brand fonts (OFL, credited in NOTICE), committed as-is
@@ -475,7 +475,7 @@ standing in for the expansions `casefold` has and JavaScript does not. That
 table is GENERATED (`tools/gen_full_fold.py`) and is every code point where
 `toLowerCase` and `str.casefold` disagree, not a hand-picked sample: it was ten
 ligatures, and the 173 it omitted were rows the API listed while the SPA
-reported "0 matches" — `µ` (MICRO SIGN) against `μ` (GREEK SMALL MU) and `ſ`
+reported "0 matches", `µ` (MICRO SIGN) against `μ` (GREEK SMALL MU) and `ſ`
 (LATIN SMALL LETTER LONG S) against `s` are both spellings a firmware symbol
 carries. A check that derives its own cases FROM the table (each entry is a
 correct fold) passes a table that is half empty; only the completeness arm does
@@ -488,7 +488,7 @@ GREEK YPOGEGRAMMENI, which `toLowerCase` leaves alone and `casefold` rewrites
 to U+03B9. A combining mark that FOLLOWS a base character in a class is a
 grapheme cluster, and a class cannot hold one, so oxlint's
 `no-misleading-character-class` reported it and the gate was red on a committed
-tree — a generated file failing the lint that judges the sources it came from.
+tree, a generated file failing the lint that judges the sources it came from.
 Spelling the key as `ͅ` does not help: the rule reports the escape
 identically. The generator therefore emits every key with a nonzero combining
 class FIRST (`_class_order`), which changes no match (a class is a set) and
@@ -608,7 +608,7 @@ simpler and strictly wider.
      from an EMPTY snapshot (`server.coverage_for`), which is what the SQLite
      reader got from an empty table set. A document that exists but does not
      parse is the opposite case and must stay distinguishable: it raises
-     `CoverageTomlError`, which is the 503 `db_unavailable` contract — never a
+     `CoverageTomlError`, which is the 503 `db_unavailable` contract, never a
      target that silently reads as having no sections
      (`tests/test_server.py`, `TestUnreadableDocumentIsNotAnEmptyTarget`).
 2. `recoverage` → serves the coverage as a web dashboard
@@ -745,9 +745,9 @@ explicit upstream development only; it is never the default package source.
   prefix, and each per-file-ignore set all carry their reason next to them in
   `[tool.ruff.lint]` and `[tool.ruff.lint.per-file-ignores]` in pyproject.toml;
   those comments are the record of what the tree is expected to pass. The
-  repo-wide `ignore` list is the one severity downgrade nothing reads back —
+  repo-wide `ignore` list is the one severity downgrade nothing reads back,
   a code in it stops reporting, which is indistinguishable from a tree with no
-  finding, and no file stops passing — so the reason for each of its entries
+  finding, and no file stops passing, so the reason for each of its entries
   lives in `tests/test_supply_chain.py`
   (`TestPythonAnalysisIsEnforced::test_a_new_repo_wide_ignore_cannot_be_added_silently`),
   which fails when a code joins the list without one. Editing the list means
@@ -774,8 +774,8 @@ explicit upstream development only; it is never the default package source.
   `Logger.handle` runs the filters of the logger a record was logged ON and
   never an ancestor's: a module taking `getLogger(__name__)` gets a stream but
   no `rid`, and every line it writes renders `[rid=-]`. `documents.py` did
-  that, so the coverage-document warnings — the ones naming which document is
-  broken — landed uncorrelatable from the 503 they explain. Every module logs
+  that, so the coverage-document warnings, the ones naming which document is
+  broken, landed uncorrelatable from the 503 they explain. Every module logs
   on the one logger, and `tests/test_metrics.py` (`TestRequestId`) fails when
   one names itself.
   A new failure path that answers 4xx/5xx from outside a handler (bottle
@@ -1118,7 +1118,7 @@ explicit upstream development only; it is never the default package source.
   from `disasm.binary_width_bits`, which reads the PE `Machine` field or the
   ELF `e_machine` at explicit little-endian offsets out of the first 64 bytes,
   stdlib only because LIEF is rebrew's dependency and not this package's. Two
-  properties the reader keeps deliberately: it is a FLOOR, not a guess — a
+  properties the reader keeps deliberately: it is a FLOOR, not a guess: a
   header it cannot read, and a machine outside the x86 family, both answer
   `_DEFAULT_WIDTH_BITS` rather than raising, because `/asm` is contracted to
   answer and a 32-bit panel is a better one than a 500; and its answer is
@@ -1188,7 +1188,7 @@ explicit upstream development only; it is never the default package source.
   Pinned at `tests/test_server.py` (`TestDbEtag`).
 - A filename that is not valid text is still a value in a URL, and BOTH ends
   encode it the same way. `urllib.parse.quote` encodes a `str` through UTF-8, so
-  it raised `UnicodeEncodeError` on that U+DCFF — inside `potato._build_url`,
+  it raised `UnicodeEncodeError` on that U+DCFF, inside `potato._build_url`,
   every rendered link embeds the target id, and `UnicodeEncodeError` is a
   `ValueError` that `handle_potato` caught, so one `coverage-GAME\xff.toml` in
   the coverage directory answered `/potato` with a 500. The write side is
@@ -1197,8 +1197,8 @@ explicit upstream development only; it is never the default package source.
   the SPA side, where `encodeURIComponent` threw `URIError: URI malformed` on
   the same string and took the whole dashboard down rather than the one row of
   the target picker. The read sides are `potato.render_potato`'s
-  `parse_qs(..., errors="surrogateescape")` — the default `replace` spelled
-  `GAME%FF` as `GAME�`, so the page resolved no target at all — and
+  `parse_qs(..., errors="surrogateescape")`, the default `replace` spelled
+  `GAME%FF` as `GAME�`, so the page resolved no target at all, and
   `server.path_param`, which leaves the segment percent-encoded rather than
   raising, an honest 404. Only U+DC80..U+DCFF is recoverable, so
   `encodeUrlValue` spells anything outside it `%EF%BF%BD` rather than masking a
@@ -1233,8 +1233,8 @@ explicit upstream development only; it is never the default package source.
   needs the U+2068/U+2069 pair. Pinned at `tests/test_server.py`
   (`TestSpaBidirectionalText`) and `tests/test_potato.py`
   (`TestDocumentNamesCarryTheirOwnDirection`).
-- One response, one snapshot. A snapshot is frozen — every collection is a
-  tuple or a `MappingProxyType` — and `documents.load_all` (the
+- One response, one snapshot. A snapshot is frozen: every collection is a
+  tuple or a `MappingProxyType`, and `documents.load_all` (the
   reader `server` imports) memoizes each document on its own stat, so an
   unchanged directory returns THE SAME snapshot objects. The change token
   every memo and ETag keys on (`server._snapshot_db_mtime`) folds each
@@ -1299,7 +1299,7 @@ explicit upstream development only; it is never the default package source.
   -> `coverage_db`) and must be covered on the rendering side: `potato.COLORS`
   + `LEGEND_ITEMS`, and `web/app/states.ts`
   `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
-  state paints as an undocumented gap, which contradicts `/stats` — `verified`
+  state paints as an undocumented gap, which contradicts `/stats`, where `verified`
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state. Both read
@@ -1313,7 +1313,7 @@ explicit upstream development only; it is never the default package source.
   silently. A cell's `end` is EXCLUSIVE (rebrew writes `cur = cell_end` for
   the next cell, and a cell's size is `end - start`), so
   `useSelection.cellIndexForVa` compares `relative < cell.end`: inclusive, it
-  resolved every boundary address — which is what a function's entry VA is —
+  resolved every boundary address (a function's entry VA is one)
   to the block BEFORE the one named. `packSection` stores offsets in
   `Float64Array`, not `Uint32Array`, and saturates `span` into its
   `Uint16Array` with `MAX_SPAN`. The lattice width is clamped to
@@ -1448,7 +1448,7 @@ explicit upstream development only; it is never the default package source.
   A dropped entry is the worst outcome available: the server comes up an entry
   short and refuses precisely the reads the entry was written for. The same
   holds for a value that is SET but EMPTY, which is how a unit file, a
-  container env and a CI job all spell "not configured" — an empty
+  container env and a CI job all spell "not configured", an empty
   `RECOVERAGE_CORS_ORIGIN` starts a server with CORS on and an allowlist of
   nothing. `RECOVERAGE_TOKEN` is the one deliberate exception to the
   SET-but-EMPTY rule, and `tests/test_config.py` pins it: empty means auth
@@ -1483,7 +1483,7 @@ explicit upstream development only; it is never the default package source.
   comparison: both sides go through `server.fold_text` (NFC composition plus
   `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD
   spelling a user pastes matches the NFC one rebrew stored. A NULL column folds
-  as the empty string, which no non-empty term matches — the answer
+  as the empty string, which no non-empty term matches, the answer
   `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds both sides of a
   search through `format.foldForSearch`, which mirrors `server.fold_text` as
   far as JavaScript can (`toLowerCase` plus the `FULL_FOLD` expansions), so a
@@ -1491,7 +1491,7 @@ explicit upstream development only; it is never the default package source.
   folds the same way:
   `server.lookup_function` /
   `server.lookup_global` try the VA arm first, then byte equality on the name,
-  then the folded comparison — so the row the search highlighted opens by
+  then the folded comparison, so the row the search highlighted opens by
   name. A lookup added beside them (globals, labels, anything compared for
   identity) must fold too; byte equality there is the bug this paragraph exists
   to stop. A search arm over a column the term cannot hold skips building it:
@@ -1714,8 +1714,8 @@ explicit upstream development only; it is never the default package source.
 - A request BODY is read through `server.read_request_body(limit)`, never
   through bottle's `request.body`. That property drains the whole declared
   `Content-Length` into a `BytesIO` before the handler sees a byte of it, and
-  spills past `MEMFILE_MAX` (100 KiB) into a `NamedTemporaryFile` — on a tmpfs
-  `/tmp`, so RAM — so the endpoint's own cap ran long after the resource it
+  spills past `MEMFILE_MAX` (100 KiB) into a `NamedTemporaryFile`, on a tmpfs
+  `/tmp`, so RAM, so the endpoint's own cap ran long after the resource it
   exists to bound was allocated. `read_request_body` compares the declared
   length first (a 4 GB request costs one header comparison), reads a framed
   body to its DECLARED length and no further, decodes a chunked body under the
@@ -1724,7 +1724,7 @@ explicit upstream development only; it is never the default package source.
   under the serving stack `wsgi.input` is the socket's buffered reader: a read
   past the last declared byte blocks until the client hangs up, while the
   client is waiting for the response. A `BytesIO` short-reads, so a test over
-  one cannot catch a drain to EOF — the read is pinned against a stream that
+  one cannot catch a drain to EOF, the read is pinned against a stream that
   refuses to run off the end of the frame (`tests/test_api.py`,
   `TestFramedBodyIsReadToItsDeclaredLength`). A chunk-size line is read through
   `server.parse_ascii_int`, not `int(x, 16)`. Every read in the chunked reader
@@ -1837,11 +1837,11 @@ explicit upstream development only; it is never the default package source.
   normalizes and one that does not both produce the same-looking line and a
   corpus with nothing to bridge. That is the one way this campaign can pass
   while testing nothing, so the fixture asserts its own two roots differ, and a
-  mutation check is what says the corpus really reaches it — a resolver that
+  mutation check is what says the corpus really reaches it, a resolver that
   re-spelled one way only, or that invented a name no file matched, has to fail
   it. `server.mtime_ns_to_utc` (`TestFreshnessStamp`) is the one arithmetic
-  reader among them that takes a value off the FILESYSTEM —
-  `os.stat().st_mtime_ns` of every coverage document — and hands it to
+  reader among them that takes a value off the FILESYSTEM,
+  `os.stat().st_mtime_ns` of every coverage document, and hands it to
   `datetime`, which raises on a second outside the range it spans. Such a stamp
   is not hypothetical: `os.utime` writes one on any Linux box, FAT tops out in
   2107, and a restored tree carries whatever the archive held. The campaign
@@ -1849,7 +1849,7 @@ explicit upstream development only; it is never the default package source.
   clock cannot name would otherwise take `/api/health` and Potato's footer down
   with it), that the clamp for one outside the range is the EXTREME rather than
   a nearby second, and that the remainder truncates rather than rounding up
-  into the second above — which would stamp a rebuild ahead of the data it
+  into the second above, which would stamp a rebuild ahead of the data it
   describes. Its out-of-range arm writes the stamp with `os.utime` and reads it
   back off `stat` rather than handing the reader the same number twice, so the
   assertion is against the value a filesystem really holds. The nanosecond
@@ -1870,7 +1870,7 @@ explicit upstream development only; it is never the default package source.
   how a negative `va` rendered as the unsigned address the reader never asked
   for). A slice that cannot be answered renders nothing, a slice running past
   the image renders nothing, and every rendered instruction sits inside
-  `[va, va + size)` with no overlap — the two properties a status code cannot
+  `[va, va + size)` with no overlap, the two properties a status code cannot
   show, since every failure above answers a plain string.
   `documents._read_cached`
   (`TestPersistedParseCache`) loads JSON from the cache directory under

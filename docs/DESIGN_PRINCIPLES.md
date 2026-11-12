@@ -16,7 +16,7 @@ Initial page load time is critical. The entire Single Page Application (SPA) she
 Recoverage is a pure data consumer. Its serving path never links the `rebrew` matching tools: it reads canonical project inputs through `rebrew.coverage_project.load_project_coverage`, or the portable coverage documents `RECOVERAGE_SNAPSHOTS` selects, and writes neither. `rebrew` is a runtime dependency for workspace resolution (`rebrew.workspace`), function metadata (`rebrew.metadata`), the live coverage model (`rebrew.coverage_project`) and the document reader (`rebrew.coverage_toml`). This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
 
 ## 4. Shift Computation to the Reader & the Backend
-The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and the JSON grouping the API serves must be computed before transmission, in the document reader (`rebrew.coverage_toml`'s derived fields) or in the backend, never in the browser. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
+The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and the JSON grouping the API serves must be computed before transmission, in the document reader (`rebrew.coverage_toml`'s derived fields) or in the backend, never in the browser. The UI then stays fluid on binaries with tens of thousands of functions.
 
 ## 5. Aggressive Render Optimization
 Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requires strict render management:

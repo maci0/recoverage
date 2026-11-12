@@ -322,7 +322,7 @@ operation. The full procedure is in [the recovery runbook](RECOVERY.md).
 ### `recoverage verify`
 
 Check every member of a backup archive against its manifest without restoring
-it — the standalone proof a scheduled job or a drill runs against an archive
+it: the standalone proof a scheduled job or a drill runs against an archive
 older runs wrote or that was copied elsewhere. Exits 1 naming the member whose
 size or digest disagrees; writes nothing and needs no `RECOVERAGE_SNAPSHOTS`.
 
@@ -335,7 +335,7 @@ recoverage verify /srv/backups/nightly.tar --json
 
 Verify every stamped archive in a backup directory, not only the newest.
 `check-backup` reads back only the newest archive, so a corrupt older
-archive — the one a logical-corruption restore would reach for — stays
+archive, the one a logical-corruption restore would reach for, stays
 invisible until that restore. Exits 1 naming the first archive that fails;
 exits 0 only when every stamped archive in the directory is one a restore
 could load. Writes nothing and needs no `RECOVERAGE_SNAPSHOTS`.
@@ -366,7 +366,7 @@ nothing live. The archive is verified in full, restored into the empty
 `--into` directory, and the restored set is read back through the coverage
 loader the dashboard serves, so a restore landing bytes the reader refuses
 is a drill failure. Refuses a drill directory that already holds files, and
-neither reads nor requires `RECOVERAGE_SNAPSHOTS` — the drill target is
+neither reads nor requires `RECOVERAGE_SNAPSHOTS`, the drill target is
 `--into`, so it cannot point at the live directory by mistake. Exits 1
 naming the archive or directory on a corrupt archive, a dirty drill
 directory, or a restored set no reader can serve.

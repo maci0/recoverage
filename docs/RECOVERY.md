@@ -23,7 +23,7 @@ The ops workspace holds scratch: a retained snapshot is a temp directory
 under it, removed when the call returns. Its loss mid-call aborts the call
 rather than corrupting a served document. The filestore is the backend's
 object store, keyed by retained keys and hashed on read; treat it as
-ephemeral input, never as the record — the record is the backend's own
+ephemeral input, never as the record; the record is the backend's own
 retained manifest. Neither directory is archived by `recoverage backup`,
 and neither needs to be for a restore to be honest: a restore that
 claimed them would be claiming bytes it never read.
@@ -59,7 +59,7 @@ target left behind; files that are not coverage documents are untouched.
 Stop readers during restore. A handled write failure rolls earlier replacements
 back; if rollback also fails, the error names the directory retaining the original
 files. A process or machine crash can leave a `.restore-*` directory behind;
-restore refuses while one is present — its `previous/` files are the only copy of
+restore refuses while one is present; its `previous/` files are the only copy of
 the pre-restore documents, so inspect them, restore those files by hand if needed,
 remove the directory, then retry before serving the exports.
 Offline readers detect restored files automatically. `regen` refuses offline
@@ -70,13 +70,13 @@ mode because only Rebrew can derive a fresh export from the original inputs.
 RPO is the backup cadence: with the nightly schedule below, a portable export
 can be up to 24 hours old at restore time, plus whatever ``metadata.paths``
 inputs were copied into the snapshot between runs. The schedule is the only
-bound — there is no point-in-time recovery inside this package, so logical
+bound; there is no point-in-time recovery inside this package, so logical
 corruption (bad code writing bad data for hours) is recovered by restoring
 the oldest archive that predates it, not by replaying transactions. RTO is
 measured, not assumed: run the drill against a copy of the production-sized
 snapshot, record the elapsed time, and budget that figure plus the time to
 copy the archive from its volume. A portable archive cannot recover project
-inputs it never contained — canonical metadata, source, configuration and
+inputs it never contained: canonical metadata, source, configuration and
 unreferenced binaries are outside it by design (see below), and a backup
 refuses to claim otherwise.
 
@@ -87,7 +87,7 @@ Offsite or separate-account copies are expected, not optional: a backup that
 lives in the same account, region, or credential boundary as the snapshot
 directory can be deleted with it (ransomware, fat-finger, account loss), so
 copy the archive to a separate failure domain after `backup` succeeds.
-Nothing in this repo provisions that copy — the operator arranges it.
+Nothing in this repo provisions that copy; the operator arranges it.
 
 ```cron
 CRON_TZ=UTC
@@ -99,7 +99,7 @@ The archive is verified before success is reported. On hosts whose cron lacks
 Keep the backup volume separate from the snapshot directory: a destination inside
 the coverage directory is refused, because an archive there shares its failure
 domain with the data it protects (one directory deletion removes both). Alert on
-the job itself — a missing log line or a non-zero exit is a missed backup, and an
+the job itself: a missing log line or a non-zero exit is a missed backup, and an
 empty coverage directory exits 1 rather than writing an empty archive. The job
 exiting 0 only while it runs means a job that stops running fails nothing, so
 monitor the backup directory too:
@@ -113,15 +113,15 @@ CRON_TZ=UTC
 stamped archive, or its newest archive is older than `--max-age-hours`
 (default 25, one missed nightly run plus an hour of slack). It also verifies
 the newest archive before reporting fresh: age alone let a corrupt or
-truncated newest archive — including one a failed `backup` verify left
-behind — pass the monitor and then fail the restore, and a symlink named
+truncated newest archive, including one a failed `backup` verify left
+behind, pass the monitor and then fail the restore, and a symlink named
 like a stamped archive never counts as a backup. A schedule that
 runs less often than daily passes its own `--max-age-hours`. Between
 drills, run `recoverage verify /srv/backups/nightly.tar` to re-prove an archive
 older runs wrote or that was copied to another volume; it writes nothing and
 needs no `RECOVERAGE_SNAPSHOTS` selection. That check reads back only the
-newest archive, so a corrupt older archive — the one a logical-corruption
-restore reaches for — stays invisible until that restore. Re-prove the
+newest archive, so a corrupt older archive, the one a logical-corruption
+restore reaches for, stays invisible until that restore. Re-prove the
 whole retention set with `recoverage verify-backups /srv/backups`, which
 verifies every stamped archive in the directory and exits 1 naming the
 first that fails.
@@ -155,7 +155,7 @@ a hypothesis.
 
 ## Recovering without this tool
 
-Archives are POSIX tar files containing flat members — the `coverage-<target>.toml` documents,
+Archives are POSIX tar files containing flat members: the `coverage-<target>.toml` documents,
 any referenced original binaries (`originalDll`) the documents named, and `manifest.json`.
 They never carry a source tree (`sourceRoot`): a document naming one is a backup refusal,
 so an archive that exists was taken from a set with nothing to exclude. They also flatten
