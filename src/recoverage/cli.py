@@ -2569,18 +2569,17 @@ def restore(
 ) -> None:
     """Put a verified backup's documents back into the portable snapshot directory.
 
-    The archive is verified in full (every member read, its size and digest
-    checked against the manifest) before the first document is written, and
-    each document then lands through an atomic replace. A restore therefore
-    either completes or leaves the portable snapshot directory exactly as it was; half a
-    restore is a dashboard that reads healthy and shows half a project.
+    The archive is verified in full before publication. Each file lands
+    through an atomic replace, but the directory is not replaced in one step:
+    stop readers during restore. Handled failures attempt rollback; incomplete
+    rollback or a process crash can require manual recovery of retained originals.
 
-    Refuses to overwrite a document that differs from the one in the archive
-    unless --force is given: rolling a month-old archive over a tree that has
-    been rebuilt since discards every status transition since, and 'recoverage
-    regen' cannot recover what a rollback drops. --force overrides that
-    refusal only: a corrupt archive, a member that is not a coverage document
-    and an unreadable file are refused either way.
+    Refuses differing archived files or stale coverage documents unless --force
+    is given. Rolling an old archive over a rebuilt tree discards later status
+    transitions, and regen cannot recover what a rollback drops. Verified safe
+    flat archive members can include original binaries as well as coverage
+    documents. A corrupt archive, an unsafe member name and an unreadable file
+    are refused even with --force.
 
     Requires RECOVERAGE_SNAPSHOTS. Offline readers detect restored files
     automatically; regen is a live-project operation and refuses offline mode.

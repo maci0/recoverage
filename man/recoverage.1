@@ -165,16 +165,17 @@ that reads the result rather than the table.
 .TP
 .B restore
 Put a verified backup's documents back into the selected portable directory. The
-archive is verified in full before the first document is written, and each
-document lands through an atomic replace, so a restore either completes or
-leaves the directory as it was.
+archive is verified in full before publication. Each file lands through an
+atomic replace, but publication is per file, so stop readers during restore.
+Handled failures attempt rollback; incomplete rollback or a process crash can
+require manual recovery of retained originals.
 .B \-\-force
-overrides exactly one refusal: a document already present that differs from
-the one in the archive. Rolling an old archive over a tree that has been
-rebuilt since discards every status transition since, and
+permits replacing differing archived files and removing stale coverage documents.
+Rolling an old archive over a rebuilt tree discards later status transitions, and
 .B regen
-cannot recover what a rollback drops. A corrupt archive, a member that is not
-a coverage document and an unreadable file are refused either way. Requires
+cannot recover what a rollback drops. Verified safe flat archive members can
+include original binaries as well as coverage documents. A corrupt archive, an
+unsafe member name and an unreadable file are refused even with force. Requires
 .BR RECOVERAGE_SNAPSHOTS .
 Offline readers detect the restored files on their own;
 .B regen
