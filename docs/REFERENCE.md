@@ -48,7 +48,7 @@ this command with its default settings.
 | `--port` | `8001` | HTTP port to serve on; `0` binds a free port and prints the one it got |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
 | `--allow-remote` / `--no-allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network; a remote bind also requires `--token` |
-| `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
+| `--token` | off | Require this token except for CORS preflights and GET/HEAD of the two packaged fonts, as described under [network hosting](#hosting-it-on-a-network) (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Refresh the live project view before starting |
 | `--cors` / `--no-cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
@@ -730,8 +730,13 @@ the `retry_after` body key.
 configured source and binary files, its `src/` and `original/` trees, raw byte
 slices and disassembly. Serving it beyond loopback needs both `--allow-remote`
 (the acknowledgement the CLI requires for any non-loopback `--bind`) and
-`--token` (the bearer check every request then has to pass); `--cors` is for a
-separate local frontend origin and is never needed for the dashboard's own page.
+`--token`. The token gate exempts CORS preflights (`OPTIONS` carrying both
+`Origin` and `Access-Control-Request-Method`) and `GET`/`HEAD` of the packaged
+`/archivo.woff2` and `/jetbrains-mono.woff2` fonts used by the token prompt.
+Preflights return no coverage data; the request they precede still needs the
+token, as do bare `OPTIONS` requests and every other static asset. `--cors` is
+for a separate local frontend origin and is never needed for the dashboard's
+own page.
 There is no TLS, so a token on a network bind travels
 in cleartext. [SECURITY.md](../SECURITY.md#deployment-assumption) states the
 deployment assumption and [THREAT_MODEL.md](THREAT_MODEL.md) what the code does
