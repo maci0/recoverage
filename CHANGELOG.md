@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Backup verification applies the existing 1 GiB per-member limit to `manifest.json` before reading it, preventing metadata from bypassing the allocation bound. The manifest remains outside the aggregate payload budget.
+
 - Correct the restore reference: publication is per file, failed rollback can require manual recovery, and verified archive members can include original binaries as well as coverage documents.
 - Correct the recovery guide: missing or hash-mismatched retained objects refuse an ops call rather than silently producing empty coverage.
 - Name the existing token-gate exemptions in the operator reference: CORS preflights and GET/HEAD of the two packaged fonts; data requests remain authenticated.

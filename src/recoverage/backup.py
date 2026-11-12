@@ -212,10 +212,9 @@ _RETENTION_COUNT: Final = 30
 #: daily names its own threshold instead of inheriting this one.
 BACKUP_OVERDUE_HOURS: Final = 25
 
-#: Bounds for the reader vs archive a hostile archive could declare. Both
-#: cover DATA members only; ``manifest.json`` is excluded from both because
-#: it is the verifier's own metadata, not a payload, and counting it would
-#: refuse a legitimately-sized archive whose manifest pushes it over the cap.
+#: Every member, including metadata, has the per-member ceiling. The aggregate
+#: covers payload only, so the manifest cannot push an otherwise fitting archive
+#: over the total payload budget.
 _MAX_MEMBER_BYTES: Final = 1 << 30
 _MAX_ARCHIVE_BYTES: Final = 1 << 30
 
@@ -960,18 +959,14 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
-                if member.name == MANIFEST_NAME:
-                    # The verifier's own metadata: bounded by json_depth_exceeds
-                    # below, not by the payload caps. A hostile manifest is
-                    # still held in memory, but it is one small JSON document
-                    # whose depth is checked before decode.
-                    declared.append(member)
-                    continue
                 if member.size < 0 or member.size > _MAX_MEMBER_BYTES:
                     raise BackupError(
                         f"{path}: member {member.name!r} declares {member.size} bytes, "
                         f"over the {_MAX_MEMBER_BYTES}-byte limit one member may hold"
                     )
+                if member.name == MANIFEST_NAME:
+                    declared.append(member)
+                    continue
                 total += member.size
                 if total > _MAX_ARCHIVE_BYTES:
                     raise BackupError(
@@ -987,15 +982,8 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
                 # extractfile returns a file-like (ExFileObject) that is not
                 # closed by leaving the tar; closing it releases the archive's
                 # underlying descriptor on this cold CLI path per member.
-                # The manifest is read to its declared size (bounded by the
-                # depth check below, not the payload cap); payload members
-                # use the cap + 1 sentinel.
-                if member.name == MANIFEST_NAME:
-                    read_limit = member.size + 1
-                else:
-                    read_limit = _MAX_MEMBER_BYTES + 1
                 with handle:
-                    payload = handle.read(read_limit)
+                    payload = handle.read(_MAX_MEMBER_BYTES + 1)
                 # The header sized the read above; a member that delivers more
                 # than it declared is a truncated-then-appended stream, and
                 # taking only the declared count would verify a prefix of the

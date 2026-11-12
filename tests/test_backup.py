@@ -417,6 +417,44 @@ class TestArchiveSizeBounds:
         with pytest.raises(BackupError, match="one member may hold"):
             verify_backup(fat)
 
+    def test_an_oversized_manifest_is_refused_before_extracting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Metadata has the member ceiling even though it is outside the total."""
+        cap = 4096
+        monkeypatch.setattr(backup, "_MAX_MEMBER_BYTES", cap)
+        oversized = tmp_path / "oversized-manifest.tar"
+        payload = b"x"
+        manifest = (
+            json.dumps(
+                {
+                    "format": FORMAT_VERSION,
+                    "created": "x",
+                    "members": [
+                        {"name": "coverage-x.toml", "size": 1, "sha256": backup._digest(payload)}
+                    ],
+                }
+            )
+            .encode()
+            .ljust(cap + 1, b" ")
+        )
+        with tarfile.open(oversized, "w") as sink:
+            for name, data in (("coverage-x.toml", payload), (MANIFEST_NAME, manifest)):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                sink.addfile(info, io.BytesIO(data))
+        extracted: list[str] = []
+        extract = tarfile.TarFile.extractfile
+
+        def observe_extract(self: tarfile.TarFile, member: Any) -> Any:
+            extracted.append(member.name)
+            return extract(self, member)
+
+        monkeypatch.setattr(tarfile.TarFile, "extractfile", observe_extract)
+        with pytest.raises(BackupError, match=r"manifest\.json.*one member may hold"):
+            verify_backup(oversized)
+        assert extracted == []
+
     def test_an_archive_over_the_total_limit_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
