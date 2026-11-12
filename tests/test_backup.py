@@ -496,21 +496,31 @@ class TestArchiveSizeBounds:
                 member = tarfile.TarInfo(filename)
                 member.size = len(data)
                 sink.addfile(member, io.BytesIO(data))
-        reads: list[int] = []
-        safe_read = tarfile._safe_read
+        reads: list[object] = []
 
-        def observe_read(fileobj: Any, length: int) -> bytes:
-            reads.append(length)
-            return safe_read(fileobj, length)
+        class ObservedArchive(io.BufferedReader):
+            """Observe extension reads through the real archive's public stream API."""
 
-        monkeypatch.setattr(tarfile, "_safe_read", observe_read)
-        if oversized:
-            with pytest.raises(BackupError, match=r"extension.*limit"):
-                verify_backup(path)
-            assert reads == []
-        else:
-            assert verify_backup(path).members == ((name, 1, digest),)
-            assert reads
+            def read(self, size: Any = -1) -> bytes:
+                """Record a read starting after the first 512-byte extension header."""
+                if self.tell() == 512:
+                    reads.append(size)
+                return super().read(size)
+
+        native_open = tarfile.open
+        with ObservedArchive(io.FileIO(path, "r")) as stream:
+
+            def observe_open(*args: Any, **kwargs: Any) -> tarfile.TarFile:
+                return native_open(*args, fileobj=stream, **kwargs)
+
+            monkeypatch.setattr(tarfile, "open", observe_open)
+            if oversized:
+                with pytest.raises(BackupError, match=r"extension.*limit"):
+                    verify_backup(path)
+                assert reads == []
+            else:
+                assert verify_backup(path).members == ((name, 1, digest),)
+                assert reads
 
     def test_an_archive_over_the_total_limit_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
