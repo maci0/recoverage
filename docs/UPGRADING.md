@@ -32,7 +32,7 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
-## [Unreleased]
+## [8.12.0]
 
 ### `POST /api/targets/<target>/functions` batch lookup rejects unknown top-level fields
 
