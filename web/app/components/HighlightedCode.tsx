@@ -68,6 +68,7 @@ export function HighlightedCode({
         const hljs = await loadHighlighter();
         if (live) {
           setHighlighter(hljs);
+          setFailed(false);
         }
         // The rejection becomes a RENDERED state, not a silence: the pane keeps
         // showing the text unhighlighted and says so underneath it, which is

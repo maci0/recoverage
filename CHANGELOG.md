@@ -13,6 +13,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Backup verification bounds PAX and GNU extension metadata before the tar reader expands it, using the existing per-member ceiling.
 
+- A code pane clears its earlier highlighting failure notice when a later selection successfully loads the highlighter, so restored syntax colours no longer appear beside an obsolete error.
+
 - Backup verification applies the existing 1 GiB per-member limit to `manifest.json` before reading it, preventing metadata from bypassing the allocation bound. The manifest remains outside the aggregate payload budget.
 
 - Backup verification and restore report malformed manifest member names through their normal error envelope instead of raising a bare TypeError for JSON arrays or objects. Refused restores leave destination files untouched, including with `--force`.

@@ -1,5 +1,8 @@
+import json
 import os
 import re
+import subprocess
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -430,6 +433,76 @@ def test_a_pane_message_is_not_reported_as_unhighlighted_code(page: Any):
     raw = page.locator("#panel .section", has_text="Original Bytes")
     expect(raw.locator("button", has_text="Open")).to_be_disabled()
     expect(raw).not_to_contain_text(note)
+
+
+@pytest.mark.parametrize("width", [360, 1280])
+def test_a_recovered_highlighter_clears_its_failure_notice(tmp_path: Path, width: int) -> None:
+    """Render the real pane and loader through a failed request and a successful retry."""
+    root = Path(__file__).resolve().parents[1]
+    entry = tmp_path / "probe.tsx"
+    component = json.dumps(str(root / "web/app/components/HighlightedCode"))
+    entry.write_text(
+        'import { render } from "preact";\n'
+        'import { useState } from "preact/compat";\n'
+        f"import {{ HighlightedCode }} from {component};\n"
+        "function Probe() { const [n, next] = useState(0); return <>\n"
+        "<button onClick={() => next(n + 1)}>Next code</button>\n"
+        '<HighlightedCode text={"int value" + n + ";"} language="c" label="C source" /></>; }\n'
+        'render(<Probe />, document.getElementById("root"));\n',
+        encoding="utf-8",
+    )
+    bundle = tmp_path / "probe.js"
+    subprocess.run(
+        [
+            "bun",
+            "build",
+            "--tsconfig-override",
+            str(root / "web/tsconfig.json"),
+            "--target",
+            "browser",
+            "--format",
+            "iife",
+            "--outfile",
+            str(bundle),
+            str(entry),
+        ],
+        cwd=root,
+        check=True,
+    )
+    with sync_playwright() as browser_driver:
+        browser = browser_driver.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.route(
+                "**/__highlight_probe.js",
+                lambda route: route.fulfill(
+                    body=bundle.read_text(encoding="utf-8"), content_type="application/javascript"
+                ),
+            )
+            page.route(
+                "**/__highlight_probe",
+                lambda route: route.fulfill(
+                    body='<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<link rel="stylesheet" href="/style.css">'
+                    "<title>Highlight recovery</title></head><body>"
+                    '<div id="root"></div><script src="/__highlight_probe.js"></script>'
+                    "</body></html>",
+                    content_type="text/html",
+                ),
+            )
+            page.route("**/highlight.js", lambda route: route.abort())
+            page.set_viewport_size({"width": width, "height": 400})
+            page.goto(f"{BASE_URL}/__highlight_probe")
+            notice = page.get_by_text("syntax highlighting unavailable", exact=False)
+            expect(notice).to_be_visible()
+            page.unroute("**/highlight.js")
+            page.get_by_role("button", name="Next code").click()
+            expect(page.locator("code .hljs-type")).to_have_text("int")
+            expect(page.locator("code")).to_have_text("int value1;")
+            expect(notice).to_have_count(0)
+        finally:
+            browser.close()
 
 
 def test_the_code_modal_takes_focus_and_gives_it_back(page: Any):
