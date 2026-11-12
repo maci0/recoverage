@@ -63,6 +63,8 @@ When there is no map to draw (no coverage documents, no sections, an unreadable 
 
 ### A failed read offers the read again
 
+Dashboard API reads have a 30-second deadline, combined with component cancellation. Switching targets or closing a pane cancels its request; a stalled server still reaches the deadline while the pane stays open.
+
 With no map on screen, the map area shows the failure and its Retry in place of the grid rather than a loading line that never resolves; over a map that is still drawn (a reload that failed), the line above the map carries them instead, so one failure is never reported twice. `/api/targets` refused means no target was ever resolved, so `/data` was never requested and "Loading coverage data…" sat above an empty map for as long as the reader waited. The button re-runs the read that failed, which the reader cannot tell from the line: the target list when that is what was refused, the whole snapshot otherwise. Without it the only way back was reloading the page by hand, which throws away the target, the section and the search along with it.
 
 ### The panel comes to a narrow viewport

@@ -152,7 +152,7 @@ function init(signal?: AbortSignal): RequestInit {
   // `exactOptionalPropertyTypes` is on, so an absent signal is an absent key
   // rather than an explicit `undefined`.
   if (signal !== undefined) {
-    return { ...NO_CACHE, signal };
+    return { ...NO_CACHE, signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) };
   }
   return { ...NO_CACHE, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) };
 }

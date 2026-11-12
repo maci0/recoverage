@@ -7906,3 +7906,47 @@ class TestSpaUnparsableJsonNamesTheOperation:
             assert "HTTP 200" in row[1] and "[request rid-1]" in row[1], row
             assert row[2] == "SyntaxError", row
         assert rows[-1] == ["valid", {"targets": [], "unreadable": []}, None]
+
+
+class TestSpaFetchDeadline:
+    """Cancellation supplied by a component must keep the API deadline."""
+
+    def test_deadline_and_component_cancellation_both_reach_fetch(self, tmp_path: Path) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        script = tmp_path / "deadline.ts"
+        api = (WEB_APP / "api.ts").resolve().as_uri()
+        script.write_text(
+            "import { fetchTargets } from "
+            + json.dumps(api)
+            + ";\n"
+            + """const out = [];
+for (const cause of ["deadline", "component"]) {
+  const deadline = new AbortController();
+  const component = new AbortController();
+  const reason = new Error(cause);
+  AbortSignal.timeout = (ms) => {
+    if (ms !== 30000) throw new Error(`unexpected deadline ${ms}`);
+    return deadline.signal;
+  };
+  globalThis.fetch = async (_url, options) => {
+    const controller = cause === "deadline" ? deadline : component;
+    controller.abort(reason);
+    out.push([cause, options.signal.aborted, options.signal.reason === reason]);
+    return new Response(JSON.stringify({ targets: [], unreadable: [] }));
+  };
+  await fetchTargets(component.signal);
+}
+console.log(JSON.stringify(out));
+""",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == [
+            ["deadline", True, True],
+            ["component", True, True],
+        ]
