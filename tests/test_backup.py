@@ -455,6 +455,63 @@ class TestArchiveSizeBounds:
             verify_backup(oversized)
         assert extracted == []
 
+    @pytest.mark.parametrize(
+        "kind",
+        [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK],
+        ids=["pax", "global-pax", "gnu-long-name", "gnu-long-link"],
+    )
+    @pytest.mark.parametrize("oversized", [False, True], ids=["ordinary", "oversized"])
+    def test_extension_headers_are_bounded_before_the_stdlib_reads_them(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        kind: bytes,
+        oversized: bool,
+    ) -> None:
+        """Hidden tar metadata must not allocate beyond the ordinary member ceiling."""
+        cap = 4096
+        monkeypatch.setattr(backup, "_MAX_MEMBER_BYTES", cap)
+        size = cap + 1 if oversized else cap - 1
+        name = "coverage-x.toml"
+        if kind in (tarfile.XHDTYPE, tarfile.XGLTYPE):
+            prefix = f"{size} comment=".encode()
+            extension = prefix + b"x" * (size - len(prefix) - 1) + b"\n"
+        else:
+            extension = (name.encode() + b"\0").ljust(size, b"\0")
+        payload = b"x"
+        digest = backup._digest(payload)
+        manifest = json.dumps(
+            {
+                "format": FORMAT_VERSION,
+                "members": [{"name": name, "size": 1, "sha256": digest}],
+            }
+        ).encode()
+        path = tmp_path / "extension.tar"
+        with tarfile.open(path, "w", format=tarfile.USTAR_FORMAT) as sink:
+            metadata = tarfile.TarInfo("extension")
+            metadata.type = kind
+            metadata.size = len(extension)
+            sink.addfile(metadata, io.BytesIO(extension))
+            for filename, data in ((name, payload), (MANIFEST_NAME, manifest)):
+                member = tarfile.TarInfo(filename)
+                member.size = len(data)
+                sink.addfile(member, io.BytesIO(data))
+        reads: list[int] = []
+        safe_read = tarfile._safe_read
+
+        def observe_read(fileobj: Any, length: int) -> bytes:
+            reads.append(length)
+            return safe_read(fileobj, length)
+
+        monkeypatch.setattr(tarfile, "_safe_read", observe_read)
+        if oversized:
+            with pytest.raises(BackupError, match=r"extension.*limit"):
+                verify_backup(path)
+            assert reads == []
+        else:
+            assert verify_backup(path).members == ((name, 1, digest),)
+            assert reads
+
     def test_an_archive_over_the_total_limit_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

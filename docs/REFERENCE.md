@@ -279,7 +279,8 @@ is logged as a warning. Windows does not attempt directory sync. Without a
 successful directory sync, a power loss can still lose the published name.
 
 Reading an archive refuses any member larger than 1 GiB, including `manifest.json`,
-before reading member bytes. Payload members also share a 1 GiB aggregate limit;
+and bounds PAX and GNU extension headers to the same limit before reading their
+metadata. Payload members also share a 1 GiB aggregate limit;
 the manifest is excluded from that aggregate payload budget.
 
 `--to` takes a file, or a directory to get the stamped default name: one

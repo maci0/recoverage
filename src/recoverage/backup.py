@@ -72,6 +72,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import tarfile
 import threading
 import unicodedata
 from dataclasses import dataclass
@@ -82,7 +83,6 @@ lazy import io
 lazy import json
 lazy import os
 lazy import shutil
-lazy import tarfile
 lazy import tempfile
 lazy from collections.abc import Iterator
 lazy from typing import Any, Final
@@ -227,6 +227,25 @@ class BackupError(RecoError, RuntimeError):
     raising something a reader has to translate (a ``KeyError`` from a manifest
     field, an ``OSError`` from a tar member).
     """
+
+
+class _BoundedTarInfo(tarfile.TarInfo):
+    """Bound hidden headers: stdlib reads extension data before returning members."""
+
+    # Python 3.15 _fromtarfile calls _frombuf; _proc_member runs before extension reads.
+    def _proc_member(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        """Refuse oversized extension data before normal header dispatch."""
+        if self.type in (
+            tarfile.XHDTYPE,
+            tarfile.XGLTYPE,
+            tarfile.GNUTYPE_LONGNAME,
+            tarfile.GNUTYPE_LONGLINK,
+        ) and (self.size < 0 or self.size > _MAX_MEMBER_BYTES):
+            raise BackupError(
+                f"archive extension {self.name!r} declares {self.size} bytes, "
+                f"over the {_MAX_MEMBER_BYTES}-byte limit one member may hold"
+            )
+        return super()._proc_member(archive)  # type: ignore[misc,no-any-return]  # stdlib per-header hook absent from typeshed
 
 
 @dataclass(frozen=True)
@@ -950,7 +969,7 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     """
     members: dict[str, bytes] = {}
     try:
-        with tarfile.open(path, mode="r:") as tar:
+        with tarfile.open(path, mode="r:", tarinfo=_BoundedTarInfo) as tar:
             # Header pass: every member's declared size, no member data read.
             # Refuse an oversized member or an over-cap total here, before the
             # data pass allocates anything.
