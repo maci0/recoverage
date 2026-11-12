@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.13.0] - 2026-11-13
+
 ### Fixed
 
 - A retained-snapshot op on Windows answers `invalid-request` with "retained snapshot operations are not supported on Windows: the pinned rebrew refuses every project path that holds a backslash", instead of the unnamed "retained project configuration contains an unsupported path". Cause: `rebrew.coverage_input_contract.confined_snapshot_config` rejects any path whose text holds a backslash (`"\\" in str(candidate)`), which is every Windows path; the managed scope is glibc linux x86_64 (`pyproject.toml`, `[tool.uv]`). The 15 test cases that need a retained snapshot accepted (9 in `test_ops_retained`, 2 in `test_ops_serve`, 4 in `test_coverage_input`) are skipped on Windows with that reason; a new test checks the refusal and its message on every platform. Evidence: CI run 42755913889, job `test (windows-latest, 3.15.2)`.
