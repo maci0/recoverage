@@ -190,16 +190,17 @@ export function useCoverage(target: string, section: string): Coverage {
       return;
     }
     const control = new AbortController();
+    const token = reloadTokenRef.current;
     void (async () => {
       try {
         const payload = await fetchStats(target, control.signal);
-        if (!control.signal.aborted) {
+        if (!control.signal.aborted && token === reloadTokenRef.current) {
           setStats(payload);
           setStatsError(null);
         }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the stats strip itself; the map above and below it is unaffected, so it does not take the page's error line
       } catch (error: unknown) {
-        if (!control.signal.aborted) {
+        if (!control.signal.aborted && token === reloadTokenRef.current) {
           setStats(null);
           setStatsError(errorMessage(error));
         }

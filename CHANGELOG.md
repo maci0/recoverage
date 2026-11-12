@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Reload now discards already decoded stats replies and errors from the retired build, keeping the stats strip clear until the new build answers.
+
 - The HTTP listener exposes an empty request body when neither `Content-Length` nor `Transfer-Encoding` is present, so body readers no longer wait for socket EOF and fail on the deadline for a header-only request.
 
 - A live-reload reconnect clears its own disconnect notice while preserving a newer regeneration failure or progress message.

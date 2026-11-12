@@ -7488,6 +7488,66 @@ for (const failed of [false, true]) {
             for failed in (False, True)
         ]
 
+    def test_reload_retires_stats_before_the_next_render(self, tmp_path: Path) -> None:
+        """A decoded stats reply cannot refill the strip after reload cleared it."""
+        hook = _web("hooks/useCoverage.ts")
+        effect = (
+            hook.split("// The stats are target-wide,", 1)[1]
+            .split("  useEffect(() => {", 1)[1]
+            .split("  }, [reloadToken, statsRetry, target]);", 1)[0]
+        )
+        reload = hook.split("  const reload = useCallback(() => {", 1)[1].split("\n  }, []);", 1)[0]
+        driver = (
+            """
+for (const retired of [false, true])
+for (const failed of [false, true]) {
+  const target = 'A';
+  const reloadTokenRef = { current: 0 };
+  const inflight = { current: new Map() };
+  const publications = [];
+  let finish;
+  const fetchStats = () => new Promise((resolve, reject) => {
+    finish = () => failed ? reject(new Error('old stats')) : resolve({ target });
+  });
+  const errorMessage = error => String(error);
+  const setStats = value => { publications.push(value === null ? 'clearStats' : 'stats'); };
+  const setStatsError = value => { publications.push(value === null ? 'clearError' : 'error'); };
+  const setSections = () => {};
+  const setReloadToken = () => {};
+  const effect = () => {
+"""
+            + effect
+            + """
+  };
+  const reload = () => {
+"""
+            + reload
+            + """
+  };
+  const cleanup = effect();
+  if (retired) reload();
+  publications.length = 0;
+  finish();
+  await Promise.resolve();
+  await Promise.resolve();
+  cleanup();
+  console.log(JSON.stringify({ retired, failed, publications }));
+}
+"""
+        )
+        script = tmp_path / "retired-stats.ts"
+        script.write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            ["bun", "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [json.loads(line) for line in proc.stdout.splitlines()] == [
+            {"retired": False, "failed": False, "publications": ["stats", "clearError"]},
+            {"retired": False, "failed": True, "publications": ["clearStats", "error"]},
+            {"retired": True, "failed": False, "publications": []},
+            {"retired": True, "failed": True, "publications": []},
+        ]
+
 
 class TestSpaOriginalBinaryReturn:
     """A discarded buffer must not keep its old cache hit marker."""

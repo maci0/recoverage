@@ -52,7 +52,7 @@ package.
 
 Loaded section dictionaries have no prototype, so a binary section named `__proto__` remains an ordinary key through merge and reload.
 
-Reload retires the coverage read token before scheduling a render. Both cell readers check cancellation and the token before publishing data, errors or load completion, so an already decoded reply cannot repopulate the map with a retired build.
+Reload retires the coverage read token before scheduling a render. Both cell readers and the stats reader check cancellation and the token before publishing data, errors or load completion, so an already decoded reply cannot repopulate the map or stats strip with a retired build.
 `web/app/App.tsx` is the shell and owns the state the chrome needs; the rest
 lives in hooks under `web/app/hooks/`. Preact `useState`/`useMemo`/`useRef`,
 not a global store: the shell is the only subscriber, and the four data hooks
