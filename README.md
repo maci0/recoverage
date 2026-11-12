@@ -58,9 +58,9 @@ block that covers it.
 ![Potato Mode, the retro pure-HTML table view](https://raw.githubusercontent.com/maci0/recoverage/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
-Every view is a plain HTML table with inline styles and no external
-stylesheet (no JS) so it works on low-spec machines, restricted browsers,
-or anywhere you just want a quick glance without loading the full SPA.
+Views use HTML tables, inline styling and a small embedded focus stylesheet,
+with no external stylesheet. They work on low-spec machines and restricted
+browsers without loading the SPA.
 
 ---
 
@@ -68,11 +68,12 @@ or anywhere you just want a quick glance without loading the full SPA.
 
 Install the published GitHub wheel into a virtual environment. Its dependency
 metadata fetches the exact hash-pinned Rebrew wheel automatically; no local
-Rebrew checkout is required.
+Rebrew checkout is required. The example uses the published 8.8.2 wheel;
+newer Git tags do not necessarily have downloadable release assets.
 
 ```bash
 uv venv --python 3.15.2
-uv pip install "https://github.com/maci0/recoverage/releases/download/v8.9.0/recoverage-8.9.0-py3-none-any.whl"
+uv pip install "https://github.com/maci0/recoverage/releases/download/v8.8.2/recoverage-8.8.2-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 

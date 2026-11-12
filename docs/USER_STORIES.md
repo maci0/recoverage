@@ -308,7 +308,7 @@ graph TD
 
 ### Acceptance Criteria
 - Accessible at `/potato`
-- No CSS, no JavaScript — all styling via HTML attributes (`bgcolor`, `border`, etc.)
+- No JavaScript or external stylesheet; HTML attributes provide colors and borders, and a small embedded stylesheet provides keyboard focus indicators.
 - Same surface as the SPA: grid, filters, search, section tabs, detail panel, data inspector, hex dump, assembly, globals, target selector
 - The grid is paginated (32 rows per page, `?page=N`); a real `.text` section is ~25k cells, which unpaginated is ~7.7 MB of table markup
 - `?view=functions` renders the function list (`?sort=name|va|size|status`, `?status=`) instead of the grid

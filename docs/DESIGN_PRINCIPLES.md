@@ -1,6 +1,6 @@
 # Recoverage Design Principles
 
-This document outlines the core architectural and operational philosophies that guide the development of the Recoverage UI dashboard.
+The rules behind the coverage dashboard.
 
 How the dashboard is built is [DESIGN.md](DESIGN.md); the requirements these
 principles serve are [USER_STORIES.md](USER_STORIES.md). Last verified against
@@ -9,14 +9,14 @@ the code: 2026-11-09.
 ## 1. A Lightweight Frontend and a Minimal Backend
 The UI is built to be as light and fast as possible. The frontend is one built bundle, Preact (through `preact/compat`) with Tailwind CSS 4 over a CSS-variable token layer, compiled by Vite into `assets/app.js` and `assets/style.css` and inlined into the shell; Preact rather than React is most of why it is small. The backend uses the minimal Bottle framework to serve data. The goal is uncompromising speed and low maintenance overhead.
 
-## 2. First Draw in First TCP Packet
+## 2. First Draw Without Subresource Requests
 Initial page load time is critical. The entire Single Page Application (SPA) shell, `index.html` with `style.css` and `app.js` inlined, minified and compressed (Brotli, Zstd or gzip, smallest wins), is one response, so the first paint needs no render-blocking subresource request. Since the frontend became one Preact + Tailwind bundle the shell measures ~43 KB brotli (43,446 B on 2026-11-09), which cannot fit RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is therefore a 90,000-byte checked ceiling with headroom over that measurement rather than the protocol constant. `ui._check_payload_budget` prints the overage on every start and `tests/test_api.py` fails when the shipped shell crosses the ceiling, so unbounded growth is still a regression. The three compressed sizes behind that claim are re-derived by `make payload-budget`.
 
 ## 3. Decoupled Architecture
 Recoverage is a pure data consumer. Its serving path never links the `rebrew` matching tools: it reads canonical project inputs through `rebrew.coverage_project.load_project_coverage`, or the portable coverage documents `RECOVERAGE_SNAPSHOTS` selects, and writes neither. `rebrew` is a runtime dependency for workspace resolution (`rebrew.workspace`), function metadata (`rebrew.metadata`), the live coverage model (`rebrew.coverage_project`) and the document reader (`rebrew.coverage_toml`). This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
 
 ## 4. Shift Computation to the Reader & the Backend
-The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and the JSON grouping the API serves must be computed before transmission — in the document reader (`rebrew.coverage_toml`'s derived fields) or in the backend — never in the browser. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
+The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and the JSON grouping the API serves must be computed before transmission, in the document reader (`rebrew.coverage_toml`'s derived fields) or in the backend, never in the browser. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
 
 ## 5. Aggressive Render Optimization
 Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requires strict render management:
@@ -33,7 +33,7 @@ Memory and bandwidth are preserved by fetching heavy payloads only when explicit
 - Assembly generation (via Capstone) is performed on-demand and cached in memory using LRU caching.
 
 ## 7. Graceful Degradation (Potato Mode)
-The dashboard must remain accessible even in the most constrained environments. "Potato Mode" is a first-class citizen—a pure HTML5/Table fallback requiring **zero JavaScript and zero CSS**. It provides near-visual-parity with the main SPA, ensuring the coverage data can be viewed on old setups, restricted browsers, or via terminal browsers.
+Potato Mode provides server-rendered HTML tables with **zero JavaScript** and no external stylesheet. Inline styling and a small embedded stylesheet provide presentation and keyboard focus indicators. Coverage remains readable on old setups, restricted browsers and terminal browsers.
 
 ## 8. Spatial Consistency
 The coverage grid is a spatial map where grid position correlates linearly to the virtual memory address. When applying filters (e.g., showing only "Exact" matches), unmatched cells are visually dimmed (opacity changes), never removed. Exposing missing data by collapsing the grid ruins the spatial context of the memory layout.
