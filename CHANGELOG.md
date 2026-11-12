@@ -12,6 +12,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Correct the restore reference: publication is per file, failed rollback can require manual recovery, and verified archive members can include original binaries as well as coverage documents.
+- Correct the recovery guide: missing or hash-mismatched retained objects refuse an ops call rather than silently producing empty coverage.
 
 - Reload now discards already decoded stats replies and errors from the retired build, keeping the stats strip clear until the new build answers.
 - Switching a target or build no longer exposes the previous binary bytes during the frame before the download effect resets its state. The bytes pane waits for the binary belonging to the current path and build.
