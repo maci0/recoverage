@@ -7350,6 +7350,94 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
 
 
+class TestSpaSupersededCoverageReads:
+    """Already-decoded replies cannot republish retired coverage cells."""
+
+    def test_reload_retires_both_cell_readers_before_the_next_render(self, tmp_path: Path) -> None:
+        hook = _web("hooks/useCoverage.ts")
+        load = hook.split("async (name: string, signal: AbortSignal): Promise<void> => {", 1)[
+            1
+        ].split("\n    },\n    [merge, target],", 1)[0]
+        ensure = hook.split("    (name: string): void => {", 1)[1].split(
+            "\n    },\n    [indexIsCurrent, merge, sections, target],", 1
+        )[0]
+        reload = hook.split("  const reload = useCallback(() => {", 1)[1].split("\n  }, []);", 1)[0]
+        driver = (
+            """
+for (const retired of [false, true])
+for (const lazy of [false, true])
+for (const failed of [false, true]) {
+  const target = 'A', sections = {};
+  const reloadTokenRef = { current: 0 };
+  const inflight = { current: new Map() };
+  const publications = [];
+  let finish;
+  const fetchData = () => new Promise((resolve, reject) => {
+    finish = () => failed ? reject(new Error('old reply')) : resolve({ sections: {} });
+  });
+  const merge = () => { publications.push('merge'); };
+  const indexIsCurrent = () => false;
+  const requestKey = () => '';
+  const errorMessage = error => String(error);
+  const setLoadError = () => { publications.push('loadError'); };
+  const setSettledKey = () => { publications.push('settled'); };
+  const setCellError = () => { publications.push('cellError'); };
+  const setStats = () => {};
+  const setSections = () => {};
+  // A state setter schedules a render; it does not update the render's ref here.
+  const setReloadToken = () => {};
+  const load = async (name, signal) => {
+"""
+            + load
+            + """
+  };
+  const ensure = (name) => {
+"""
+            + ensure
+            + """
+  };
+  const reload = () => {
+"""
+            + reload
+            + """
+  };
+  const active = lazy ? ensure('.text') : load('.text', new AbortController().signal);
+  if (retired) reload();
+  finish();
+  await active;
+  await Promise.resolve();
+  console.log(JSON.stringify({ retired, lazy, failed, publications }));
+}
+"""
+        )
+        script = tmp_path / "retired-cells.ts"
+        script.write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            ["bun", "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [json.loads(line) for line in proc.stdout.splitlines()] == [
+            {
+                "retired": False,
+                "lazy": False,
+                "failed": False,
+                "publications": ["merge", "settled"],
+            },
+            {
+                "retired": False,
+                "lazy": False,
+                "failed": True,
+                "publications": ["loadError", "settled"],
+            },
+            {"retired": False, "lazy": True, "failed": False, "publications": ["merge"]},
+            {"retired": False, "lazy": True, "failed": True, "publications": ["cellError"]},
+        ] + [
+            {"retired": True, "lazy": lazy, "failed": failed, "publications": []}
+            for lazy in (False, True)
+            for failed in (False, True)
+        ]
+
+
 class TestSpaOriginalBinaryReturn:
     """A discarded buffer must not keep its old cache hit marker."""
 

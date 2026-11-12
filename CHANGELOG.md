@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Delayed coverage replies cannot restore a previous build's cells or error state after reload, even when their response was decoded before cancellation.
+
 - Returning to a target after another target's binary download fails or is cancelled loads its bytes again instead of keeping an empty byte pane under a stale cache marker.
 
 - Dashboard JSON reads reject null, scalar and array success bodies with the operation and request ID. A null error body falls back to the HTTP status and request ID instead of throwing while rendering the refusal.

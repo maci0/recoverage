@@ -106,14 +106,17 @@ export function useCoverage(target: string, section: string): Coverage {
       const token = reloadTokenRef.current;
       const key = requestKey(target, name, token);
       try {
-        merge(await fetchData(target, name, signal, !indexIsCurrent(target)), name, token);
+        const payload = await fetchData(target, name, signal, !indexIsCurrent(target));
+        if (!signal.aborted && token === reloadTokenRef.current) {
+          merge(payload, name, token);
+        }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced as the header's error line, and the map keeps its last good frame
       } catch (error: unknown) {
-        if (!signal.aborted) {
+        if (!signal.aborted && token === reloadTokenRef.current) {
           setLoadError(errorMessage(error));
         }
       } finally {
-        if (!signal.aborted) {
+        if (!signal.aborted && token === reloadTokenRef.current) {
           setSettledKey(key);
         }
       }
@@ -217,14 +220,13 @@ export function useCoverage(target: string, section: string): Coverage {
       const token = reloadTokenRef.current;
       const fetchCells = async (): Promise<void> => {
         try {
-          merge(
-            await fetchData(target, name, control.signal, !indexIsCurrent(target)),
-            name,
-            token,
-          );
+          const payload = await fetchData(target, name, control.signal, !indexIsCurrent(target));
+          if (!control.signal.aborted && token === reloadTokenRef.current) {
+            merge(payload, name, token);
+          }
           // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the tab itself, with a retry, and kept per section
         } catch (error: unknown) {
-          if (control.signal.aborted) {
+          if (control.signal.aborted || token !== reloadTokenRef.current) {
             return;
           }
           setCellError({
@@ -267,11 +269,9 @@ export function useCoverage(target: string, section: string): Coverage {
     // re-spans cells, so the loaded siblings are as stale as the map on screen.
     // The token bump retires the search index with them, so the next request
     // asks for a fresh one rather than passing `index=0` against a stale index.
-    // Aborting first is what keeps a cell fetch already in flight from landing
-    // after the bump: it would repaint a superseded build's cells and, carrying
-    // its search index, fill the slot `reload` just retired with the build it
-    // replaced. The token check in `merge` refuses the index; only the abort
-    // keeps the cells out.
+    // Retire replies before scheduling the render: abort cannot retract an
+    // already decoded response whose continuation is waiting to run.
+    reloadTokenRef.current += 1;
     for (const control of inflight.current.values()) {
       control.abort();
     }
@@ -287,7 +287,7 @@ export function useCoverage(target: string, section: string): Coverage {
       }
       return next;
     });
-    setReloadToken((token) => token + 1);
+    setReloadToken(reloadTokenRef.current);
   }, []);
 
   const loading = target !== "" && settledKey !== requestKey(target, section, reloadToken);
