@@ -271,7 +271,7 @@ type ErrorEnvelope = { error?: string; detail?: string };
  * the only thing left to read, and the caller already has it. */
 const NO_ENVELOPE: ErrorEnvelope = {};
 
-/** The body of a successful answer, read as JSON, with the operation named.
+/** The body of a successful answer, read as a JSON object, with the operation named.
  *
  * A `res.json()` rejected by a body that is not JSON (a proxy's HTML 502
  * served with a 200, a truncated payload) throws a bare `SyntaxError`: the
@@ -280,16 +280,24 @@ const NO_ENVELOPE: ErrorEnvelope = {};
  * and the status line the response carries the same way `refusal` does. */
 async function decodeJson<T>(res: Response, operation: string): Promise<T> {
   try {
-    // SAFETY: the answer is this origin's own JSON, whose shape the
-    // `recoverage.api` handler serving `operation` pins; the cast is the one
-    // narrow every `fetch*` helper below already made at each call site.
-    return (await res.json()) as T;
+    const payload: unknown = await res.json();
+    if (
+      payload === null ||
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- decodeJson is the HTTP trust boundary; JSON is unchecked until this guard
+      typeof payload !== "object" ||
+      // oxlint-disable-next-line @rikalabs/no-trivial-runtime-guard-helpers -- every read endpoint returns an object, so array JSON is refused at the HTTP boundary
+      Array.isArray(payload)
+    ) {
+      throw new Error("expected a JSON object");
+    }
+    // SAFETY: payload is a JSON object; the same-origin handler owns the endpoint field contract.
+    return payload as T;
   } catch (error: unknown) {
     const id = res.headers.get("X-Request-ID");
     const detail = error instanceof Error ? error.message : String(error);
     const request = id === null ? "" : ` [request ${id}]`;
     throw new Error(
-      `${operation} returned a body that is not JSON (HTTP ${res.status}): ${detail}${request}`,
+      `${operation} returned an invalid JSON response (HTTP ${res.status}): ${detail}${request}`,
       { cause: error },
     );
   }
@@ -308,7 +316,7 @@ async function refusal(res: Response): Promise<string> {
   // SAFETY: this origin's own JSON, whose shape `recoverage.server._json_err`
   // pins. A body outside that contract (a proxy's HTML error page) parses to
   // nothing to read, which is the empty envelope, not a wrong answer.
-  return describeRefusal(res, await res.json().catch(() => NO_ENVELOPE));
+  return describeRefusal(res, (await res.json().catch(() => NO_ENVELOPE)) ?? NO_ENVELOPE);
 }
 
 /** Render a refusal from a body that has already been read.
@@ -480,7 +488,7 @@ export async function postRegen(key: RegenKey): Promise<RegenResult> {
   // envelope. An unguarded `res.json()` threw a SyntaxError out of this
   // function, and every one of those reached the reader as the same
   // "regeneration unavailable" line with no status, no reason and no id.
-  const payload: RegenEnvelope = await res.json().catch(() => NO_ENVELOPE);
+  const payload: RegenEnvelope = (await res.json().catch(() => NO_ENVELOPE)) ?? NO_ENVELOPE;
   if (!res.ok) {
     // The reason rides along in the notice rather than being dropped: a 429
     // means somebody else's run is going, a 403 means this page was not

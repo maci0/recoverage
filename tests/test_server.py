@@ -7907,6 +7907,75 @@ class TestSpaUnparsableJsonNamesTheOperation:
             assert row[2] == "SyntaxError", row
         assert rows[-1] == ["valid", {"targets": [], "unreadable": []}, None]
 
+    def test_non_object_json_names_the_operation_and_request(self, tmp_path: Path) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        api = (WEB_APP / "api.ts").resolve().as_uri()
+        script = tmp_path / "object-response.ts"
+        script.write_text(
+            "import * as api from "
+            + json.dumps(api)
+            + ";\n"
+            + """const calls = [
+  ["fetchTargets", () => api.fetchTargets()],
+  ["fetchData", () => api.fetchData("T", null)],
+  ["fetchStats", () => api.fetchStats("T")],
+  ["fetchFunction", () => api.fetchFunction("T", 1)],
+  ["fetchAsm", () => api.fetchAsm("T", 1, 16, ".text")],
+];
+const out = [];
+for (const value of [null, [], 7, "wrong", true]) {
+  for (const [name, call] of calls) {
+    globalThis.fetch = async () => new Response(JSON.stringify(value), {
+      status: 200, headers: {"X-Request-ID": "bad-object"},
+    });
+    try { await call(); out.push([name, "accepted"]); }
+    catch (error) { out.push([name, error.message]); }
+  }
+}
+console.log(JSON.stringify(out));
+""",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        rows = json.loads(proc.stdout)
+        assert len(rows) == len(self.HELPERS) * 5
+        for i, row in enumerate(rows):
+            name, operation = self.HELPERS[i % len(self.HELPERS)]
+            assert row[0] == name
+            assert operation in row[1] and "HTTP 200" in row[1], row
+            assert "[request bad-object]" in row[1], row
+
+    def test_null_refusal_keeps_status_and_request(self, tmp_path: Path) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        script = tmp_path / "null-refusal.ts"
+        api = (WEB_APP / "api.ts").resolve().as_uri()
+        script.write_text(
+            "import { fetchTargets, postRegen } from "
+            + json.dumps(api)
+            + ";\n"
+            + """globalThis.fetch = async () => new Response("null", {
+  status: 401, statusText: "Unauthorized", headers: {"X-Request-ID": "null-refusal"},
+});
+const out = [];
+try { await fetchTargets(); } catch (error) { out.push(error.message); }
+try { out.push((await postRegen("key")).reason); } catch (error) { out.push(error.message); }
+console.log(JSON.stringify(out));
+""",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [bun, "run", str(script)], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == ["401 Unauthorized [request null-refusal]"] * 2
+
 
 class TestSpaFetchDeadline:
     """Cancellation supplied by a component must keep the API deadline."""
