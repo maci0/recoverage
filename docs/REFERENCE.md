@@ -294,15 +294,18 @@ recoverage restore /srv/backups/nightly.tar --force
 
 The archive is verified in full (every member read, its size and digest
 checked) before the first document is written, and each document then lands
-through an atomic replace. A restore therefore either completes or leaves the
-portable snapshot directory exactly as it was; half a restore is a dashboard that reads
-healthy and shows half a project.
+through an atomic replace. Stop readers during restore: publication is per file,
+not one atomic swap of the whole directory. A handled failure attempts to restore
+the originals. If rollback also fails, the error names the staging directory
+retaining them; a process or machine crash can also leave an interrupted restore.
+Inspect its `previous/` files and complete manual recovery before removing the
+staging directory and retrying, as described in [the recovery runbook](RECOVERY.md).
 
 `--force` replaces differing selected offline snapshots; the refusal names every
 document it would overwrite. Canonical live verdicts and `status_history` stay
-unchanged. A corrupt archive, a member that is not a coverage document, a
-member name that would escape the directory and an unreadable file are refused
-either way.
+unchanged. Archives may also contain the original binaries the coverage documents
+reference. A corrupt archive, an invalid member, a member name that would escape
+the directory and an unreadable file are refused either way.
 
 Offline readers detect restored bytes automatically; `regen` is a live-project
 operation. The full procedure is in [the recovery runbook](RECOVERY.md).
