@@ -274,6 +274,9 @@ and recomputes them before reporting success, so a green exit means a restore
 could read it rather than that a write returned. The archive itself is written
 through a temp file, fsynced, and only then published by an atomic rename, so
 a crash mid-run leaves the previous backup rather than a truncated one.
+On POSIX, publication also attempts to sync the directory entry; a failure
+is logged as a warning. Windows does not attempt directory sync. Without a
+successful directory sync, a power loss can still lose the published name.
 
 `--to` takes a file, or a directory to get the stamped default name: one
 that exists, or any path ending in `/`, which is created. The

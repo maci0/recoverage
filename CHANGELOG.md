@@ -15,6 +15,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Correct the recovery guide: missing or hash-mismatched retained objects refuse an ops call rather than silently producing empty coverage.
 - Name the existing token-gate exemptions in the operator reference: CORS preflights and GET/HEAD of the two packaged fonts; data requests remain authenticated.
 - Align restore command help and the installed man page with per-file publication, possible manual rollback recovery and verified non-coverage archive members.
+- Backup and restore now attempt directory fsync correctly on POSIX, using the native descriptor instead of trying to wrap a directory as a normal file. Directory sync remains best effort with failures logged; Windows still does not attempt it.
 
 - Reload now discards already decoded stats replies and errors from the retired build, keeping the stats strip clear until the new build answers.
 - Switching a target or build no longer exposes the previous binary bytes during the frame before the download effect resets its state. The bytes pane waits for the binary belonging to the current path and build.

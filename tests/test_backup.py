@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 import tarfile
 import time
 from datetime import UTC, datetime
@@ -90,6 +91,31 @@ class TestWriteBackup:
         info = write_backup(db, tmp_path)
         assert info.path.name.startswith("coverage-19700101T000000")
         assert info.created.startswith("1970-01-01T00:00:00")
+
+    def test_backup_attempts_directory_sync_where_supported(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The real writer must reach fsync with an open directory descriptor."""
+        directory_attempts: list[int] = []
+        file_attempts: list[int] = []
+        real_fsync = os.fsync
+
+        def observed_fsync(descriptor: int) -> None:
+            attempts = (
+                directory_attempts if stat.S_ISDIR(os.fstat(descriptor).st_mode) else file_attempts
+            )
+            attempts.append(descriptor)
+            real_fsync(descriptor)
+
+        monkeypatch.setattr(os, "fsync", observed_fsync)
+        archive = tmp_path / "sync.tar"
+        write_backup(db, archive)
+        assert verify_backup(archive).members
+        assert file_attempts
+        if os.name == "nt":
+            assert not directory_attempts
+        else:
+            assert directory_attempts
 
     def test_round_trips_every_document(self, db: Path, tmp_path: Path) -> None:
         info = write_backup(db, tmp_path / "snap.tar")

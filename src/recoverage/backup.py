@@ -387,17 +387,19 @@ def _digest(data: bytes) -> str:
 def _fsync_dir(path: Path) -> None:
     """fsync a directory so a rename inside it survives a power loss.
 
-    POSIX only, and best effort: a directory opened for reading is not
-    portable (Windows refuses), and on Windows the replace is metadata the
-    filesystem journals without one.  Without it the archive name can be lost
+    POSIX only, and best effort; Windows does not attempt directory sync.
+    Failures are logged. Without it the archive name can be lost
     after a crash even though its bytes are on disk, which is exactly the
     "the backup ran, there is nothing there" case this module exists to close.
     """
     if os.name == "nt":
         return
     try:
-        with os.fdopen(os.open(path, os.O_RDONLY)) as fd:
-            os.fsync(fd)
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
     except OSError as exc:
         _log.warning(
             "Cannot fsync directory %r for durability: %r",
