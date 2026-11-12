@@ -82,6 +82,48 @@ def test_an_unread_body_cannot_become_another_request(chunked: bool) -> None:
         thread.join(timeout=5)
 
 
+def test_unframed_http_request_exposes_an_empty_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+    import threading
+    from wsgiref.simple_server import make_server
+
+    from bottle import Bottle
+
+    from recoverage.server import read_request_body
+
+    application = Bottle()
+
+    @application.post("/body")
+    def body() -> bytes:
+        return read_request_body(64)
+
+    monkeypatch.setattr(devserver, "_CLIENT_SOCKET_TIMEOUT_SECONDS", 1)
+    server = make_server(
+        "127.0.0.1",
+        0,
+        application,
+        server_class=devserver._ThreadingWSGIServer,
+        handler_class=devserver._KeepAliveRequestHandler,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+    try:
+        # putrequest avoids HTTPConnection.request's automatic Content-Length: 0.
+        connection.putrequest("POST", "/body")
+        connection.putheader("Connection", "close")
+        connection.endheaders()
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == b""
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
 def _own_zombie_pids() -> set[int]:
     """PIDs of this process's children currently in the zombie state."""
     zombies: set[int] = set()

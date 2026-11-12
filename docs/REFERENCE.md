@@ -696,7 +696,7 @@ Query-parameter rules, the same on every endpoint:
   unparseable one falls back to the default, and the response echoes the
   `limit` and `offset` actually used.
 - `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
-  string (with or without `0x`) or an integer. Only a single `chunked` transfer coding is supported, matched case-insensitively; unsupported or malformed `Transfer-Encoding` headers are refused with 400 and `Connection: close` before reading the body. A body shorter than its declared `Content-Length` is refused with 400 and
+  string (with or without `0x`) or an integer. The bundled HTTP listener exposes an empty body when both framing headers are absent. Only a single `chunked` transfer coding is supported, matched case-insensitively; unsupported or malformed `Transfer-Encoding` headers are refused with 400 and `Connection: close` before reading the body. A body shorter than its declared `Content-Length` is refused with 400 and
   `Connection: close`, even when the received prefix is valid JSON. The body must be under 64 KiB
   (413), the list at most 500 entries (413) and non-empty (400). VAs with no
   match are omitted from the

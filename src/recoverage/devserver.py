@@ -603,6 +603,13 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             "Content-Length", ["0"]
         ) != ["0"]:
             self.close_connection = True
+        environ = self.get_environ()
+        if not self.headers.get_all("Content-Length") and not self.headers.get_all(
+            "Transfer-Encoding"
+        ):
+            # An unframed HTTP request has no body; socket EOF belongs to the
+            # connection and would block a reader waiting for this request.
+            environ["CONTENT_LENGTH"] = "0"
         # The two casts are typeshed gaps, not laundered evidence:
         # http.server types ``rfile``/``wfile`` as the raw buffered socket
         # objects, while wsgiref's constructor takes the PEP 3333 InputStream
@@ -612,7 +619,7 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             cast(InputStream, self.rfile),
             cast(IO[bytes], self.wfile),
             self.get_stderr(),
-            self.get_environ(),
+            environ,
             multithread=True,
         )
         handler.request_handler = self  # backpointer for logging
