@@ -30,7 +30,7 @@ lazy from types import MappingProxyType
 lazy from urllib.parse import quote, unquote, urlsplit
 
 from bottle import Bottle, HTTPResponse, request, response
-from rebrew.coverage_db import _KNOWN_CELL_STATES as _REBREW_KNOWN_CELL_STATES
+from rebrew.coverage_db import KNOWN_CELL_STATES
 from rebrew.coverage_toml import (
     BUCKET_OF_STATE,
     Cell,
@@ -1705,7 +1705,7 @@ _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
 #: so the served byte figures could not reconcile with ``coveredBytes``.
 #: ``tests/test_server.py`` (``TestBucketReconciliation``) pins the
 #: membership here against the same literal it writes down for the fold.
-_OTHER_BUCKET_STATES: frozenset[str] = frozenset(_REBREW_KNOWN_CELL_STATES - set(BUCKET_OF_STATE))
+_OTHER_BUCKET_STATES: frozenset[str] = frozenset(KNOWN_CELL_STATES - set(BUCKET_OF_STATE))
 #: The buckets ``_section_summary`` reports a count and a byte sum for.  The
 #: other five (``data``, ``thunk``, ``none``, ``proven``, ``size_mismatch``)
 #: contribute covered bytes and nothing else, which is why the summary carries

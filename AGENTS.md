@@ -543,8 +543,9 @@ simpler and strictly wider.
      `Section.buckets` is keyed by cell STATE and a second hand-written copy of
      the grouping was a vocabulary this package drifted from silently (a state
      rebrew added summed into no counted bucket while `Section.covered_bytes`
-     still counted it). A private name is read deliberately: it is the one
-     place the fold exists, a rename fails this import loudly where the copy
+     still counted it). The `other` states come from rebrew's public
+     `rebrew.coverage_db.KNOWN_CELL_STATES`: it is the one place the
+     vocabulary exists, a rename fails this import loudly where the copy
      failed quietly, and `tests/test_server.py` (`TestBucketReconciliation`)
      holds what it hands over against a literal written in the test.
    - `server.coverage_pct(covered, total)` is the ONE percentage a covered-byte
@@ -1294,19 +1295,17 @@ explicit upstream development only; it is never the default package source.
   tree git cannot read rather than passing on an empty substitution: outside a
   work tree `git status` writes its error to stderr and yields nothing, which
   read as a clean bundle.
-- The cell-state vocabulary is owned by rebrew (published as a private
-  `_KNOWN_CELL_STATES`, and the module holding it has moved once: `build_db`
-  -> `coverage_db`) and must be covered on the rendering side: `potato.COLORS`
+- The cell-state vocabulary is owned by rebrew (published as
+  `rebrew.coverage_db.KNOWN_CELL_STATES`) and must be covered on the rendering side: `potato.COLORS`
   + `LEGEND_ITEMS`, and `web/app/states.ts`
   `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats`, where `verified`
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state. Both read
-  the vocabulary through `coverage_fixture.known_cell_states`, which searches
-  the rebrew modules that own one and raises when none publishes it: a second
-  import of one spelling is what let the move above break the gate, and a
-  skipped gate reads exactly like a passing one.
+  the vocabulary through `coverage_fixture.known_cell_states`, which imports
+  that public name, so a rename fails the import instead of skipping the gate:
+  a skipped gate reads exactly like a passing one.
 - The SPA's own arithmetic over document columns follows four rules, because
   `rebrew.coverage_toml` reads `columns`, `start`, `end` and `span` as plain
   ints with no ceiling, and a value past a JS typed array's range wraps

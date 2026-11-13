@@ -514,61 +514,13 @@ def _target_stats(root: Path, target: str, trusted: Any = None) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def _plan_coverage_config(root: Path, target: str) -> tuple[dict[str, Any], list[str]]:
-    """The confined effective target mapping and the scanned source identities of one target.
-
-    Rebrew 6.24.0 provided this as ``coverage_input_contract.plan_coverage_config`` and
-    6.26.0 removed it without a replacement; the backend reads ``config.target``,
-    ``config.inventory`` and ``source_paths`` from the plan reply, so the view is built here
-    from the same Rebrew config and source walkers.
-    """
-    from rebrew.config import inventory_path_for, load_config
-    from rebrew.coverage_input_contract import CoverageInputError, confined_snapshot_config
-    from rebrew.sources import iter_headers, iter_sources
-
-    root = root.resolve(strict=True)
-    cfg = load_config(root, target=target)
-    confined_snapshot_config(cfg, root)
-
-    def relative(path: Path | None) -> str:
-        if path is None or path == Path():
-            return ""
-        try:
-            return path.resolve().relative_to(root).as_posix()
-        except ValueError:
-            raise CoverageInputError("coverage config escapes snapshot") from None
-
-    config = {
-        "target": cfg.target_name,
-        "binary": relative(cfg.target_binary),
-        "reversed_dir": relative(cfg.reversed_dir),
-        "shared_dir": relative(cfg.shared_dir),
-        "inventory": relative(inventory_path_for(cfg.reversed_dir, cfg)),
-        "metadata_dir": relative(cfg.metadata_dir),
-        "compiler_includes": relative(cfg.compiler_includes),
-        "compiler_libs": relative(cfg.compiler_libs),
-        "raw_link": relative(cfg.raw_link),
-        "source_ext": cfg.source_ext,
-        "module": cfg.module,
-        "arch": cfg.arch,
-        "binary_format": cfg.binary_format,
-        "compiler_profile": cfg.compiler_profile,
-        "cflags": cfg.cflags,
-        "base_cflags": cfg.base_cflags,
-        "defines": cfg.defines,
-        "external_libs": cfg.external_libs,
-        "crt_sources": cfg.crt_sources,
-    }
-    source_paths = {
-        relative(path)
-        for path in (*iter_sources(cfg.reversed_dir, cfg), *iter_headers(cfg.reversed_dir, cfg))
-    }
-    return config, sorted(source_paths, key=lambda item: item.encode("utf-8"))
-
-
 def coverage_plan(config: WorkerConfig, request: PlanRequest) -> Mapping[str, Any]:
     """List the independently discovered staged coverage inputs, including absences."""
-    from rebrew.coverage_input_contract import CoverageInputError, plan_coverage_readset
+    from rebrew.coverage_input_contract import (
+        CoverageInputError,
+        plan_coverage_config,
+        plan_coverage_readset,
+    )
 
     if (
         not request.files
@@ -578,7 +530,7 @@ def coverage_plan(config: WorkerConfig, request: PlanRequest) -> Mapping[str, An
         raise _invalid("coverage plan requires a retained snapshot")
     root = project_root(config, request.project_dir)
     try:
-        config_view, sources = _plan_coverage_config(root, request.rebrew_target)
+        config_view, sources = plan_coverage_config(root, request.rebrew_target)
         return {
             "readset": plan_coverage_readset(root, request.rebrew_target),
             "source_paths": sources,
