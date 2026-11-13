@@ -134,8 +134,8 @@ Do: change a script that looks for the "Match" header to `NEAR`.
 
 ### `check --json` reason text
 
-Before: a reason read, for example, "no tracked cells; coverage is not
-recorded".
+Before: the reason separated "no tracked cells" and "coverage is not recorded"
+with an em dash.
 
 After: "no tracked cells; coverage is not recorded". Error and completion lines
 use a colon or a semicolon the same way.
@@ -212,7 +212,7 @@ whether or not the search box is ever opened.
 ### `recoverage regen` exits 2, not 1, on an unreadable `rebrew-project.toml`
 
 Before: a missing or unreadable project file was reported as
-`Error: rebrew regen failed: ConfigNotFoundError: …` and exited 1, the code
+`Error: rebrew regen failed: ConfigNotFoundError: …` and exited 1. That is the code
 this package uses for a rebrew pipeline that ran and failed.
 
 After: the same file exits 2, the code every other command uses for a setting
