@@ -7,6 +7,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The bundled Rebrew is now 6.37.0 (was 6.32.1). The public wheel pin, its hash in `uv.lock` and the CI source clone (`tools/ci_clone_rebrew.sh`) moved together.
+
 - The retained coverage ops (`recoverage.coverage_plan`, `coverage_map`, `coverage_gate`, `coverage_export`) serve a target whose `rebrew-project.toml` keeps its function metadata in SQLite, which is how a fresh Rebrew analysis now captures it. Such a request stages `rebrew-metadata.sqlite3` in place of `rebrew-functions.toml`, and reports the same exact matches, verified bytes, gate verdict and decomp.dev measures as the same target with TOML metadata. Rebrew 6.32.1 refused every retained target whose config did not select TOML metadata ("retained target requires its inventory and TOML function metadata"). A retained request whose file set also carries the registry its config does not read (`rebrew-functions.toml` under SQLite, `rebrew-metadata.sqlite3` under TOML) is now refused with `invalid-request`, since the staged file would never be read.
 
 - `recoverage.coverage_plan` takes its `config` and `source_paths` from Rebrew's public `rebrew.coverage_input_contract.plan_coverage_config` instead of rebuilding them from 19 `ProjectConfig` attributes, and the dashboard reads the cell-state vocabulary from the public `rebrew.coverage_db.KNOWN_CELL_STATES` instead of the private `_KNOWN_CELL_STATES`. The reply is unchanged. Both names need Rebrew 6.37.0 (unreleased), the `REBREW_FLOOR` this branch already waits for.
