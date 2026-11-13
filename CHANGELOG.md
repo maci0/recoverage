@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.14.0] - 2026-11-13
+
+### Fixed
+
+- Correct the installation example to use a published wheel, clarify Potato Mode's embedded stylesheet, and preserve the upgrade guide's before-and-after example. Documentation also identifies tags without release assets.
+
 ## [8.13.1] - 2026-11-13
 
 ### Fixed
