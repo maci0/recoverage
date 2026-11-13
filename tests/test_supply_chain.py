@@ -91,7 +91,7 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v6.32.1", "REBREW_SHA": "858c9f57ed389717af5c9a5f2cc811526a1c0c10"}
+_PINS = {"REBREW_REF": "sqlite-2a", "REBREW_SHA": "744773d64f4892ac46872850b192c55eb943b0fb"}
 _REBREW_WHEEL = (
     "https://github.com/maci0/rebrew/releases/download/v6.32.1/rebrew-6.32.1-py3-none-any.whl"
 )
