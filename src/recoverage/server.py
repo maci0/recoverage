@@ -738,15 +738,17 @@ _FUNCTION_STORE_CACHE_MAX = 64
 
 
 def _function_store_dir(project_dir: Path, target: str) -> Path | None:
-    """Directory of ``rebrew-functions.toml`` for *target*, or None when the project has none.
+    """The ``metadata_dir`` of *target*, or None when the project config is unreadable.
+
+    The function store under it is read through Rebrew's metadata API, which
+    follows the backend the config selects (TOML files or the SQLite
+    database) and answers an absent store with no rows.
 
     Memoized on the config stat: :func:`rebrew.config.load_config` parses
     ``rebrew-project.toml`` on every call (~1-3 ms), so a batch lookup that
     attached documentation per row paid it once per row.  The stat is the
     same token :func:`_get_targets_config` keys on, so an edit that moves
-    ``metadata_dir`` invalidates the entry.  What is cached is the resolved
-    directory, not the existence verdict: ``is_file()`` still runs per call,
-    so a store file created after the resolution is seen.  A failed config
+    ``metadata_dir`` or the backend invalidates the entry.  A failed config
     read is not cached and is retried on the next call, like the config memo.
     """
     fingerprint = config_fingerprint(project_dir)
@@ -784,11 +786,7 @@ def _function_store_dir(project_dir: Path, target: str) -> Path | None:
         with _FUNCTION_STORE_CACHE_LOCK:
             _evict_oldest(_FUNCTION_STORE_CACHE, _FUNCTION_STORE_CACHE_MAX)
             _FUNCTION_STORE_CACHE[key] = directory
-    from rebrew.metadata.functions import METADATA_FILENAME
-
-    if (directory / METADATA_FILENAME).is_file():
-        return directory
-    return None
+    return directory
 
 
 def _stored_names_source(stored: str, source: Path, *roots: Path) -> bool:

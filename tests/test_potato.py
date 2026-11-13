@@ -657,10 +657,18 @@ def _dashboard_docs(workdir: Path, cases: list[dict[str, Any]]) -> list[str | No
     return parsed
 
 
+@pytest.mark.parametrize(
+    ("backend", "registry"),
+    [("toml", "src/rebrew-functions.toml"), ("sqlite", "rebrew-metadata.sqlite3")],
+)
 def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, registry: str
 ) -> None:
-    """Both surfaces use dedicated metadata; inline state stays source text."""
+    """Both surfaces use dedicated metadata; inline state stays source text.
+
+    The rows are written through Rebrew's metadata API into the backend the
+    project config selects, so the SQLite case holds no ``rebrew-functions.toml``.
+    """
     from rebrew.metadata.functions import (
         get_entry,
         identity_file,
@@ -696,6 +704,7 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     orphan.write_text("int orphan(void) { return 2; }\n", encoding="utf-8")
     (tmp_path / "rebrew-project.toml").write_text(
         '[project]\ndefault_target = "NP"\n\n'
+        f'[metadata]\nbackend = "{backend}"\n\n'
         '[targets.NP]\nbinary = "NP.bin"\nmodule = "NP"\nreversed_dir = "src/NP"\n',
         encoding="utf-8",
     )
@@ -724,6 +733,8 @@ def test_row_note_and_blocker_reach_the_report_and_the_dashboard(
     update_field(store, 0x1000, "note", _ROW_NOTE, "NP")
     update_field(store, 0x1000, "blocker", _ROW_BLOCKER, "NP")
     assert get_entry(store, 0x1020, "NP") == {}
+    written = {"src/rebrew-functions.toml", "rebrew-metadata.sqlite3"}
+    assert {name for name in written if (tmp_path / name).is_file()} == {registry}
 
     _write_doc(
         tmp_path,

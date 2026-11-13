@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The function detail (`/api/targets/<target>/functions/<va>` and the batch lookup) and Potato Mode show a function row's `note` and `blocker` when the project keeps its Rebrew metadata in SQLite (`[metadata] backend = "sqlite"` in `rebrew-project.toml`). The dashboard read the row only when `rebrew-functions.toml` existed as a file, so a SQLite project showed no stored documentation. The row is now read through Rebrew's metadata API, which follows the backend the project config selects.
+
 ## [8.14.0] - 2026-11-13
 
 ### Fixed
