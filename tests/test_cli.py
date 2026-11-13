@@ -1351,6 +1351,32 @@ class TestStatsJson:
         assert "sections" in data["items"][0]
         assert ".text" in data["items"][0]["sections"]
 
+    def test_live_sqlite_metadata_reports_what_toml_reports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A live project with SQLite function metadata reports what its TOML twin does.
+
+        Both hold the recorded comparison's one STUB row. The SQLite project has
+        no ``rebrew-functions.toml``, so the row reaches the report only through
+        the backend its config selects.
+        """
+        from test_ops_retained import recorded_sample
+
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
+        reports: dict[str, Any] = {}
+        for backend in ("toml", "sqlite"):
+            root = tmp_path / backend
+            recorded_sample(root, backend)
+            monkeypatch.chdir(root)
+            result = runner.invoke(app, ["stats", "--json"])
+            assert result.exit_code == 0, result.output
+            reports[backend] = json.loads(result.stdout)
+        assert reports["sqlite"] == reports["toml"]
+        [item] = reports["sqlite"]["items"]
+        assert item["target"] == "sample"
+        assert item["summary"]["totalFunctions"] == 1
+        assert item["summary"]["stubCount"] == 1
+
 
 class TestStatsNullSectionSize:
     def test_stats_survives_null_section_size(

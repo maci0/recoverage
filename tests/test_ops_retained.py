@@ -409,37 +409,69 @@ def test_retained_scoring_requires_bound_envelope(tmp_path):
     )
 
 
-@retained_unsupported_on_windows
-def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
-    from rebrew.coverage_input_contract import coverage_input_digest, verification_records_digest
+#: The function row of the recorded EXACT comparison, as ``rebrew-functions.toml`` holds it.
+SAMPLE_METADATA = (
+    b'format = 3\n["SAMPLE.0x00401120"]\nsize = 4\nstatus = "STUB"\n'
+    b'file = "src/add.c"\nsymbol = "add"\nkind = "FUNCTION"\nname = "add"\n'
+)
+
+
+def recorded_sample(root, backend):
+    """Write the recorded EXACT comparison's project to *root*, its function metadata in *backend*.
+
+    Returns the comparison outcome, the target binary and the project files a
+    retained request stages. A SQLite project is made by Rebrew's reviewed
+    migration, the import a fresh Rebrew analysis runs (preview, then migrate
+    with the preview's digest); its ``rebrew-functions.toml`` is then removed,
+    so the database is the only registry left to read.
+    """
+    from rebrew.config import load_config
+    from rebrew.metadata_transfer import migrate_metadata
 
     fixtures = Path(__file__).parent / "fixtures/coverage"
     recorded = json.loads((fixtures / "worker-comparisons.json").read_text())
     item = next(value for value in recorded["outcomes"] if value["result"]["status"] == "EXACT")
     binary = (fixtures / "comparison-reference.elf").read_bytes()
     assert digest(binary) == recorded["binary_sha256"]
+    staged = {
+        "rebrew-project.toml": (
+            b'[project]\nname="candidate"\ndefault_target="sample"\nshared_dir=""\n'
+            b'[targets.sample]\nbinary="original/sample"\nformat="elf"\narch="x86_64"\n'
+            b'reversed_dir="src"\nmodule="SAMPLE"\n[compiler]\nprofile="gcc-14.2.0"\n'
+            b'cflags="-O2"\nbase_cflags="-c"\n'
+        ),
+        "src/add.c": item["candidate"].encode(),
+        "src/function_structure.json": json.dumps(
+            [{"va": 0x401120, "size": 4, "name": "add"}]
+        ).encode(),
+        "rebrew-functions.toml": SAMPLE_METADATA,
+    }
+    for path, data in {**staged, "original/sample": binary}.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes(data)
+    if backend == "sqlite":
+        cfg = load_config(root, target="sample")
+        preview = migrate_metadata(cfg, "sqlite", dry_run=True)
+        migrate_metadata(cfg, "sqlite", expected_digest=preview["input_digest"])
+        (root / "rebrew-functions.toml").unlink()
+        del staged["rebrew-functions.toml"]
+        for path in ("rebrew-project.toml", "rebrew-metadata.sqlite3"):
+            staged[path] = (root / path).read_bytes()
+        assert b'backend = "sqlite"' in staged["rebrew-project.toml"]
+    return item, binary, staged
+
+
+@retained_unsupported_on_windows
+def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
+    from rebrew.coverage_input_contract import coverage_input_digest, verification_records_digest
+
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()
     store.mkdir()
-    source = item["candidate"].encode()
-    config_bytes = (
-        b'[project]\nname="candidate"\ndefault_target="sample"\nshared_dir=""\n'
-        b'[targets.sample]\nbinary="original/sample"\nformat="elf"\narch="x86_64"\n'
-        b'reversed_dir="src"\nmodule="SAMPLE"\n[compiler]\nprofile="gcc-14.2.0"\n'
-        b'cflags="-O2"\nbase_cflags="-c"\n'
-    )
-    metadata = (
-        b'format = 3\n["SAMPLE.0x00401120"]\nsize = 4\nstatus = "STUB"\n'
-        b'file = "src/add.c"\nsymbol = "add"\nkind = "FUNCTION"\nname = "add"\n'
-    )
-    inventory = json.dumps([{"va": 0x401120, "size": 4, "name": "add"}]).encode()
+    item, binary, staged = recorded_sample(tmp_path / "producer", "toml")
+    source = staged["src/add.c"]
     entries = []
-    for path, data in (
-        ("rebrew-project.toml", config_bytes),
-        ("src/add.c", source),
-        ("src/function_structure.json", inventory),
-        ("rebrew-functions.toml", metadata),
-    ):
+    for path, data in staged.items():
         key = digest(data)
         (store / key).write_bytes(data)
         entries.append({"path": path, "digest": key, "size": len(data), "key": key})
@@ -454,6 +486,8 @@ def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
     }
     worker = ops.WorkerConfig(workspace=workspace, filestore=store)
     request = bound_request(worker, request)
+    present = {row["path"] for row in request["coverage_input"]["readset"] if row["present"]}
+    assert set(staged) <= present
     result = item["result"]
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     record = {
@@ -491,6 +525,9 @@ def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
     assert status == 200 and gate["passed"] and gate["metric"] == "verified"
     assert gate["results"][0]["verified_bytes"] == 4
     assert gate["results"][0]["coverage_pct"] == gate["results"][0]["verified_pct"] > 0
+    status, report = call(worker, "recoverage.coverage_export", {**request, "format": "decomp.dev"})
+    assert status == 200, report
+    assert json.loads(report["body"])["measures"]["matched_code"] == 4
 
 
 def test_verified_bytes_are_clipped_to_authenticated_extents():
