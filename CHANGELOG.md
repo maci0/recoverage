@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.15.0] - 2026-11-13
+
 ### Changed
 
 - The bundled Rebrew is now 6.37.0 (was 6.32.1). The public wheel pin, its hash in `uv.lock` and the CI source clone (`tools/ci_clone_rebrew.sh`) moved together.
