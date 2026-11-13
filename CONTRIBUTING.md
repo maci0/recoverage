@@ -107,7 +107,7 @@ replays that campaign alone. The `FLAGS=` is not optional: a pytest option
 handed bare on the make command line never reaches pytest, because make parses
 a leading-dash argument as one of its own. `-k` is make's `--keep-going`, so
 `-k <campaign>` runs `test-one` and then whatever make finds for the campaign
-name — the whole `tests/test_fuzz.py` file when it matches no target, and the
+name: the whole `tests/test_fuzz.py` file when it matches no target, and the
 `test` target (the entire suite) when the campaign is named `test`. Either way
 the narrowing is silently dropped, and `make --` does not rescue it either: a
 goal list after `--` is still make's, not pytest's.
