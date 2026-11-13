@@ -442,6 +442,10 @@ objects privately and checks them again after the operation. Set `--workspace`
 and, for object keys, `--filestore` (or `RECOVERAGE_OPS_FILESTORE`). Snapshot
 requests use the Rebrew dependency pinned in `pyproject.toml`, which carries
 `retained_target_snapshot` and `coverage_input_contract`.
+`files` carries the function registry the staged `rebrew-project.toml`
+selects: `rebrew-functions.toml` for TOML metadata, `rebrew-metadata.sqlite3`
+for `[metadata] backend = "sqlite"`. A file set carrying the other registry as
+well is refused with `invalid-request`, because it would never be read.
 The backend must verify the published source, analysis capture and current
 verification records, then pass `coverage_input`, `coverage_input_digest` and
 `verification_records` for retained scoring. The worker checks the readset and

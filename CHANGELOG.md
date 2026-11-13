@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The retained coverage ops (`recoverage.coverage_plan`, `coverage_map`, `coverage_gate`, `coverage_export`) serve a target whose `rebrew-project.toml` keeps its function metadata in SQLite, which is how a fresh Rebrew analysis now captures it. Such a request stages `rebrew-metadata.sqlite3` in place of `rebrew-functions.toml`, and reports the same exact matches, verified bytes, gate verdict and decomp.dev measures as the same target with TOML metadata. Rebrew 6.32.1 refused every retained target whose config did not select TOML metadata ("retained target requires its inventory and TOML function metadata"). A retained request whose file set also carries the registry its config does not read (`rebrew-functions.toml` under SQLite, `rebrew-metadata.sqlite3` under TOML) is now refused with `invalid-request`, since the staged file would never be read.
+
 ### Fixed
 
 - The function detail (`/api/targets/<target>/functions/<va>` and the batch lookup) and Potato Mode show a function row's `note` and `blocker` when the project keeps its Rebrew metadata in SQLite (`[metadata] backend = "sqlite"` in `rebrew-project.toml`). The dashboard read the row only when `rebrew-functions.toml` existed as a file, so a SQLite project showed no stored documentation. The row is now read through Rebrew's metadata API, which follows the backend the project config selects.

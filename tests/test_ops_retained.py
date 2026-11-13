@@ -462,13 +462,14 @@ def recorded_sample(root, backend):
 
 
 @retained_unsupported_on_windows
-def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
+@pytest.mark.parametrize("backend", ["toml", "sqlite"])
+def test_recorded_real_exact_result_passes_verified_gate(tmp_path, backend):
     from rebrew.coverage_input_contract import coverage_input_digest, verification_records_digest
 
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()
     store.mkdir()
-    item, binary, staged = recorded_sample(tmp_path / "producer", "toml")
+    item, binary, staged = recorded_sample(tmp_path / "producer", backend)
     source = staged["src/add.c"]
     entries = []
     for path, data in staged.items():
@@ -528,6 +529,15 @@ def test_recorded_real_exact_result_passes_verified_gate(tmp_path):
     status, report = call(worker, "recoverage.coverage_export", {**request, "format": "decomp.dev"})
     assert status == 200, report
     assert json.loads(report["body"])["measures"]["matched_code"] == 4
+    # A staged copy of the registry the config does not read would never be read: refused.
+    ignored = {"toml": "rebrew-metadata.sqlite3", "sqlite": "rebrew-functions.toml"}[backend]
+    key = digest(SAMPLE_METADATA)
+    (store / key).write_bytes(SAMPLE_METADATA)
+    stray = {"path": ignored, "digest": key, "size": len(SAMPLE_METADATA), "key": key}
+    status, body = call(worker, "recoverage.coverage_map", {**request, "files": [*entries, stray]})
+    assert status == 400, body
+    assert body["code"] == "invalid-request"
+    assert ignored in body["detail"]
 
 
 def test_verified_bytes_are_clipped_to_authenticated_extents():
