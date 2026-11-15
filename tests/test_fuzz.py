@@ -665,7 +665,7 @@ def _nested_object(depth: int) -> bytes:
     backup-manifest decoders meet object-shaped documents, and a hostile body
     carries its depth as nested ``{"a": {"a": ...}}`` values.  A depth past
     the C scanner's recursion limit (about 150k ``{"a":`` opens under the
-    1 MiB request cap) must refuse as not-JSON, never escape as RecursionError.
+    request cap) must refuse as not-JSON, never escape as RecursionError.
     """
     return b'{"a": ' * depth + b"1" + b"}" * depth
 

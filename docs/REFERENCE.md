@@ -479,11 +479,20 @@ a 5xx marks it failed. A full export queue drops spans and a request never
 waits for the collector. The cluster collector derives the RED metrics from
 these spans. An invalid endpoint stops `serve` before it binds.
 
+A request body is at most 16 MiB (`MAX_REQUEST_BYTES`, the `max_request_bytes`
+of the backend's dispatch contract, which `tests/fixtures/dispatch/` holds a copy
+of); a longer one is refused 413 `invalid-request`.
+
 A request is refused, with a JSON `{"error", "code", "detail", "status"}` on stdout and
 exit 2, when it is not JSON, names an unknown field, misses a required one, or
-names an op that does not exist. The `code` is the machine-readable key
-(`invalid_request`, `engine_error`, `target_unavailable`, or the refusal code
-the engine attached), matching the HTTP envelope shape. `--workspace` (or `RECOVERAGE_OPS_WORKSPACE`)
+names an op that does not exist. The `code` is the machine-readable key, matching
+the HTTP envelope shape: 400 `invalid-request` (malformed or out-of-workspace
+request), 404 `unknown-op`, `target-not-found` or `coverage-not-found`, 409
+`coverage-input-invalid` (a retained scoring call whose envelope is missing or no
+longer matches the staged inputs), 413 `invalid-request`, and 500 `engine-error`
+(a failure the worker logs and answers with a fixed detail). A refusal from rebrew's
+retained staging keeps rebrew's code and status (`invalid-project-config`,
+`readset-too-large` and the rest). `--workspace` (or `RECOVERAGE_OPS_WORKSPACE`)
 confines every `project_dir` to that directory; without it the worker trusts
 any absolute path. Nothing is written to stderr except a log line for a failure
 the worker could not classify.

@@ -104,9 +104,10 @@ _log = logging.getLogger("recoverage")
 #: Exit code of a refusal.
 EXIT_ERROR = 2
 
-#: Largest request body accepted.  Both requests are a project path, a digest
-#: and one option, so anything near this size is not a request.
-MAX_REQUEST_BYTES = 1 << 20
+#: Largest request body accepted: the dispatch contract's ``max_request_bytes``
+#: and rebrew's HTTP intake bound.  A retained request carries its file manifest,
+#: coverage-input readset and verification records, one entry per staged file.
+MAX_REQUEST_BYTES = 16 << 20
 
 #: Largest reply written.  The backend reads at most this much (its
 #: ``dispatch.MaxReply``), so a larger reply is refused here, with a reason.

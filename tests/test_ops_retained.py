@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from coverage_fixture import coverage_dir
-from test_ops import BINARY, SHA256, _project
+from test_ops import BINARY, SHA256, _contract, _project, _schema_errors
 
 from recoverage import documents, ops
 
@@ -344,6 +344,8 @@ def test_coverage_plan_reports_staged_readset_and_absences(tmp_path):
     (workspace / "project/src/marker.c").write_text("live modified")
     status, body = call(config, "recoverage.coverage_plan", request)
     assert status == 200, body
+    plan_reply = _contract()["ops"]["recoverage.coverage_plan"]["response"]
+    assert _schema_errors(body, plan_reply) == []
     assert body["source_paths"] == ["src/marker.c"]
     assert body["config"]["target"] == "FAKEDLL"
     assert body["config"]["binary"] == "FAKEDLL.dll"

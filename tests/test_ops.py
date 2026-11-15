@@ -492,3 +492,98 @@ def test_gate_metric_requires_verified_evidence(project: Path) -> None:
     assert _reply(_gate(project))["metric"] == "identified"
     assert _refusal(_gate(project, metric="verified"))["status"] == 409
     assert _refusal(_gate(project, metric="other"))["status"] == 400
+
+
+#: The backend's dispatch contract, copied verbatim (tests/fixtures/dispatch/NOTE.txt).
+CONTRACT_PATH = Path(__file__).parent / "fixtures" / "dispatch" / "recoverage.schema.json"
+
+_SCHEMA_TYPES: dict[str, tuple[type, ...]] = {
+    "object": (dict,),
+    "array": (list,),
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+}
+
+
+def _contract() -> dict[str, Any]:
+    contract: dict[str, Any] = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    return contract
+
+
+def _schema_errors(value: Any, schema: Mapping[str, Any], where: str = "$") -> list[str]:
+    """Where *value* breaks the JSON-schema subset the contract uses: types, properties, items."""
+    kind = schema.get("type")
+    if kind is not None:
+        wanted = _SCHEMA_TYPES[kind]
+        if not isinstance(value, wanted) or (kind != "boolean" and isinstance(value, bool)):
+            return [f"{where} is not {kind}"]
+    errors: list[str] = []
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        errors += [f"{where} lacks {key}" for key in schema.get("required", ()) if key not in value]
+        for key, item in value.items():
+            if key in properties:
+                errors += _schema_errors(item, properties[key], f"{where}.{key}")
+            elif schema.get("additionalProperties") is False:
+                errors.append(f"{where}.{key} is not in the contract")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors += _schema_errors(item, schema["additionalProperties"], f"{where}.{key}")
+    if isinstance(value, list) and "items" in schema:
+        for index, item in enumerate(value):
+            errors += _schema_errors(item, schema["items"], f"{where}[{index}]")
+    return errors
+
+
+def _required(cls: type) -> set[str]:
+    from dataclasses import MISSING, fields
+
+    return {
+        spec.name
+        for spec in fields(cls)
+        if spec.default is MISSING and spec.default_factory is MISSING
+    }
+
+
+class TestDispatchContract:
+    """What recoverage serves against the backend's pinned dispatch contract."""
+
+    def test_every_contract_op_is_served(self) -> None:
+        from recoverage import ops
+
+        assert sorted(_contract()["ops"]) == sorted(ops.OPS)
+
+    @pytest.mark.parametrize("name", sorted(json.loads(CONTRACT_PATH.read_text())["ops"]))
+    def test_every_field_the_backend_sends_is_accepted(self, name: str) -> None:
+        from dataclasses import fields
+
+        from recoverage import ops
+
+        request = _contract()["ops"][name]["request"]
+        accepted = {spec.name for spec in fields(ops.OPS[name].request)}
+        assert set(request["properties"]) <= accepted
+        assert _required(ops.OPS[name].request) <= set(request["required"])
+        if "files" in request["properties"]:
+            item = request["properties"]["files"]["items"]
+            assert {spec.name for spec in fields(ops.RetainedFile)} == set(item["properties"])
+            assert _required(ops.RetainedFile) == set(item["required"])
+
+    def test_a_request_up_to_the_contract_bound_is_read(self, project: Path) -> None:
+        bound = _contract()["max_request_bytes"]
+        body = json.dumps(_gate(project))
+        padded = body[:-1] + " " * (bound - len(body)) + "}"
+        assert len(padded.encode()) == bound
+        assert _reply(padded)["passed"] is True
+        refusal = _refusal(padded[:-1] + " }")
+        assert (refusal["status"], refusal["code"]) == (413, "invalid-request")
+
+    def test_gate_and_export_replies_follow_the_contract(self, project: Path) -> None:
+        responses = {name: op["response"] for name, op in _contract()["ops"].items()}
+        for request in (_gate(project), _gate(project, min_coverage=100, section=".text")):
+            reply = _reply(request)
+            assert _schema_errors(reply, responses["recoverage.coverage_gate"]) == []
+        for output_format in ("json", "csv", "md"):
+            op = "recoverage.coverage_export"
+            reply = _reply(_export(project, output_format), op=op)
+            assert _schema_errors(reply, responses[op]) == []
