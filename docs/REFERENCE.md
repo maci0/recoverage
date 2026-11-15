@@ -467,7 +467,11 @@ so `--allowed-hosts`, `--concurrency` (default 2; the next call is refused 503
 with `Retry-After`) and `/health` behave as in `rebrew ops serve`. Replies and
 refusals are the ones `ops call` prints, with the refusal status as the HTTP
 status. A retained request does not read its `project_dir` (it need not exist);
-the worker writes its private snapshots under the workspace.
+the worker writes its private snapshots under the workspace. `serve` logs to
+stderr in the dashboard's format at `RECOVERAGE_LOG_LEVEL` (default `INFO`): one
+access line per request (rebrew's request id, op, status, size, elapsed time and
+trace id), refusals such as a bad token or a busy worker as `WARNING`, and a
+failure the worker could not classify with its traceback.
 
 With `--otlp-endpoint URL` (or `RECOVERAGE_OTLP_ENDPOINT`, an `http(s)` URL without
 credentials; empty leaves export off) each `POST` exports one OTLP/HTTP server

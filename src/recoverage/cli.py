@@ -3012,9 +3012,27 @@ def schema_cmd(
     typer.echo(_dumps(document))
 
 
+def _ops_logging(ctx: typer.Context) -> None:
+    """Give ``ops serve`` the dashboard's log format at ``RECOVERAGE_LOG_LEVEL``.
+
+    Without a handler, rebrew's server drops its INFO access lines and every
+    WARNING reaches stderr bare through ``logging.lastResort``: no stamp, no
+    level, no logger.  ``ops call`` keeps that bare stderr, which carries only a
+    failure the worker could not classify.
+    """
+    if ctx.invoked_subcommand != "serve":
+        return
+    try:
+        level = config.log_level()
+    except config.ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ops.EXIT_ERROR) from None
+    _configure_logging(level)
+
+
 # The op worker is a group of its own so `ops call` reads as one command path
 # while the backend's wire names stay `recoverage.<op>`.
-app.add_typer(ops.app, name="ops")
+app.add_typer(ops.app, name="ops", callback=_ops_logging)
 
 
 # Group flags that answer the invocation themselves, so ``recoverage --help``

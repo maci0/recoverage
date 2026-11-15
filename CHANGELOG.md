@@ -9,6 +9,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The coverage ops accept a request body of up to 16 MiB (was 1 MiB), the `max_request_bytes` the backend's dispatch contract publishes and the bound rebrew's HTTP intake already applied. A retained request carries one manifest entry, one readset entry and one verification record per staged file, so a target with a few thousand files was refused 413 before any staging. The test copy of the contract (`tests/fixtures/dispatch/recoverage.schema.json`) is the backend's current one, and the suite now holds the served ops, their request fields, the bound and the gate and export replies against it.
 
+### Fixed
+
+- `recoverage ops serve` configures its log: stderr in the dashboard's format, at `RECOVERAGE_LOG_LEVEL` (default `INFO`). The server installed no handler, so rebrew's per-request access lines (request id, op, status, elapsed time, trace id) and the "client disconnected" line of a caller that hung up were dropped, and every warning (a rejected token, a busy worker, rebrew's catalog warnings) reached stderr bare, with no time, level or logger. `ops call` is unchanged.
+
 ## [8.16.0] - 2026-11-15
 
 ### Changed

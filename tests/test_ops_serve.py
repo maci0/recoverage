@@ -36,7 +36,11 @@ def _free_port() -> int:
 
 
 def _start(
-    workspace: Path, store: Path, token: str, extra_env: dict[str, str] | None = None
+    workspace: Path,
+    store: Path,
+    token: str,
+    extra_env: dict[str, str] | None = None,
+    stderr: Any = subprocess.DEVNULL,
 ) -> tuple[subprocess.Popen[str], int]:
     port = _free_port()  # the server's Host allow-list names the port it was asked for
     env = {**os.environ, "RECOVERAGE_OPS_TOKEN": token, **(extra_env or {})}
@@ -56,7 +60,7 @@ def _start(
         ],
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr,
         text=True,
     )
     assert proc.stdout is not None
@@ -310,3 +314,36 @@ def test_serve_refuses_an_endpoint_that_is_not_an_http_url(tmp_path: Path) -> No
         assert result.returncode == ops.EXIT_ERROR, result.stderr
         assert "RECOVERAGE_OTLP_ENDPOINT must be an http(s) URL" in result.stderr
         assert "serving recoverage ops" not in result.stdout
+
+
+def test_serve_logs_each_request_and_refusal_in_the_log_format(tmp_path: Path) -> None:
+    """The access line, the auth refusal and an op failure reach stderr stamped and leveled."""
+    import re
+
+    workspace, store = tmp_path / "workspace", tmp_path / "store"
+    workspace.mkdir()
+    store.mkdir()
+    token = secrets.token_hex(16)
+    log = tmp_path / "serve.log"
+    with log.open("w") as stderr:
+        proc, port = _start(workspace, store, token, stderr=stderr)
+        try:
+            assert _post(port, "/recoverage.nope", b"{}", token)[0] == 404
+            assert _post(port, "/recoverage.coverage_plan", b"{}", "x" * 32)[0] == 401
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=30)
+            finally:
+                assert proc.stdout is not None
+                proc.stdout.close()
+    lines = log.read_text().splitlines()
+    stamp = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}"
+    assert any(
+        re.match(rf"{stamp} INFO \[rebrew\.ops\] .* r\d+ recoverage\.nope 404 ", line)
+        for line in lines
+    ), lines
+    assert any(
+        re.match(rf"{stamp} WARNING \[rebrew\.ops\] .*rejected unauthenticated request", line)
+        for line in lines
+    ), lines
