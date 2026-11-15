@@ -90,6 +90,12 @@ env:
 .BI \-\-allowed\-hosts " HOSTS"
 Comma-separated exact additional HTTP Host authorities, including ports (env:
 .BR RECOVERAGE_OPS_ALLOWED_HOSTS ).
+.BI \-\-otlp\-endpoint " URL"
+OTLP/HTTP collector base URL for trace export; empty leaves export off (env:
+.BR RECOVERAGE_OTLP_ENDPOINT ).
+The server logs one access line per request, and every refusal and failure, to
+stderr at
+.BR RECOVERAGE_LOG_LEVEL .
 .B ops call
 .I op
 reads one JSON request on stdin and writes the JSON reply on stdout; a
