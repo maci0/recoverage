@@ -297,11 +297,15 @@ class GateRequest(RetainedRequest):
 
 
 @dataclass(frozen=True, kw_only=True)
-class PlanRequest(RetainedRequest):
-    """Plan the readset for retained coverage inputs."""
+class PlanRequest:
+    """Plan the readset for retained coverage inputs: a retained snapshot, no evidence envelope."""
 
     project_dir: str
     sha256: str
+    files: list[RetainedFile]
+    rebrew_target: str
+    binary_key: str = ""
+    binary_url: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)

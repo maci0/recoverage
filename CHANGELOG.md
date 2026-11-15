@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `recoverage.coverage_plan` follows the backend's dispatch contract: `files` and `rebrew_target` are required fields, and `coverage_input`, `coverage_input_digest` and `verification_records`, which the plan never read, are refused as unknown fields (`invalid-request`). The contract test now holds every request type's fields and required fields equal to the contract's, not only a superset.
+
 ## [9.0.0] - 2026-11-16
 
 ### Breaking

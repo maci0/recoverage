@@ -603,15 +603,15 @@ class TestDispatchContract:
         assert sorted(_contract()["ops"]) == sorted(ops.OPS)
 
     @pytest.mark.parametrize("name", sorted(json.loads(CONTRACT_PATH.read_text())["ops"]))
-    def test_every_field_the_backend_sends_is_accepted(self, name: str) -> None:
+    def test_request_fields_follow_the_contract(self, name: str) -> None:
         from dataclasses import fields
 
         from recoverage import ops
 
         request = _contract()["ops"][name]["request"]
         accepted = {spec.name for spec in fields(ops.OPS[name].request)}
-        assert set(request["properties"]) <= accepted
-        assert _required(ops.OPS[name].request) <= set(request["required"])
+        assert set(request["properties"]) == accepted
+        assert _required(ops.OPS[name].request) == set(request["required"])
         if "files" in request["properties"]:
             item = request["properties"]["files"]["items"]
             assert {spec.name for spec in fields(ops.RetainedFile)} == set(item["properties"])
