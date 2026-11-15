@@ -408,6 +408,17 @@ class TestRequests:
         assert body["error"] == "invalid-request"
         assert "min_coverage" in body["detail"]
 
+    def test_a_repeated_key_is_refused(self, project: Path) -> None:
+        """One spelling per field: a parser that keeps either copy is guessing."""
+        good = json.dumps(_gate(project))
+        repeated = good[:-1] + ', "sha256": "' + "0" * 64 + '"}'
+        body = _refusal(repeated)
+        assert body["error"] == "invalid-request"
+        assert "sha256" in body["detail"]
+        nested = {**_gate(project), "coverage_input": {"a": 1}}
+        body = _refusal(json.dumps(nested).replace('{"a": 1}', '{"a": 1, "a": 2}'))
+        assert body["error"] == "invalid-request"
+
     def test_request_must_be_an_object(self, project: Path) -> None:
         body = _refusal("[1, 2]")
         assert body["error"] == "invalid-request"

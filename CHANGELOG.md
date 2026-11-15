@@ -19,6 +19,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The op worker logs every 5xx refusal once: an engine failure as before (`ops_failed`, with its traceback), and a refusal raised without an exception (an unreadable coverage document, a refusal rebrew's retained staging answers 500) as an ERROR line naming the op, status and detail (`ops_refused`). Those were answered with no log line at all, so the operator had only the detail the caller saw.
 
+- An op request that spells a JSON key twice, at any depth, is refused 400 `invalid-request` naming the key. The decoder silently kept the last copy, so the field the worker acted on depended on the parser; rebrew's own ops already refuse it.
+
 ## [8.16.0] - 2026-11-15
 
 ### Changed

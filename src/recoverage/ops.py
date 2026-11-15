@@ -352,6 +352,20 @@ def _decode(value: Any, hint: Any, where: str) -> Any:
     return _invalid(f"{where} has an unsupported type")
 
 
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """One decoded JSON object, refused when it spells a key twice.
+
+    ``json.loads`` keeps the last copy, so a field and the envelope digest over
+    it could be read from two different spellings; rebrew refuses the same.
+    """
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise _invalid(f"request repeats the key {_bounded(key)}")
+        obj[key] = value
+    return obj
+
+
 def parse_request[T](cls: type[T], raw: Any, where: str = "request") -> T:
     """Build *cls* from a decoded JSON object, refusing unknown and missing fields."""
     if type(raw) is not dict:
@@ -676,7 +690,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
     try:
         if json_depth_exceeds(body):
             raise _invalid("request is not JSON")
-        raw = json.loads(body)
+        raw = json.loads(body, object_pairs_hook=_unique_object)
     except json.JSONDecodeError, UnicodeDecodeError, RecursionError:
         raise _invalid("request is not JSON") from None
     request: Any = parse_request(op.request, raw)

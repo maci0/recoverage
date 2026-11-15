@@ -492,7 +492,7 @@ of the backend's dispatch contract, which `tests/fixtures/dispatch/` holds a cop
 of); a longer one is refused 413 `invalid-request`.
 
 A request is refused, with a JSON `{"error", "code", "detail", "status"}` on stdout and
-exit 2, when it is not JSON, names an unknown field, misses a required one, or
+exit 2, when it is not JSON, repeats a key, names an unknown field, misses a required one, or
 names an op that does not exist. The `code` is the machine-readable key, matching
 the HTTP envelope shape: 400 `invalid-request` (malformed or out-of-workspace
 request), 404 `unknown-op`, `target-not-found` or `coverage-not-found`, 409
