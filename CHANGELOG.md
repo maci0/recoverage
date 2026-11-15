@@ -5,13 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- A retained request whose stored object is missing or no longer hashes to its key (a lost, corrupt or substituted filestore object, the target binary included) is refused 500 `engine-error`, was 400 `invalid-request`: Rebrew 6.45.1 classifies it as the worker's storage, not the request. A caller that branched on the 400 now meets a server error; `docs/UPGRADING.md` has the before and after.
+
 ### Changed
 
 - The coverage ops accept a request body of up to 16 MiB (was 1 MiB), the `max_request_bytes` the backend's dispatch contract publishes and the bound rebrew's HTTP intake already applied. A retained request carries one manifest entry, one readset entry and one verification record per staged file, so a target with a few thousand files was refused 413 before any staging. The test copy of the contract (`tests/fixtures/dispatch/recoverage.schema.json`) is the backend's current one, and the suite now holds the served ops, their request fields, the bound and the gate and export replies against it.
 
 - The bundled Rebrew is now 6.45.1 (was 6.38.0), and the floor rises with it: the retained ops stage their snapshot through the API Rebrew documents for engines that serve retained requests (`rebrew.ops.RetainedFile`, `WorkerConfig`, `retained_target_snapshot`, refusals as `rebrew.errors.OpsError`), which Rebrew 6.38.0 does not have. Rebrew 6.45.1 no longer has the `FlagSearchFile` type the ops built their manifest from, so with it every retained call answered 500 "retained snapshots require the pinned rebrew worker". The extra `confined_snapshot_config` pass after staging is gone: staging already refuses config paths that leave the snapshot. The public wheel pin, its hash in `uv.lock` and the CI source clone (`tools/ci_clone_rebrew.sh`) moved together.
-
-- A retained request whose stored object no longer hashes to its key (a corrupt or substituted filestore object, the target binary included) is refused 500 `engine-error` (was 400 `invalid-request`): Rebrew 6.45.1 classifies it as the worker's storage, not the request.
 
 ### Fixed
 

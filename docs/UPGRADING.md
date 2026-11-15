@@ -32,6 +32,32 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
+## [Unreleased]
+
+### A missing or corrupt stored object is a 500, not a 400
+
+Before: a retained op request whose `files` entry, `binary_key` or the object
+behind it was missing from the worker's filestore, or no longer hashed to its
+key, was refused 400 `invalid-request`.
+
+After: it is refused 500 `engine-error`. Rebrew 6.45.1, now the floor, treats
+the filestore as the worker's storage: a well-formed key it cannot serve is a
+missing mount or a corrupt object, not a bad request. The op worker logs the
+refusal (`ops_refused`).
+
+Do: a caller that read the 400 as "fix the request" reads the 500 as the
+worker's storage fault. The relumea backend answers it as 502 `engine-error`.
+
+### Requests up to 16 MiB
+
+Before: a request body over 1 MiB was refused 413.
+
+After: the bound is 16 MiB, the dispatch contract's `max_request_bytes`. The
+relumea backend sends a request that large only when the deployment declares
+this release (`engines.recoverage.version`, `RELUMEA_DISPATCH_RECOVERAGE_VERSION`).
+
+Do: set that value to this release when the image moves to it.
+
 ## [8.12.0]
 
 ### `POST /api/targets/<target>/functions` batch lookup rejects unknown top-level fields

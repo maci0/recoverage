@@ -154,9 +154,12 @@ def test_snapshot_tamper_and_changed_during_operation_are_refused(tmp_path, monk
     req = request_for(workspace / "project", store, "original")
     config = ops.WorkerConfig(workspace=workspace, filestore=store)
     entry = req["files"][1]
-    # A stored object that no longer hashes to its key is the worker's storage, not the
-    # request (rebrew.ops.stored_file): 500 engine-error.
+    # A stored object that is missing or no longer hashes to its key is the worker's storage,
+    # not the request (rebrew.ops.stored_file): 500 engine-error.
     (store / entry["key"]).write_text("tampered")
+    status, body = call(config, "recoverage.coverage_map", req)
+    assert (status, body["code"]) == (500, "engine-error"), body
+    (store / entry["key"]).unlink()
     status, body = call(config, "recoverage.coverage_map", req)
     assert (status, body["code"]) == (500, "engine-error"), body
     (store / entry["key"]).write_text("original")
