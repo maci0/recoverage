@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-11-16
+
 ### Breaking
 
 - A retained request whose stored object is missing or no longer hashes to its key (a lost, corrupt or substituted filestore object, the target binary included) is refused 500 `engine-error`, was 400 `invalid-request`: Rebrew 6.45.1 classifies it as the worker's storage, not the request. A caller that branched on the 400 now meets a server error; `docs/UPGRADING.md` has the before and after.

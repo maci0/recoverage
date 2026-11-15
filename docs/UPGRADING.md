@@ -32,7 +32,7 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
-## [Unreleased]
+## [9.0.0]
 
 ### A missing or corrupt stored object is a 500, not a 400
 
