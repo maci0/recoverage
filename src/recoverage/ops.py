@@ -49,6 +49,10 @@ lazy from collections.abc import Callable, Mapping
 
 import typer
 lazy from rebrew.coverage_toml import CoverageTomlError
+lazy from rebrew.errors import OpsError as RebrewOpsError
+lazy from rebrew.ops import RetainedFile as RebrewRetainedFile
+lazy from rebrew.ops import WorkerConfig as RebrewWorkerConfig
+lazy from rebrew.ops import retained_target_snapshot
 lazy from rebrew.workspace import CONFIG_NAME
 
 from recoverage.config import RecoError, json_depth_exceeds
@@ -688,28 +692,22 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         )
         if any(key in raw for key in snapshot_fields):
             # The backend supplies a complete retained manifest; never use project_dir here.
-            try:
-                from rebrew.ops import (
-                    FlagSearchFile,
-                    confined_snapshot_config,
-                    retained_target_snapshot,
-                )
-                from rebrew.ops import (
-                    OpsError as RebrewOpsError,
-                )
-                from rebrew.ops import (
-                    WorkerConfig as RebrewWorkerConfig,
-                )
-            except ImportError:
-                raise OpsError("retained snapshots require the pinned rebrew worker") from None
             if _ON_WINDOWS:
                 raise _invalid(_RETAINED_ON_WINDOWS)
             try:
                 worker = RebrewWorkerConfig(filestore=config.filestore, workspace=config.workspace)
                 files = [
-                    FlagSearchFile(**{f.name: getattr(entry, f.name) for f in fields(entry)})
+                    RebrewRetainedFile(
+                        path=entry.path,
+                        digest=entry.digest,
+                        size=entry.size,
+                        key=entry.key,
+                        url=entry.url,
+                    )
                     for entry in request.files
                 ]
+                # Staging also refuses config paths that leave the snapshot
+                # (rebrew's confined_snapshot_config), so the root is confined.
                 with retained_target_snapshot(
                     worker,
                     files,
@@ -718,9 +716,6 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
                     request.binary_key,
                     request.binary_url,
                 ) as root:
-                    from rebrew.config import load_config
-
-                    confined_snapshot_config(load_config(root, target=request.rebrew_target), root)
                     staged = replace(request, project_dir=str(root))
                     if name == "recoverage.coverage_plan":
                         return op.run(config, staged)

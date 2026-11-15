@@ -645,8 +645,8 @@ wheels = [
 
 [[package]]
 name = "rebrew"
-version = "6.38.0"
-source = { url = "https://github.com/maci0/rebrew/releases/download/v6.38.0/rebrew-6.38.0-py3-none-any.whl" }
+version = "6.45.1"
+source = { url = "https://github.com/maci0/rebrew/releases/download/v6.45.1/rebrew-6.45.1-py3-none-any.whl" }
 dependencies = [
     { name = "capstone" },
     { name = "click" },
@@ -665,7 +665,7 @@ dependencies = [
     { name = "typer" },
 ]
 wheels = [
-    { url = "https://github.com/maci0/rebrew/releases/download/v6.38.0/rebrew-6.38.0-py3-none-any.whl", hash = "sha256:4b52e226e9cd4ba44b1301fd311ad712b580aeb0d9abdee7c18169d99ee13ea6" },
+    { url = "https://github.com/maci0/rebrew/releases/download/v6.45.1/rebrew-6.45.1-py3-none-any.whl", hash = "sha256:1a9b2052eb40e871d6f96ea4a785ef880571a90290e1609329ca3c54a5fc0465" },
 ]
 
 [package.metadata]
@@ -734,7 +734,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1,<10" },
     { name = "pytest-playwright", marker = "extra == 'playwright'", specifier = ">=0.9.0,<1" },
     { name = "rcssmin", specifier = ">=1.1,<2" },
-    { name = "rebrew", url = "https://github.com/maci0/rebrew/releases/download/v6.38.0/rebrew-6.38.0-py3-none-any.whl" },
+    { name = "rebrew", url = "https://github.com/maci0/rebrew/releases/download/v6.45.1/rebrew-6.45.1-py3-none-any.whl" },
     { name = "rich", specifier = ">=15.0.0,<16" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.7,<1" },
     { name = "typer", specifier = ">=0.27.2,<1" },

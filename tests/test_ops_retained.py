@@ -154,12 +154,16 @@ def test_snapshot_tamper_and_changed_during_operation_are_refused(tmp_path, monk
     req = request_for(workspace / "project", store, "original")
     config = ops.WorkerConfig(workspace=workspace, filestore=store)
     entry = req["files"][1]
+    # A stored object that no longer hashes to its key is the worker's storage, not the
+    # request (rebrew.ops.stored_file): 500 engine-error.
     (store / entry["key"]).write_text("tampered")
-    assert call(config, "recoverage.coverage_map", req)[0] == 400
+    status, body = call(config, "recoverage.coverage_map", req)
+    assert (status, body["code"]) == (500, "engine-error"), body
     (store / entry["key"]).write_text("original")
     assert call(config, "recoverage.coverage_map", {**req, "rebrew_target": "other"})[0] == 400
     (store / SHA256).write_bytes(b"tampered binary")
-    assert call(config, "recoverage.coverage_map", req)[0] == 400
+    status, body = call(config, "recoverage.coverage_map", req)
+    assert (status, body["code"]) == (500, "engine-error"), body
     (store / SHA256).write_bytes(BINARY)
     snapshots = documents.load_all(coverage_dir(workspace / "project"))
     req = bound_request(config, req)
@@ -171,22 +175,6 @@ def test_snapshot_tamper_and_changed_during_operation_are_refused(tmp_path, monk
     monkeypatch.setattr(ops, "_trusted_snapshot", mutate)
     assert call(config, "recoverage.coverage_map", req)[0] == 409
     assert (workspace / "project/src/marker.c").read_text() == "original"
-
-
-def test_snapshot_without_helper_fails_closed(tmp_path, monkeypatch):
-    import rebrew.ops
-
-    workspace = tmp_path / "workspace"
-    store = tmp_path / "store"
-    workspace.mkdir()
-    store.mkdir()
-    request = request_for(workspace / "project", store, "retained")
-    monkeypatch.delattr(rebrew.ops, "retained_target_snapshot")
-    status, body = call(
-        ops.WorkerConfig(workspace=workspace, filestore=store), "recoverage.coverage_map", request
-    )
-    assert status == 500
-    assert "pinned rebrew" in body["detail"]
 
 
 @retained_unsupported_on_windows

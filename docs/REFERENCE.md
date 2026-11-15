@@ -439,9 +439,13 @@ For retained inputs, each request also supplies `rebrew_target`, `files` (object
 with `path`, `digest`, `size`, and exactly one of `key` or `url`), and exactly
 one of `binary_key` or `binary_url`. The worker verifies and stages these
 objects privately and checks them again after the operation. Set `--workspace`
-and, for object keys, `--filestore` (or `RECOVERAGE_OPS_FILESTORE`). Snapshot
-requests use the Rebrew dependency pinned in `pyproject.toml`, which carries
-`retained_target_snapshot` and `coverage_input_contract`.
+and, for object keys, `--filestore` (or `RECOVERAGE_OPS_FILESTORE`). Snapshots
+are staged through the retained-staging API rebrew documents in its
+`docs/PYTHON_API.md` (`rebrew.ops.RetainedFile`, `WorkerConfig` and
+`retained_target_snapshot`, refusals as `rebrew.errors.OpsError`) of the Rebrew
+pinned in `pyproject.toml`, and its refusals keep rebrew's code and status: a
+stored object that does not hash to its key is the worker's storage fault, 500
+`engine-error`.
 `files` carries the function registry the staged `rebrew-project.toml`
 selects: `rebrew-functions.toml` for TOML metadata, `rebrew-metadata.sqlite3`
 for `[metadata] backend = "sqlite"`. A file set carrying the other registry as
