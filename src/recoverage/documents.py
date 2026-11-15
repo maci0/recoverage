@@ -503,6 +503,22 @@ def _project_view(source: Path) -> ProjectCoverageView | None:
         raise CoverageTomlError(str(exc)) from exc
 
 
+def relative_text(text: str, root: Path) -> str:
+    """*text* with every path under *root* written relative to it, *root* itself as ``.``.
+
+    Rebrew's failure reasons name the absolute paths they read (the root-joined
+    target binary, the file an ``OSError`` names); a served payload names paths
+    inside the project only.  Both the given and the resolved spelling of *root*
+    are rewritten, the longer first, so neither leaves a prefix of the other.
+    """
+    import re
+
+    for spelling in sorted({str(root), str(root.resolve())}, key=len, reverse=True):
+        text = re.sub(re.escape(spelling) + r"[\\/]", "", text)
+        text = re.sub(re.escape(spelling) + r"(?=$|[\s:;,'\")\]])", ".", text)
+    return text
+
+
 def load_all(db_dir: Path) -> Mapping[str, CoverageSnapshot]:
     """Every readable document in *db_dir*, keyed by target id.
 
@@ -535,7 +551,7 @@ def snapshot_set(
         return (
             project.snapshots,
             tuple(
-                ("rebrew-project.toml", target, reason)
+                ("rebrew-project.toml", target, relative_text(reason, db_dir))
                 for target, reason in sorted(project.failures.items())
             ),
             project.versions,
@@ -564,7 +580,9 @@ def unreadable(db_dir: Path) -> tuple[tuple[str, str, str], ...]:
     state, so a document is in exactly one of the two answers.  The reason is
     the reader's error without the path it opens with: the file name already
     says which document, and the absolute path is not something a served
-    payload names.  It is document-derived text (a parse error can quote a
+    payload names.  A live project's reasons are rebrew's, with every path
+    under the project written relative to it (:func:`relative_text`).  It is
+    document-derived text (a parse error can quote a
     value), so a caller renders it as text, never as markup.
     """
     return snapshot_set(db_dir)[1]

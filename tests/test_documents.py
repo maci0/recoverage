@@ -386,3 +386,24 @@ def test_a_deeply_nested_document_is_reported_unreadable_not_a_crash(db: Path) -
     assert (name, target) == ("coverage-BROKEN.toml", "BROKEN")
     assert reason.startswith("malformed TOML (")
     assert str(db) not in reason
+
+
+# Rebrew warns about the binary this test removes on purpose; only that warning is expected.
+@pytest.mark.filterwarnings("ignore:target binary not found:rebrew.config.ConfigWarning")
+def test_a_live_target_that_fails_names_no_absolute_path(tmp_path: Path) -> None:
+    """``/api/targets`` reports a failed live target by its project-relative paths."""
+    import json
+
+    from conftest import decode_body, wsgi_get
+    from test_ops import _project
+
+    from recoverage._paths import project_override
+
+    root = _project(tmp_path / "project", document=False).resolve()
+    (root / "FAKEDLL.dll").unlink()
+    with project_override(root):
+        status, headers, body = wsgi_get("/api/targets")
+    assert status.startswith("200"), status
+    [row] = json.loads(decode_body(body, headers))["unreadable"]
+    assert row["target"] == "FAKEDLL"
+    assert row["error"] == "FAKEDLL: target binary missing: FAKEDLL.dll"

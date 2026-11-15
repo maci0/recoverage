@@ -9,6 +9,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `recoverage.coverage_plan` follows the backend's dispatch contract: `files` and `rebrew_target` are required fields, and `coverage_input`, `coverage_input_digest` and `verification_records`, which the plan never read, are refused as unknown fields (`invalid-request`). The contract test now holds every request type's fields and required fields equal to the contract's, not only a superset.
 
+- A live project's `/api/targets` `unreadable[].error` and the ops refusals no longer name absolute paths: Rebrew's reasons (`FAKEDLL: target binary missing: /home/<user>/<project>/FAKEDLL.dll`, the `OSError` of an unreadable source tree) are written relative to the project (`FAKEDLL: target binary missing: FAKEDLL.dll`), and an ops refusal names a path under `--workspace` relative to the workspace. Every ops refusal detail is one line of at most 400 characters (`ops.DETAIL_MAX_CHARS`); the cap now applies to the whole `unknown op: <name>` detail, not to the name alone. The worker log keeps the unscrubbed detail.
+
 ## [9.0.0] - 2026-11-16
 
 ### Breaking

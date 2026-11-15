@@ -420,7 +420,7 @@ def _resolve_target(root: Path, sha256: str) -> str:
 
 def _target_snapshot(root: Path, target: str) -> Any:
     """Load one target, or refuse with the reason it is missing."""
-    from recoverage.documents import load_all, unreadable
+    from recoverage.documents import load_all, relative_text, unreadable
 
     # Inside an op the request's project is authoritative: RECOVERAGE_SNAPSHOTS
     # selects the dashboard's portable exports, not this call's project.
@@ -429,7 +429,10 @@ def _target_snapshot(root: Path, target: str) -> Any:
             snapshots = load_all(root)
             failures = unreadable(root)
     except CoverageTomlError as exc:
-        raise OpsError(f"cannot read coverage for project_dir: {exc}", code=ENGINE_ERROR) from exc
+        raise OpsError(
+            f"cannot read coverage for project_dir: {relative_text(str(exc), root)}",
+            code=ENGINE_ERROR,
+        ) from exc
     snapshot = snapshots.get(target)
     if snapshot is None:
         for _name, failed_target, reason in failures:
@@ -526,8 +529,11 @@ def _target_stats(root: Path, target: str, trusted: Any = None) -> dict[str, Any
         )
         return _snapshot_stats(snap, trusted)
     except CoverageTomlError as exc:
+        from recoverage.documents import relative_text
+
+        reason = relative_text(str(exc), root)
         raise OpsError(
-            f"cannot read coverage statistics for target {target}: {exc}",
+            f"cannot read coverage statistics for target {target}: {reason}",
             code=ENGINE_ERROR,
         ) from exc
 
@@ -686,7 +692,7 @@ OPS: dict[str, Op] = {
 def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
     op = OPS.get(name)
     if op is None:
-        raise NotFoundError(f"unknown op: {_bounded(name)}", code=UNKNOWN_OP)
+        raise NotFoundError(f"unknown op: {name}", code=UNKNOWN_OP)
     if len(body) > MAX_REQUEST_BYTES:
         raise OpsError(
             f"request exceeds {MAX_REQUEST_BYTES} bytes", code=INVALID_REQUEST, status=413
@@ -809,10 +815,22 @@ def dispatch_json(config: WorkerConfig, name: str, request: Mapping[str, Any]) -
 
 
 def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
-    """Answer one call: ``(200, reply)`` or ``(status, refusal)``."""
+    """Answer one call: ``(200, reply)`` or ``(status, refusal)``.
+
+    A refusal detail is one line of at most :data:`DETAIL_MAX_CHARS`, and a path
+    under the workspace (a retained snapshot's scratch copy) is written relative
+    to it.
+    """
     try:
         reply = json.dumps(_answer(config, name, body), allow_nan=False).encode("utf-8")
     except OpsError as exc:
+        from recoverage.documents import relative_text
+
+        detail = str(exc)
+        if config.workspace is not None:
+            detail = relative_text(detail, config.workspace)
+        detail = _bounded(detail)
+        # The log keeps the unscrubbed detail: the operator owns those paths.
         # Every 5xx is logged here: an engine failure with its traceback (the
         # wire detail is fixed), any other with its detail (an unreadable
         # document, a stored object rebrew cannot serve), which is all the
@@ -834,7 +852,7 @@ def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
                 _log_safe(str(exc)),
                 extra=metrics.log_fields(event="ops_refused", op=name, code=exc.code),
             )
-        return exc.status, error_body(exc.code, str(exc), exc.status)
+        return exc.status, error_body(exc.code, detail, exc.status)
     except TypeError, ValueError:
         _log.exception(
             "%s produced a reply that is not JSON",

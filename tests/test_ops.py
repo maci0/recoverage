@@ -13,6 +13,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -324,6 +325,20 @@ class TestTargetResolution:
             assert _refusal({**_gate(project), "sha256": "0" * 64})["status"] == 404
         assert [r for r in caplog.records if r.name == "recoverage"] == []
 
+    @pytest.mark.skipif(
+        os.name != "posix" or os.geteuid() == 0, reason="needs a directory mode root ignores"
+    )
+    def test_unreadable_target_names_no_absolute_path(self, tmp_path: Path) -> None:
+        root = _project(tmp_path / "project", document=False).resolve()
+        (root / "src").chmod(0)
+        try:
+            body = _refusal(_gate(root))
+        finally:
+            (root / "src").chmod(0o755)
+        assert body["status"] == 500
+        assert str(root) not in body["detail"]
+        assert "src/rebrew-functions.toml" in body["detail"]
+
 
 class TestProjectConfinement:
     def test_relative_project_dir(self, project: Path) -> None:
@@ -367,25 +382,28 @@ class TestRequests:
         from recoverage.ops import DETAIL_MAX_CHARS, _bounded
 
         combining_acute = "́"
-        # The op alone exceeds the cap, with the base at position 399 and
-        # its combining mark at 400: the cut must carry the mark with it.
-        op = "x" * (DETAIL_MAX_CHARS - 1) + "e" + combining_acute + "tail"
+        # The detail ("unknown op: " and the name) exceeds the cap, with the base
+        # at position 399 and its combining mark at 400: the cut must carry the
+        # mark with it.  The cap applies to the whole detail, not the name alone.
+        prefix = "unknown op: "
+        op = "x" * (DETAIL_MAX_CHARS - 1 - len(prefix)) + "e" + combining_acute + "tail"
         body = _refusal(_gate(project), op=op)
         assert body["error"] == "unknown-op"
         assert body["detail"].endswith("e" + combining_acute)
-        assert _bounded(op).endswith("e" + combining_acute)
+        assert _bounded(prefix + op).endswith("e" + combining_acute)
 
     def test_unknown_op_detail_cut_keeps_zwj(self, project: Path) -> None:
         from recoverage.ops import DETAIL_MAX_CHARS, _bounded
 
         woman_technologist = "👩‍💻"
-        # The base lands at 398, the ZWJ at 399, the joined glyph past the
-        # cap: the cut must carry the whole sequence, not end on the joiner.
-        op = "x" * (DETAIL_MAX_CHARS - 2) + woman_technologist + "tail"
+        # The base lands at 398 of the detail, the ZWJ at 399, the joined glyph
+        # past the cap: the cut must carry the whole sequence, not end on the joiner.
+        prefix = "unknown op: "
+        op = "x" * (DETAIL_MAX_CHARS - 2 - len(prefix)) + woman_technologist + "tail"
         body = _refusal(_gate(project), op=op)
         assert body["error"] == "unknown-op"
         assert body["detail"].endswith(woman_technologist)
-        assert _bounded(op).endswith(woman_technologist)
+        assert _bounded(prefix + op).endswith(woman_technologist)
 
     @pytest.mark.parametrize("body", ["not json", "", '{"a": }'])
     def test_not_json(self, project: Path, body: str) -> None:
