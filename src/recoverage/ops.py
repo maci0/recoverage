@@ -895,9 +895,10 @@ def call_command(
 #: Environment variable holding the bearer token ``serve`` requires.
 TOKEN_ENV = "RECOVERAGE_OPS_TOKEN"  # noqa: S105  # a variable name, not a credential
 
-#: Shortest accepted bearer token, the length rebrew's server requires.
 PORT_ENV = "RECOVERAGE_OPS_PORT"
 HOST_ENV = "RECOVERAGE_OPS_HOST"
+
+#: Shortest accepted bearer token, the length rebrew's server requires.
 MIN_TOKEN_BYTES = 32
 
 #: ``service.name`` resource attribute of the spans ``serve`` exports.
