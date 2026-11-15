@@ -13,6 +13,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `recoverage ops serve` configures its log: stderr in the dashboard's format, at `RECOVERAGE_LOG_LEVEL` (default `INFO`). The server installed no handler, so rebrew's per-request access lines (request id, op, status, elapsed time, trace id) and the "client disconnected" line of a caller that hung up were dropped, and every warning (a rejected token, a busy worker, rebrew's catalog warnings) reached stderr bare, with no time, level or logger. `ops call` is unchanged.
 
+- The op worker logs every 5xx refusal once: an engine failure as before (`ops_failed`, with its traceback), and a refusal raised without an exception (an unreadable coverage document, a refusal rebrew's retained staging answers 500) as an ERROR line naming the op, status and detail (`ops_refused`). Those were answered with no log line at all, so the operator had only the detail the caller saw.
+
 ## [8.16.0] - 2026-11-15
 
 ### Changed

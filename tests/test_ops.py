@@ -287,6 +287,43 @@ class TestTargetResolution:
         assert body["status"] == 500
         assert "unreadable" in body["detail"]
 
+    def test_a_server_refusal_is_logged(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 5xx refusal raises no exception the worker logs, so dispatch names it once."""
+        monkeypatch.setattr(documents, "load_all", lambda _source: {})
+        monkeypatch.setattr(
+            documents, "unreadable", lambda _source: (("coverage-FAKEDLL.toml", PROJECT, "bad"),)
+        )
+        with caplog.at_level("ERROR", logger="recoverage"):
+            detail = _refusal(_gate(project))["detail"]
+        (record,) = [r for r in caplog.records if r.name == "recoverage"]
+        assert record.levelname == "ERROR"
+        assert record.getMessage() == f"recoverage.coverage_gate refused (500): {detail}"
+
+    def test_an_engine_failure_is_logged_once_with_its_cause(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from recoverage import ops
+
+        def broken(*_args: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(ops, "_target_stats", broken)
+        with caplog.at_level("ERROR", logger="recoverage"):
+            body = _refusal(_gate(project))
+        assert body["detail"] == "recoverage.coverage_gate failed; the worker log has the cause"
+        (record,) = [r for r in caplog.records if r.name == "recoverage"]
+        assert record.getMessage() == "recoverage.coverage_gate failed"
+        assert record.exc_info is not None and record.exc_info[0] is RuntimeError
+
+    def test_a_client_refusal_is_not_logged(
+        self, project: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="recoverage"):
+            assert _refusal({**_gate(project), "sha256": "0" * 64})["status"] == 404
+        assert [r for r in caplog.records if r.name == "recoverage"] == []
+
 
 class TestProjectConfinement:
     def test_relative_project_dir(self, project: Path) -> None:

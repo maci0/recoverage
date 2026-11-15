@@ -778,13 +778,8 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
         raise OpsError(
             f"recoverage refused {name} (exit {exc.exit_code})", code=ENGINE_ERROR
         ) from None
-    except Exception:  # the engine is a trust boundary: log the cause, answer a fixed detail
-        _log.exception(
-            "%s failed",
-            name,
-            extra=metrics.log_fields(event="ops_failed", op=name),
-        )
-        raise OpsError(f"{name} failed; the worker log has the cause") from None
+    except Exception as exc:  # the engine is a trust boundary: answer a fixed detail
+        raise OpsError(f"{name} failed; the worker log has the cause") from exc
 
 
 def dispatch_json(config: WorkerConfig, name: str, request: Mapping[str, Any]) -> tuple[int, Any]:
@@ -805,6 +800,27 @@ def dispatch(config: WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
     try:
         reply = json.dumps(_answer(config, name, body), allow_nan=False).encode("utf-8")
     except OpsError as exc:
+        # Every 5xx is logged here: an engine failure with its traceback (the
+        # wire detail is fixed), any other with its detail (an unreadable
+        # document, a stored object rebrew cannot serve), which is all the
+        # operator would otherwise have. A 4xx is the caller's diagnosis.
+        if exc.status >= 500 and exc.__cause__ is not None:
+            _log.error(
+                "%s failed",
+                name,
+                exc_info=exc.__cause__,
+                extra=metrics.log_fields(event="ops_failed", op=name),
+            )
+        elif exc.status >= 500:
+            from recoverage.server import _log_safe
+
+            _log.error(
+                "%s refused (%d): %s",
+                name,
+                exc.status,
+                _log_safe(str(exc)),
+                extra=metrics.log_fields(event="ops_refused", op=name, code=exc.code),
+            )
         return exc.status, error_body(exc.code, str(exc), exc.status)
     except TypeError, ValueError:
         _log.exception(
