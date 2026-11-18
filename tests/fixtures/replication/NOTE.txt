@@ -1,0 +1,13 @@
+Replicated Rebrew projects (read_backends and write_backends sqlite, toml), one directory per rebrew release
+that wrote it: the recorded sample's project and function metadata (tests/test_ops_retained.py recorded_sample)
+with the [metadata] lists added, then `rebrew.metadata_transfer.reconcile_metadata` run under that release's
+wheel. The SQLite database is left out, as in a fresh clone; reads then use the TOML replica, the journal and
+the replication state.
+
+  rebrew-6.45.1  format = 1, records without content_sha256
+  rebrew-6.59.0  format = 1, records with content_sha256
+  rebrew-6.60.0  format = 2, content_sha256 required
+
+tests/test_cli.py (TestReplicatedMetadata) reads each in live mode, and holds the format and record fields the
+pinned rebrew writes equal to those of the pinned release's directory. When a rebrew pin moves the format, add
+a directory written by that release the same way; do not edit these files by hand.

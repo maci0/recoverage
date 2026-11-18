@@ -1,0 +1,17 @@
+[project]
+name="candidate"
+default_target="sample"
+shared_dir=""
+[targets.sample]
+binary="original/sample"
+format="elf"
+arch="x86_64"
+reversed_dir="src"
+module="SAMPLE"
+[compiler]
+profile="gcc-14.2.0"
+cflags="-O2"
+base_cflags="-c"
+[metadata]
+read_backends=["sqlite","toml"]
+write_backends=["sqlite","toml"]

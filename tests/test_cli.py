@@ -1378,6 +1378,85 @@ class TestStatsJson:
         assert item["summary"]["stubCount"] == 1
 
 
+_REPLICATED = Path(__file__).parent / "fixtures" / "replication"
+_REPLICATION_DOCUMENTS = (".rebrew/metadata-journal.toml", ".rebrew/metadata-replication.toml")
+#: One project per rebrew release that wrote it (tests/fixtures/replication/NOTE.txt).
+_WRITERS = sorted(
+    (path.name for path in _REPLICATED.iterdir() if path.is_dir()),
+    key=lambda name: tuple(int(part) for part in name.removeprefix("rebrew-").split(".")),
+)
+
+
+def _replication_layout(root: Path) -> list[tuple[int, list[list[str]]]]:
+    """Each replication document's ``format`` and the field names of its records."""
+    import tomllib
+
+    layout = []
+    for name in _REPLICATION_DOCUMENTS:
+        doc = tomllib.loads((root / name).read_text(encoding="utf-8"))
+        layout.append((doc["format"], [sorted(row) for row in doc["records"].values()]))
+    return layout
+
+
+class TestReplicatedMetadata:
+    """A replicated project (SQLite and TOML backends) is read through the rebrew recoverage pins.
+
+    Another rebrew writes the project's journal and replication state; rebrew
+    6.45.1 refused every record rebrew 6.59.0 wrote, so live mode listed every
+    target as unreadable.  The pinned rebrew reads every layout a release
+    wrote: format 1 without and with ``content_sha256`` and format 2.
+    """
+
+    def test_the_fixtures_cover_both_formats(self) -> None:
+        formats = {_replication_layout(_REPLICATED / writer)[0][0] for writer in _WRITERS}
+        assert formats == {1, 2}
+
+    @pytest.mark.parametrize("writer", _WRITERS)
+    def test_live_mode_reads_a_project_a_rebrew_release_replicated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+    ) -> None:
+        from test_ops_retained import recorded_sample
+
+        monkeypatch.delenv("RECOVERAGE_SNAPSHOTS", raising=False)
+        reports: dict[str, Any] = {}
+        for kind in ("toml", "replicated"):
+            root = tmp_path / kind
+            recorded_sample(root, "toml")
+            if kind == "replicated":
+                for name in (
+                    "rebrew-project.toml",
+                    "rebrew-functions.toml",
+                    *_REPLICATION_DOCUMENTS,
+                ):
+                    (root / name).parent.mkdir(exist_ok=True)
+                    (root / name).write_bytes((_REPLICATED / writer / name).read_bytes())
+            monkeypatch.chdir(root)
+            result = runner.invoke(app, ["stats", "--json"])
+            assert result.exit_code == 0, result.output
+            reports[kind] = json.loads(result.stdout)
+        assert reports["replicated"] == reports["toml"]
+        [item] = reports["replicated"]["items"]
+        assert item["summary"]["stubCount"] == 1
+
+    def test_the_pinned_rebrew_writes_the_newest_fixture_layout(self, tmp_path: Path) -> None:
+        """A rebrew pin that moves the replication format or its record fields fails here.
+
+        Add a fixture written by the new pin (``tests/fixtures/replication/NOTE.txt``)
+        and roll the rebrew engine with this recoverage: a rebrew that reads an
+        older format refuses the store this recoverage writes.
+        """
+        from rebrew.config import load_config
+        from rebrew.metadata_transfer import reconcile_metadata
+        from test_ops_retained import recorded_sample
+
+        newest = _REPLICATED / _WRITERS[-1]
+        recorded_sample(tmp_path, "toml")
+        for name in ("rebrew-project.toml", "rebrew-functions.toml"):
+            (tmp_path / name).write_bytes((newest / name).read_bytes())
+        reconcile_metadata(load_config(tmp_path, target="sample"))
+        assert _replication_layout(tmp_path) == _replication_layout(newest)
+
+
 class TestStatsNullSectionSize:
     def test_stats_survives_null_section_size(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

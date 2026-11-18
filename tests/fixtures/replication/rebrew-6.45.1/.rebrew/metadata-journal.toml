@@ -1,0 +1,10 @@
+format = 1
+
+[records."rebrew-functions.toml"]
+updated_at_ns = 0
+content = "format = 3\n[\"SAMPLE.0x00401120\"]\nsize = 4\nstatus = \"STUB\"\nfile = \"src/add.c\"\nsymbol = \"add\"\nkind = \"FUNCTION\"\nname = \"add\"\n"
+deleted = false
+digest = "72228d87431bc1eff9c694be918ec9f3cfa2685a364233858bcef9b0d8f01831"
+
+[records."rebrew-functions.toml".clock]
+"untracked:toml:72228d87431bc1eff9c694be918ec9f3cfa2685a364233858bcef9b0d8f01831" = 1

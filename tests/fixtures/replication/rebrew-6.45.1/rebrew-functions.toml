@@ -1,0 +1,8 @@
+format = 3
+["SAMPLE.0x00401120"]
+size = 4
+status = "STUB"
+file = "src/add.c"
+symbol = "add"
+kind = "FUNCTION"
+name = "add"
