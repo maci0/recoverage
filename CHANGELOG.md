@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.1.0] - 2026-11-19
+
 ### Changed
 
 - The bundled Rebrew is now 6.60.0 (was 6.45.1). Rebrew 6.59.0 wrote `content_sha256` into every record of a replicated project's journal and replication state (`read_backends`/`write_backends`) and Rebrew 6.45.1 refused each such record (`invalid metadata replication record`), so once a newer Rebrew had written to a replicated project, live mode listed every target as unreadable. Rebrew 6.60.0 writes that state as `format = 2` and still reads format 1, with or without `content_sha256`. The wheel pin, its hash in `uv.lock` and the CI source clone (`tools/ci_clone_rebrew.sh`) moved together. `tests/fixtures/replication` holds a project replicated by Rebrew 6.45.1, 6.59.0 and 6.60.0; the suite reads each in live mode and fails when a pin writes another replication format or record layout.
