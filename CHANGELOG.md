@@ -5,9 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+
 ### Changed
 
-- The bundled Rebrew is now 6.68.0 (was 6.60.0), the first release whose `rebrew.ops.OpsServer` takes the op table it serves (`ops` and `answer`), which `recoverage ops serve` now passes. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`, tag `v6.68.0`, commit `31e8a9f0`) and the Makefile's `REBREW_FLOOR` moved together. A Recoverage of this release does not start `ops serve` with an older Rebrew, and the replicated-project fixtures still read in live mode under it.
+- The bundled Rebrew is now 6.68.0 (was 6.60.0), the first release whose `rebrew.ops.OpsServer` takes the op table it serves (`ops` and `answer`), which `recoverage ops serve` now passes. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together. A Recoverage of this release does not start `ops serve` with an older Rebrew, and the replicated-project fixtures still read in live mode under it.
 
 ### Fixed
 
