@@ -5,9 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled Rebrew is now 6.71.0 (was 6.68.0), the first release whose `rebrew.ops.OpsServer` documents `request_stop()` and `drain(timeout)`, which `recoverage ops serve` now stops through. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together. A Recoverage of this release does not stop `ops serve` gracefully with an older Rebrew, whose server has no `request_stop`.
+
 ### Fixed
 
-- `recoverage ops serve` drained Rebrew's op server on SIGTERM through its undocumented `idle`, `draining` and `active`, a copy of `rebrew ops serve`'s own drain, so a Rebrew change to them would break the graceful stop with no contract saying so. It now stops through `rebrew.ops.OpsServer.request_stop()` and `drain(timeout)`, which Rebrew documents for engines in its docs/PYTHON_API.md, and exports spans through `rebrew.telemetry.configure`, documented there too; `ops.DRAIN_TIMEOUT_SECONDS` (30 s) names the wait. `tests/test_ops_serve.py` holds a call in flight across SIGTERM: it is answered 200 and the process exits 0. Needs the Rebrew release that adds the two methods.
+- `recoverage ops serve` drained Rebrew's op server on SIGTERM through its undocumented `idle`, `draining` and `active`, a copy of `rebrew ops serve`'s own drain, so a Rebrew change to them would break the graceful stop with no contract saying so. It now stops through `rebrew.ops.OpsServer.request_stop()` and `drain(timeout)`, which Rebrew documents for engines in its docs/PYTHON_API.md, and exports spans through `rebrew.telemetry.configure`, documented there too; `ops.DRAIN_TIMEOUT_SECONDS` (30 s) names the wait. `tests/test_ops_serve.py` holds a call in flight across SIGTERM: it is answered 200 and the process exits 0. Needs Rebrew 6.71.0, which adds the two methods.
 
 ## [9.2.0] - 2026-11-22
 
