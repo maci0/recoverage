@@ -5,9 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled Rebrew is now 6.68.0 (was 6.60.0), the first release whose `rebrew.ops.OpsServer` takes the op table it serves (`ops` and `answer`), which `recoverage ops serve` now passes. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`, tag `v6.68.0`, commit `31e8a9f0`) and the Makefile's `REBREW_FLOOR` moved together. A Recoverage of this release does not start `ops serve` with an older Rebrew, and the replicated-project fixtures still read in live mode under it.
+
 ### Fixed
 
-- `recoverage ops serve` served its ops by rebinding `rebrew.ops.dispatch` at run time inside Rebrew's op server, whose routes, metrics and span names follow Rebrew's own op table: every recoverage op metered as `op="/unknown"` on `/metrics`, a GET on a recoverage op answered 404 `unknown-op` instead of 405 `Allow: POST`, and a GET on a Rebrew op (`/rebrew.verify_function`) answered 405 naming a route this server does not serve. The server is now given recoverage's op table and dispatch through `rebrew.ops.OpsServer`'s documented `ops` and `answer`, so each op meters under its own name, a GET on one answers 405, a GET on a Rebrew op 404, and a refused POST (401) is traced under its op's span name instead of `POST /unknown`. Needs the Rebrew release after 6.67.0 that adds those parameters; the wheel pin moves to it with this release.
+- `recoverage ops serve` served its ops by rebinding `rebrew.ops.dispatch` at run time inside Rebrew's op server, whose routes, metrics and span names follow Rebrew's own op table: every recoverage op metered as `op="/unknown"` on `/metrics`, a GET on a recoverage op answered 404 `unknown-op` instead of 405 `Allow: POST`, and a GET on a Rebrew op (`/rebrew.verify_function`) answered 405 naming a route this server does not serve. The server is now given recoverage's op table and dispatch through `rebrew.ops.OpsServer`'s documented `ops` and `answer`, so each op meters under its own name, a GET on one answers 405, a GET on a Rebrew op 404, and a refused POST (401) is traced under its op's span name instead of `POST /unknown`. Needs Rebrew 6.68.0, which adds those parameters.
 
 ## [9.1.0] - 2026-11-19
 
