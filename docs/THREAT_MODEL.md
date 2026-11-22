@@ -643,9 +643,9 @@ Non-network entry points:
   `recoverage.coverage_export`, plus the plan and map ops) through rebrew's
   ops server (`rebrew.ops.OpsServer`, reached at `src/recoverage/ops.py`),
   which owns the listener, the bearer-token check, the host allowlist, the
-  concurrency bound and a `/health` endpoint. The dispatch is rebound on the
-  module (`rebrew_ops.dispatch = answer`, `src/recoverage/ops.py`), so this
-  process serves only recoverage's ops. Request-controlled values here are
+  concurrency bound and a `/health` endpoint. The server is given recoverage's
+  op table and dispatch (`OpsServer(..., ops=OPS.keys(), answer=...)`,
+  `src/recoverage/ops.py`), so this process serves only recoverage's ops. Request-controlled values here are
   `Authorization: Bearer`, `Host`, and the JSON body, which names
   `project_dir` (an absolute path), a `sha256` digest, and either a coverage
   threshold or an export format. `ops call` (`src/recoverage/ops.py`) is

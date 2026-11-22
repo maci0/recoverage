@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `recoverage ops serve` served its ops by rebinding `rebrew.ops.dispatch` at run time inside Rebrew's op server, whose routes, metrics and span names follow Rebrew's own op table: every recoverage op metered as `op="/unknown"` on `/metrics`, a GET on a recoverage op answered 404 `unknown-op` instead of 405 `Allow: POST`, and a GET on a Rebrew op (`/rebrew.verify_function`) answered 405 naming a route this server does not serve. The server is now given recoverage's op table and dispatch through `rebrew.ops.OpsServer`'s documented `ops` and `answer`, so each op meters under its own name, a GET on one answers 405, a GET on a Rebrew op 404, and a refused POST (401) is traced under its op's span name instead of `POST /unknown`. Needs the Rebrew release after 6.67.0 that adds those parameters; the wheel pin moves to it with this release.
+
 ## [9.1.0] - 2026-11-19
 
 ### Changed

@@ -275,16 +275,22 @@ def test_serve_exports_one_server_span_per_post_to_the_collector(tmp_path: Path)
     for span in collector.spans():
         by_name.setdefault(span["name"], []).append(span)
     assert sorted(by_name) == ["POST /recoverage.coverage_plan", "POST /unknown"]
-    (ok,) = by_name["POST /recoverage.coverage_plan"]
+    # A span is named by the op it was sent to, refused or not; a name outside the op set is
+    # the bounded "unknown" route.
+    by_status = {
+        _attributes(s)["http.response.status_code"]: s
+        for s in by_name["POST /recoverage.coverage_plan"]
+    }
+    assert sorted(by_status) == ["200", "401"]
+    ok = by_status["200"]
     assert _attributes(ok)["http.response.status_code"] == "200"
     assert ok["kind"] == SPAN_KIND_SERVER
     assert ok["traceId"] == trace_id
     assert ok["parentSpanId"] == caller_span
     assert _attributes(ok)["http.route"] == "/recoverage.coverage_plan"
     assert _attributes(ok)["http.request.method"] == "POST"
-    # Refusals before dispatch (401) and unknown ops (404) share the bounded "unknown" route.
     statuses = [_attributes(s)["http.response.status_code"] for s in by_name["POST /unknown"]]
-    assert sorted(statuses) == ["401", "404"]
+    assert statuses == ["404"]
 
 
 def test_serve_refuses_an_endpoint_that_is_not_an_http_url(tmp_path: Path) -> None:
@@ -347,3 +353,38 @@ def test_serve_logs_each_request_and_refusal_in_the_log_format(tmp_path: Path) -
         re.match(rf"{stamp} WARNING \[rebrew\.ops\] .*rejected unauthenticated request", line)
         for line in lines
     ), lines
+
+
+def _get(port: int, path: str, token: str) -> tuple[int, str, bytes]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=CALL_TIMEOUT)
+    conn.request("GET", path, headers={"Authorization": f"Bearer {token}"})
+    response = conn.getresponse()
+    return response.status, response.getheader("Allow") or "", response.read()
+
+
+@retained_unsupported_on_windows
+def test_serve_routes_and_meters_recoverage_ops_not_rebrews(tmp_path: Path) -> None:
+    """The server knows recoverage's op table: rebrew's ops are not served here."""
+    workspace, store = tmp_path / "workspace", tmp_path / "store"
+    workspace.mkdir()
+    store.mkdir()
+    request = json.dumps(request_for(workspace / "one", store, "one")).encode()
+    token = secrets.token_hex(16)
+    proc, port = _start(workspace, store, token)
+    try:
+        assert _post(port, "/recoverage.coverage_plan", request, token)[0] == 200
+        assert _get(port, "/recoverage.coverage_plan", token)[:2] == (405, "POST")
+        assert _get(port, "/rebrew.verify_function", token)[0] == 404
+        metrics = _get(port, "/metrics", token)[2].decode()
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
+        finally:
+            assert proc.stdout is not None
+            proc.stdout.close()
+    assert 'op="/recoverage.coverage_plan"} 2' in metrics, metrics
+    assert "rebrew.verify_function" not in metrics

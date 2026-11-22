@@ -466,9 +466,13 @@ snapshot fields read the live project through `project_dir` as before.
 `recoverage ops serve --port N --workspace DIR [--filestore DIR]` answers the same
 ops over HTTP: `POST /<op>` with `Content-Type: application/json` and
 `Authorization: Bearer $RECOVERAGE_OPS_TOKEN` (at least 32 bytes; it is read only
-from the environment). It is rebrew's ops server serving recoverage's `dispatch`,
-so `--allowed-hosts`, `--concurrency` (default 2; the next call is refused 503
-with `Retry-After`) and `/health` behave as in `rebrew ops serve`. Replies and
+from the environment). It is rebrew's ops server (`rebrew.ops.OpsServer`) given
+recoverage's op table and `dispatch`, so `--allowed-hosts`, `--concurrency`
+(default 2; the next call is refused 503 with `Retry-After`), `/health` and
+`/metrics` behave as in `rebrew ops serve`, with recoverage's ops: a GET on one
+answers 405 `Allow: POST`, any other path 404 `unknown-op` (rebrew's ops
+included), and `/metrics` counts each op under its own name
+(`rebrew_ops_per_op_requests_total{op="/recoverage.coverage_plan"}`). Replies and
 refusals are the ones `ops call` prints, with the refusal status as the HTTP
 status. A retained request does not read its `project_dir` (it need not exist);
 the worker writes its private snapshots under the workspace. `serve` logs to

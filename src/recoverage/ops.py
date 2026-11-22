@@ -1112,23 +1112,19 @@ def serve_command(
         )
         raise typer.Exit(EXIT_ERROR) from None
 
-    def answer(config: rebrew_ops.WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
-        # rebrew names the server span from its own op set: ours would all read "POST /unknown".
-        opened = telemetry.current()
-        if opened is not None and name in OPS:
-            opened.name = f"POST /{name}"
-            opened.set("http.route", f"/{name}")
+    def answer(_config: rebrew_ops.WorkerConfig, name: str, body: bytes) -> tuple[int, bytes]:
         return dispatch(worker, name, body)
 
-    # rebrew's handler calls its module-level dispatch for every POST; this process serves only
-    # recoverage's ops, so the name is rebound to ours.
-    rebrew_ops.dispatch = answer
+    # rebrew's op server with recoverage's op table: the names bound its routes, metrics and
+    # span names, and every POST goes to recoverage's dispatch.
     server = rebrew_ops.OpsServer(
         (host, resolved_port),
         rebrew_ops.WorkerConfig(worker.filestore, worker.workspace),
         token,
         resolved_concurrency,
         hosts,
+        ops=OPS.keys(),
+        answer=answer,
     )
     typer.echo(f"serving recoverage ops on http://{host}:{server.server_port}")
 
