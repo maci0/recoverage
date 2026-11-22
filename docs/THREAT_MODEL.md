@@ -645,7 +645,9 @@ Non-network entry points:
   which owns the listener, the bearer-token check, the host allowlist, the
   concurrency bound and a `/health` endpoint. The server is given recoverage's
   op table and dispatch (`OpsServer(..., ops=OPS.keys(), answer=...)`,
-  `src/recoverage/ops.py`), so this process serves only recoverage's ops. Request-controlled values here are
+  `src/recoverage/ops.py`), so this process serves only recoverage's ops, and
+  it stops through the server's documented `request_stop` and `drain`, no
+  server state of its own. Request-controlled values here are
   `Authorization: Bearer`, `Host`, and the JSON body, which names
   `project_dir` (an absolute path), a `sha256` digest, and either a coverage
   threshold or an export format. `ops call` (`src/recoverage/ops.py`) is

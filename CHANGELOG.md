@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `recoverage ops serve` drained Rebrew's op server on SIGTERM through its undocumented `idle`, `draining` and `active`, a copy of `rebrew ops serve`'s own drain, so a Rebrew change to them would break the graceful stop with no contract saying so. It now stops through `rebrew.ops.OpsServer.request_stop()` and `drain(timeout)`, which Rebrew documents for engines in its docs/PYTHON_API.md, and exports spans through `rebrew.telemetry.configure`, documented there too; `ops.DRAIN_TIMEOUT_SECONDS` (30 s) names the wait. `tests/test_ops_serve.py` holds a call in flight across SIGTERM: it is answered 200 and the process exits 0. Needs the Rebrew release that adds the two methods.
+
 ## [9.2.0] - 2026-11-22
 
 ### Changed

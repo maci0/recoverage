@@ -926,6 +926,9 @@ MIN_TOKEN_BYTES = 32
 #: ``service.name`` resource attribute of the spans ``serve`` exports.
 OTEL_SERVICE_NAME = "relumea-recoverage"
 
+#: Seconds ``serve`` waits, once stopped, for the calls in flight to answer.
+DRAIN_TIMEOUT_SECONDS = 30.0
+
 #: Calls answered at once; the next is refused 503 with Retry-After.  A map call peaks near 115 MiB.
 DEFAULT_CONCURRENCY = 2
 
@@ -977,7 +980,6 @@ def serve_command(
     """
     import os
     import signal
-    import threading
 
     from rebrew import ops as rebrew_ops
     from rebrew import telemetry
@@ -1129,11 +1131,7 @@ def serve_command(
     typer.echo(f"serving recoverage ops on http://{host}:{server.server_port}")
 
     def stop(_signum: int, _frame: object) -> None:
-        with server.idle:
-            if server.draining:
-                return
-            server.draining = True
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        server.request_stop()
 
     # SIGTERM on POSIX, SIGBREAK on Windows (the Windows arm in
     # cli._stop_on_sigterm): a handler for a signal the platform cannot
@@ -1146,19 +1144,18 @@ def serve_command(
         server.serve_forever()
     finally:
         server.server_close()
-        with server.idle:
-            server.draining = True
-            drained = server.idle.wait_for(lambda: server.active == 0, timeout=30)
-            if not drained:
-                _log.warning(
-                    "Ops server shutdown: %d request(s) still active after 30s drain timeout",
-                    server.active,
-                    extra=metrics.log_fields(
-                        event="ops_shutdown_drain_timeout",
-                        active_requests=server.active,
-                        drain_timeout_s=30,
-                    ),
-                )
+        left = server.drain(DRAIN_TIMEOUT_SECONDS)
+        if left:
+            _log.warning(
+                "Ops server shutdown: %d request(s) still active after %gs drain timeout",
+                left,
+                DRAIN_TIMEOUT_SECONDS,
+                extra=metrics.log_fields(
+                    event="ops_shutdown_drain_timeout",
+                    active_requests=left,
+                    drain_timeout_s=DRAIN_TIMEOUT_SECONDS,
+                ),
+            )
         stop_telemetry()
         for _signum, _handler in _previous.items():
             signal.signal(_signum, _handler)

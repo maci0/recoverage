@@ -479,12 +479,17 @@ the worker writes its private snapshots under the workspace. `serve` logs to
 stderr in the dashboard's format at `RECOVERAGE_LOG_LEVEL` (default `INFO`): one
 access line per request (rebrew's request id, op, status, size, elapsed time and
 trace id), refusals such as a bad token or a busy worker as `WARNING`, and a
-failure the worker could not classify with its traceback.
+failure the worker could not classify with its traceback. SIGTERM stops it
+through the server's documented stop (`OpsServer.request_stop` and `drain`): new
+calls are refused 503, the calls in flight answer within 30 s
+(`ops.DRAIN_TIMEOUT_SECONDS`; a `WARNING` with `event=ops_shutdown_drain_timeout`
+names the ones still running after it), and the process exits 0.
 
 With `--otlp-endpoint URL` (or `RECOVERAGE_OTLP_ENDPOINT`, an `http(s)` URL without
 credentials; empty leaves export off) each `POST` exports one OTLP/HTTP server
 span to `URL/v1/traces`, resource `service.name=relumea-recoverage`, continuing
-the caller's `traceparent`. The span is named `POST /<op>` for a recoverage op
+the caller's `traceparent`, through `rebrew.telemetry.configure`, the export
+entry rebrew documents for engines. The span is named `POST /<op>` for a recoverage op
 and `POST /unknown` for anything else (a refusal before dispatch, an unknown
 op), with `http.request.method`, `http.route` and `http.response.status_code`;
 a 5xx marks it failed. A full export queue drops spans and a request never

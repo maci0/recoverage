@@ -85,6 +85,54 @@ def _post(port: int, path: str, body: bytes, token: str | None) -> tuple[int, by
     return response.status, response.read()
 
 
+def _in_flight(port: int, token: str) -> int:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=CALL_TIMEOUT)
+    conn.request("GET", "/metrics", headers={"Authorization": f"Bearer {token}"})
+    text = conn.getresponse().read().decode()
+    conn.close()
+    return int(
+        next(
+            line for line in text.splitlines() if line.startswith("rebrew_ops_in_flight ")
+        ).split()[1]
+    )
+
+
+@retained_unsupported_on_windows
+def test_sigterm_drains_the_call_in_flight_and_exits_0(tmp_path: Path) -> None:
+    """The call holding a slot when SIGTERM arrives is answered before the process exits."""
+    workspace, store = tmp_path / "workspace", tmp_path / "store"
+    workspace.mkdir()
+    store.mkdir()
+    body = json.dumps(request_for(workspace / "one", store, "one")).encode()
+    token = secrets.token_hex(16)
+    proc, port = _start(workspace, store, token)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=CALL_TIMEOUT)
+        conn.putrequest("POST", "/recoverage.coverage_plan")
+        for name, value in (
+            ("Content-Type", "application/json"),
+            ("Authorization", f"Bearer {token}"),
+            ("Content-Length", str(len(body))),
+        ):
+            conn.putheader(name, value)
+        conn.endheaders()
+        conn.send(body[:1])
+        # The server holds the call's slot while it reads the rest of the body.
+        deadline = time.monotonic() + CALL_TIMEOUT
+        while _in_flight(port, token) != 1:
+            assert time.monotonic() < deadline, "the call never took a slot"
+        proc.terminate()
+        conn.send(body[1:])
+        response = conn.getresponse()
+        assert response.status == 200, response.read()
+        assert proc.wait(timeout=CALL_TIMEOUT) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        assert proc.stdout is not None
+        proc.stdout.close()
+
+
 @retained_unsupported_on_windows
 def test_serve_answers_ops_with_the_bearer_token(tmp_path: Path) -> None:
     workspace, store = tmp_path / "workspace", tmp_path / "store"
