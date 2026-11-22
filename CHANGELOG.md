@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.3.0] - 2026-11-22
+
 ### Changed
 
 - The bundled Rebrew is now 6.71.0 (was 6.68.0), the first release whose `rebrew.ops.OpsServer` documents `request_stop()` and `drain(timeout)`, which `recoverage ops serve` now stops through. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together. A Recoverage of this release does not stop `ops serve` gracefully with an older Rebrew, whose server has no `request_stop`.
