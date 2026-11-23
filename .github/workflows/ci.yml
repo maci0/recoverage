@@ -53,7 +53,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -109,7 +109,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -139,7 +139,7 @@ jobs:
         with:
           path: node_modules
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "27.0.1"
@@ -191,7 +191,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -251,7 +251,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -388,7 +388,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
@@ -436,7 +436,7 @@ jobs:
           # ls-files` for the second build tree, `git status` for the bundle
           # check), so a full-history fetch buys nothing but clone time.
           fetch-depth: 1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # uv runs every install, lint and test in this workflow, so an
           # unpinned installer means two runs of one commit can resolve and
