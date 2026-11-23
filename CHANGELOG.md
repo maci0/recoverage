@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.4.0] - 2026-11-23
+
 ### Changed
 
 - The bundled Rebrew is now 6.72.0 (was 6.71.0). The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together.
