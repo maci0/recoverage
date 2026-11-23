@@ -46,7 +46,7 @@ dependencies = [
     "rcssmin>=1.1,<2",
     # Public GitHub artifact: both uv and wheel installers resolve the same
     # format-3 metadata reader without a local checkout or registry placeholder.
-    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.71.0/rebrew-6.71.0-py3-none-any.whl#sha256=d769806908b8c42025707160b13d8915412d1763741abf00b35eb9e59314e681",
+    "rebrew @ https://github.com/maci0/rebrew/releases/download/v6.72.0/rebrew-6.72.0-py3-none-any.whl#sha256=77921b01911b13eff11c176fd6d04a8874726e3bd3d64eaee3f85ce1a1c2c973",
     "rich>=15.0.0,<16",
     "typer>=0.27.2,<1",
     "zstandard>=0.22,<1",
