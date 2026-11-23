@@ -318,6 +318,53 @@ class TestTargetResolution:
         assert record.getMessage() == "recoverage.coverage_gate failed"
         assert record.exc_info is not None and record.exc_info[0] is RuntimeError
 
+    def test_an_engine_failure_is_logged_once_beside_a_polling_watcher(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A healthy live-reload watcher polling while the op fails adds no record.
+
+        The watcher's waits are injected: each ``step`` lets one poll run, and
+        ``polled`` says it ran, so a poll lands inside the captured window by
+        construction rather than by timing.
+        """
+        import threading
+
+        from recoverage import api, ops
+
+        step, polled = threading.Event(), threading.Event()
+
+        def _wait(stop: threading.Event) -> bool:
+            step.wait()
+            step.clear()
+            return not stop.is_set()
+
+        def _poll() -> None:
+            polled.set()
+
+        def broken(*_args: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(api, "_db_watcher_wait", _wait)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _poll)
+        monkeypatch.setattr(ops, "_target_stats", broken)
+        api._ensure_db_watcher()
+        try:
+            assert polled.wait(timeout=5), "the watcher never took its baseline"
+            with caplog.at_level("DEBUG", logger="recoverage"):
+                polled.clear()
+                step.set()
+                assert polled.wait(timeout=5), "the injected poll never ran"
+                _refusal(_gate(project))
+                polled.clear()
+                step.set()
+                assert polled.wait(timeout=5), "the injected poll never ran"
+        finally:
+            api._DB_WATCHER_STOP.set()
+            step.set()
+            api._stop_db_watcher()
+        (record,) = [r for r in caplog.records if r.name == "recoverage" and r.levelno >= 40]
+        assert record.getMessage() == "recoverage.coverage_gate failed"
+
     def test_a_client_refusal_is_not_logged(
         self, project: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

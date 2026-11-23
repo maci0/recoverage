@@ -9,6 +9,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The bundled Rebrew is now 6.72.0 (was 6.71.0). The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together.
 
+### Fixed
+
+- The live-reload DB watcher logged an ERROR with a traceback on every poll that failed, for as long as it kept failing: a dashboard whose workspace was missing or whose coverage directory could not be read logged the same traceback every poll interval while a client was connected. It now logs the cause once when polls start failing (`db_watcher_iteration_failed`, traceback included) and again only when the cause changes, and logs `db_watcher_recovered` (INFO) once when a poll succeeds again. `recoverage serve` now stops the watcher it started when it returns; it left the thread running in the process that called it.
+
 ## [9.3.0] - 2026-11-22
 
 ### Changed

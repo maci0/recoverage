@@ -662,6 +662,8 @@ class TestClientConnectionDeadline:
         finally:
             server.shutdown()
             server.server_close()
+            # The first /api/events subscriber started the DB watcher; this test owns it.
+            api._stop_db_watcher()
 
     def test_a_dropped_event_stream_gives_its_slot_back(
         self, monkeypatch: pytest.MonkeyPatch
@@ -776,6 +778,8 @@ class TestClientConnectionDeadline:
                 conn.close()
             server.shutdown()
             server.server_close()
+            # The first /api/events subscriber started the DB watcher; this test owns it.
+            api._stop_db_watcher()
             accept_thread.join(timeout=5)
 
     def test_connections_are_capped_and_the_slot_is_released(self, monkeypatch) -> None:

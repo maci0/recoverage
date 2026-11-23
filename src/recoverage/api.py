@@ -1114,9 +1114,17 @@ def _db_watcher_loop(stop: threading.Event) -> None:
     process.  Both exits name themselves, so a dead poller is one grep away:
     the ``except`` arm logs at exception level and re-raises, and a stop the
     event asked for falls through to the debug line under it.
+
+    A failing poll logs its cause, traceback included, once: when polls start
+    failing and again only when the cause changes (exception type and text).
+    The first poll that succeeds after them logs once that the watcher
+    recovered.  A missing workspace or an unreadable coverage directory fails
+    every poll the same way, and one line each poll would flood the log for as
+    long as the deployment stays broken.
     """
     try:
         last = _snapshot_db_mtime()
+        failing: str | None = None
         while _db_watcher_wait(stop):
             try:
                 snapshot = _snapshot_db_mtime()
@@ -1127,12 +1135,23 @@ def _db_watcher_loop(stop: threading.Event) -> None:
                     # event.
                     _broadcast_db_updated(snapshot)
                     last = snapshot
-            except Exception:
-                _log.exception(
-                    "DB watcher iteration failed; continuing to poll",
-                    extra=_metrics.log_fields(
-                        event="db_watcher_iteration_failed",
-                    ),
+            except Exception as exc:
+                cause = f"{type(exc).__name__}: {exc}"
+                if cause != failing:
+                    failing = cause
+                    _log.exception(
+                        "DB watcher iteration failed; continuing to poll, and logging "
+                        "again only when the cause changes or polling recovers",
+                        extra=_metrics.log_fields(
+                            event="db_watcher_iteration_failed",
+                        ),
+                    )
+                continue
+            if failing is not None:
+                failing = None
+                _log.info(
+                    "DB watcher recovered; polling succeeds again",
+                    extra=_metrics.log_fields(event="db_watcher_recovered"),
                 )
     except BaseException:
         _log.exception(
@@ -1187,7 +1206,7 @@ def _db_watcher() -> threading.Thread | None:
 
 
 def _stop_db_watcher() -> None:
-    """Stop the watcher thread (used by tests).
+    """Stop the watcher thread and wait for it (``serve``'s exit, and tests).
 
     The stop event is set under _DB_WATCHER_LOCK so stop and
     :func:`_ensure_db_watcher` are mutually exclusive: set-then-lock let a

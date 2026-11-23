@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import cast
 from wsgiref.util import setup_testing_defaults
+lazy from collections.abc import Iterator
 
 import pytest
 from coverage_fixture import TARGET, build_synthetic_coverage
@@ -87,6 +88,27 @@ def _clean_regen_gate() -> None:
         api._regen_last_attempt = None
     api._REGEN_COMPLETED_KEYS.clear()
     api._REGEN_ACTIVE_KEYS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_db_watcher_left_running(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Fail a test that ends with the live-reload watcher thread still running.
+
+    The watcher is a process global that polls the coverage documents while an
+    SSE client is registered; one left behind keeps polling under the tests
+    that follow and logs into their ``caplog`` whenever its poll fails, so the
+    test that started it owns stopping it (``api._stop_db_watcher``).
+    """
+    import threading
+
+    from recoverage import api
+
+    yield
+    leaked = any(t.name == "recoverage-db-watcher" for t in threading.enumerate())
+    if leaked:
+        # Stopped here so the leak fails only the test that caused it.
+        api._stop_db_watcher()
+    assert not leaked, f"{request.node.nodeid} left the DB watcher running"
 
 
 @pytest.fixture(autouse=True)

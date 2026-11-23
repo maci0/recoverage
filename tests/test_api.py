@@ -7970,46 +7970,46 @@ class TestDbWatcherLogging:
         errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
         assert any("DB watcher stopped" in m and "live reload is off" in m for m in errors)
 
-    def test_iteration_failure_keeps_polling_and_logs_each_round(
+    def test_a_failing_poll_logs_its_cause_once_and_its_recovery_once(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """A poll that fails the same way every time (no workspace, an unreadable
+        coverage directory) logs its cause once, a new cause once more, and the
+        first good poll after them once; the polls are injected, not timed."""
         import recoverage.api as api
 
-        state = {"n": 0}
+        polls = iter(
+            [
+                (1, 1),  # baseline
+                OSError("coverage directory is locked"),
+                OSError("coverage directory is locked"),
+                OSError("coverage directory is locked"),
+                RuntimeError("no rebrew-project.toml"),
+                RuntimeError("no rebrew-project.toml"),
+                (1, 1),
+                (1, 1),
+            ]
+        )
 
-        def _flaky() -> tuple[int, int] | None:
-            state["n"] += 1
-            if state["n"] == 1:
-                return (1, 1)
-            # Any failure from one poll is retried; the type is not what the
-            # loop keys on (a stat of the coverage directory fails like this).
-            raise OSError("coverage directory is locked")
+        def _poll() -> tuple[int, int] | None:
+            result = next(polls)
+            if isinstance(result, Exception):
+                raise result
+            return result
 
-        stop = threading.Event()
-        monkeypatch.setattr(api, "_snapshot_db_mtime", _flaky)
-        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.0)
-        client: queue.Queue[bytes] = queue.Queue()
-        with api._SSE_CLIENTS_LOCK:
-            api._SSE_CLIENTS[client] = "watcher-test"
-
-        def _stop_after_two() -> None:
-            while state["n"] < 3:
-                time.sleep(0.001)
-            stop.set()
-
-        stopper = threading.Thread(target=_stop_after_two, daemon=True)
-        stopper.start()
-        try:
-            with caplog.at_level(logging.ERROR, logger="recoverage"):
-                api._db_watcher_loop(stop)
-            stopper.join(timeout=1.0)
-            assert any("continuing to poll" in r.getMessage() for r in caplog.records)
-            assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)
-        finally:
-            stop.set()
-            with api._SSE_CLIENTS_LOCK:
-                api._SSE_WATCHER_WAKE.notify_all()
-                api._SSE_CLIENTS.pop(client, None)
+        rounds = iter([True] * 7 + [False])
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _poll)
+        monkeypatch.setattr(api, "_db_watcher_wait", lambda _stop: next(rounds))
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            api._db_watcher_loop(threading.Event())
+        failed = [r for r in caplog.records if "iteration failed" in r.getMessage()]
+        assert [(r.levelno, r.exc_info and r.exc_info[0]) for r in failed] == [
+            (logging.ERROR, OSError),
+            (logging.ERROR, RuntimeError),
+        ]
+        recovered = [r for r in caplog.records if "recovered" in r.getMessage()]
+        assert [r.levelno for r in recovered] == [logging.INFO]
+        assert not any("live reload is off" in r.getMessage() for r in caplog.records)
 
 
 class TestDataSearchIndexOptOut:

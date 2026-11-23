@@ -1932,7 +1932,7 @@ def serve(
     # Start the watcher thread before the listener accepts. It parks until the
     # first /api/events client: an empty client set does not wait on the poll
     # interval, and the handler wakes it on that first subscription.
-    from recoverage.api import _ensure_db_watcher
+    from recoverage.api import _ensure_db_watcher, _stop_db_watcher
 
     # Warm the SPA shell cache off the request path: the first page load
     # would otherwise pay the asset read + minify + three full-strength
@@ -1999,6 +1999,9 @@ def serve(
         # thread has stopped, so a callback already past its own check runs
         # anyway — hence the listener probe inside the opener.
         restore_stop_handler()
+        # The watcher this run started is this run's to stop: left running, it
+        # outlives serve() in the process that called it and keeps polling.
+        _stop_db_watcher()
         # A start that never reached the bind leaves the banner armed; it must
         # not fire for a listener some later caller in this process builds.
         on_listening(None)

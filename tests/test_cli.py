@@ -331,6 +331,33 @@ class TestBareInvocationServes:
         expected = argv if "--version" in argv else [*argv, "serve"]
         assert cli._argv_with_default_command(argv) == expected
 
+    def test_a_finished_serve_leaves_no_watcher_thread(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """serve starts the DB watcher and must stop it on its way out, or the
+        thread outlives serve() in the process that called it."""
+        import threading
+
+        from recoverage import api
+
+        class _StubApp:
+            @staticmethod
+            def run(**kwargs: Any) -> None:
+                _listen_once(**kwargs)
+                assert api._db_watcher() is not None, "serve did not start the watcher"
+                raise KeyboardInterrupt
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", lambda: None)
+        monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+        monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+        monkeypatch.setattr(sys, "argv", ["recoverage", "serve"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        capsys.readouterr()
+        assert [t for t in threading.enumerate() if t.name == "recoverage-db-watcher"] == []
+
     def test_bare_run_reaches_the_server(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
