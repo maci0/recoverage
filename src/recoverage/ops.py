@@ -40,7 +40,6 @@ import json
 import logging
 import re
 import sys
-import tempfile
 import typing
 from dataclasses import MISSING, dataclass, field, fields, replace
 from pathlib import Path
@@ -652,16 +651,12 @@ def coverage_export(
     target = request.rebrew_target or _resolve_target(root, request.sha256)
     if request.format == "decomp.dev":
         from rebrew.config import load_config
-        from rebrew.report import generate_decomp_dev_report
+        from rebrew.report import decomp_dev_report
 
-        with tempfile.TemporaryDirectory(prefix="recoverage-report-") as directory:
-            output = Path(directory) / "report.json"
-            cfg = load_config(root, target=target)
-            if trusted is None:
-                generate_decomp_dev_report(cfg, output)
-            else:
-                generate_decomp_dev_report(cfg, output, trusted=trusted)
-            body = output.read_text(encoding="utf-8")
+        # The document rebrew writes for `rebrew coverage report --decomp-dev`,
+        # built in memory: the same bytes, no file written and read back.
+        report, _summary = decomp_dev_report(load_config(root, target=target), trusted=trusted)
+        body = json.dumps(report, indent=2)
         return {"format": request.format, "content_type": "application/json", "body": body}
     stats = _target_stats(root, target, trusted)
     return {

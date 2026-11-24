@@ -7,6 +7,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `recoverage.coverage_export` with `format: "decomp.dev"` builds the report in memory with `rebrew.report.decomp_dev_report` instead of having Rebrew write it, with two fsyncs, to a temporary directory and reading it back; the body is the same bytes. It needs the bundled Rebrew at 6.76.0 or later, the first release with `decomp_dev_report`, so it lands with that pin.
 - The bundled Rebrew is now 6.76.0 (was 6.72.1). Rebrew 6.73.0 to 6.76.0 change Rebrew's own dispatch schema and make its coverage reads cheaper (Rebrew's changelog has the details); Recoverage's dispatch schema is unchanged. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together.
 
 ## [9.4.1] - 2026-11-24

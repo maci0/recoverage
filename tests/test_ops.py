@@ -538,15 +538,15 @@ def test_decomp_dev_export_uses_rebrew_report(
 ) -> None:
     import rebrew.report
 
-    def report(cfg: Any, output: Path) -> dict[str, Any]:
+    def report(cfg: Any, *, trusted: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
         assert cfg.target_name == PROJECT
-        output.write_text('{"version": 2, "measures": {}, "units": []}', encoding="utf-8")
-        return {}
+        assert trusted is None
+        return {"version": 2, "measures": {}, "units": []}, {}
 
-    monkeypatch.setattr(rebrew.report, "generate_decomp_dev_report", report)
+    monkeypatch.setattr(rebrew.report, "decomp_dev_report", report)
     result = _reply(_export(project, "decomp.dev"), op="recoverage.coverage_export")
     assert result["content_type"] == "application/json"
-    assert json.loads(result["body"]) == {"version": 2, "measures": {}, "units": []}
+    assert result["body"] == json.dumps({"version": 2, "measures": {}, "units": []}, indent=2)
 
 
 def test_decomp_dev_export_real_project(tmp_path: Path) -> None:

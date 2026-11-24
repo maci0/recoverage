@@ -129,12 +129,12 @@ def test_ops_use_project_specific_retained_snapshot(tmp_path, monkeypatch, op, e
     if extra.get("format") == "decomp.dev":
         import rebrew.report
 
-        def report(cfg, output, *, trusted):
+        def report(cfg, *, trusted):
             assert trusted is not None
             seen.append((cfg.root / "src/marker.c").read_text())
-            output.write_text("{}")
+            return {}, {}
 
-        monkeypatch.setattr(rebrew.report, "generate_decomp_dev_report", report)
+        monkeypatch.setattr(rebrew.report, "decomp_dev_report", report)
     # The live files have changed after publication.
     for root in (workspace / "one", workspace / "two"):
         (root / "src/marker.c").write_text("live")
