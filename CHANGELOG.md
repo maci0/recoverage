@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.5.0] - 2026-11-24
+
 ### Changed
 
 - `recoverage.coverage_export` with `format: "decomp.dev"` builds the report in memory with `rebrew.report.decomp_dev_report` instead of having Rebrew write it, with two fsyncs, to a temporary directory and reading it back; the body is the same bytes. It needs the bundled Rebrew at 6.76.0 or later, the first release with `decomp_dev_report`, so it lands with that pin.

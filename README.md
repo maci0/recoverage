@@ -69,11 +69,11 @@ browsers without loading the SPA.
 Install the published GitHub wheel into a virtual environment. Its dependency
 metadata fetches the exact hash-pinned Rebrew wheel automatically; no local
 Rebrew checkout is required. Tags v8.9.0 through v8.12.0, v8.14.0 and v8.15.0
-have no GitHub release; the example installs the latest published wheel, 9.4.1.
+have no GitHub release; the example installs the latest published wheel, 9.5.0.
 
 ```bash
 uv venv --python 3.15.2
-uv pip install "https://github.com/maci0/recoverage/releases/download/v9.4.1/recoverage-9.4.1-py3-none-any.whl"
+uv pip install "https://github.com/maci0/recoverage/releases/download/v9.5.0/recoverage-9.5.0-py3-none-any.whl"
 .venv/bin/recoverage serve
 ```
 
