@@ -91,11 +91,11 @@ _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
 # calls it, or a direct `run:` of the script itself.
 _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_rebrew\.sh")
-_PINS = {"REBREW_REF": "v6.72.1", "REBREW_SHA": "ca1c108a8dc6f7a487cc842016e28dff459d749b"}
+_PINS = {"REBREW_REF": "v6.76.0", "REBREW_SHA": "b7451389597344f22074cb9b6d9a36f4d9925fba"}
 _REBREW_WHEEL = (
-    "https://github.com/maci0/rebrew/releases/download/v6.72.1/rebrew-6.72.1-py3-none-any.whl"
+    "https://github.com/maci0/rebrew/releases/download/v6.76.0/rebrew-6.76.0-py3-none-any.whl"
 )
-_REBREW_HASH = "d5a3af6f3f241780e90e380e984b26dcba5edf6960992cde9d0679eec79b008f"
+_REBREW_HASH = "66d29dbf42a26e09dadfbbdc3642580bd681e96ea8b48e2f45e00de2435fdcc3"
 # Qualified native wheel for normal GIL CPython 3.15 on glibc linux x86_64.
 # The marker cannot name glibc or the free-threaded ABI.
 _FLIRT_WHEEL = (

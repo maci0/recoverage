@@ -5,6 +5,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled Rebrew is now 6.76.0 (was 6.72.1). Rebrew 6.73.0 to 6.76.0 change Rebrew's own dispatch schema and make its coverage reads cheaper (Rebrew's changelog has the details); Recoverage's dispatch schema is unchanged. The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together.
+
 ## [9.4.1] - 2026-11-24
 
 ### Changed
