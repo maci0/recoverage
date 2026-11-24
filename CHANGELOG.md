@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [9.4.1] - 2026-11-24
+
 ### Changed
 
 - The bundled Rebrew is now 6.72.1 (was 6.72.0). Rebrew 6.72.1 is a patch release with the same dispatch schema: a read of a project's metadata skips a function record whose source's address anchor names another function and answers for the rest, where 6.72.0 refused the whole read, and a re-analysis repairs such records (Rebrew's changelog has the details). The wheel pin and its hash in `pyproject.toml`, `uv.lock`, the CI source clone (`tools/ci_clone_rebrew.sh`) and the Makefile's `REBREW_FLOOR` moved together.
