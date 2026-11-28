@@ -8,7 +8,7 @@ import pytest
 from test_ops_retained import retained_unsupported_on_windows
 
 contract = pytest.importorskip(
-    "rebrew.coverage_input_contract", reason="requires Rebrew 6.23.1 with coverage_input_contract"
+    "rebrew.coverage.input_contract", reason="requires Rebrew 6.23.1 with coverage_input_contract"
 )
 CoverageInputError = contract.CoverageInputError
 canonical_coverage_input = contract.canonical_coverage_input
@@ -102,7 +102,7 @@ def test_presence_content_omission_and_symlink(tmp_path):
 
 @retained_unsupported_on_windows
 def test_rebrew_reader_discovers_present_and_absent_inputs(tmp_path):
-    from rebrew.coverage_input_contract import rebrew_coverage_paths
+    from rebrew.coverage.input_contract import rebrew_coverage_paths
     from test_ops import _project
 
     root = _project(tmp_path / "project")
@@ -120,7 +120,7 @@ def test_rebrew_reader_discovers_present_and_absent_inputs(tmp_path):
 
 @retained_unsupported_on_windows
 def test_raw_link_compile_commands_are_confined_before_discovery(tmp_path):
-    from rebrew.coverage_input_contract import rebrew_coverage_paths
+    from rebrew.coverage.input_contract import rebrew_coverage_paths
     from test_ops import _project
 
     root = _project(tmp_path / "project")
@@ -144,7 +144,7 @@ def test_raw_link_compile_commands_are_confined_before_discovery(tmp_path):
 
 
 def test_verification_record_set_requires_qualified_exact_results():
-    from rebrew.coverage_input_contract import verification_records_digest
+    from rebrew.coverage.input_contract import verification_records_digest
 
     row = {
         "verification_id": "v1",
@@ -178,7 +178,7 @@ def test_verification_record_set_requires_qualified_exact_results():
 
 @retained_unsupported_on_windows
 def test_execution_rechecks_plan_target_and_verification_set(tmp_path):
-    from rebrew.coverage_input_contract import (
+    from rebrew.coverage.input_contract import (
         coverage_input_digest,
         plan_coverage_readset,
         validate_coverage_execution,
@@ -202,7 +202,7 @@ def test_execution_rechecks_plan_target_and_verification_set(tmp_path):
         validate_coverage_execution(root, "FAKEDLL", "f" * 64, value, digest, [])
     with pytest.raises(CoverageInputError):
         validate_coverage_execution(root, "FAKEDLL", SHA256, value, "f" * 64, [])
-    from rebrew.coverage_input_contract import verification_records_digest
+    from rebrew.coverage.input_contract import verification_records_digest
 
     row = {
         "verification_id": "v",
@@ -236,7 +236,7 @@ def test_execution_rechecks_plan_target_and_verification_set(tmp_path):
 
 @retained_unsupported_on_windows
 def test_execution_requires_unambiguous_analysis_inventory_extent(tmp_path):
-    from rebrew.coverage_input_contract import (
+    from rebrew.coverage.input_contract import (
         coverage_input_digest,
         plan_coverage_readset,
         validate_coverage_execution,

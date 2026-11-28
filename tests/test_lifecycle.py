@@ -154,7 +154,7 @@ class TestLiveRefresh:
             calls.append((root, refresh))
             return SimpleNamespace(snapshots={"GAME": object()}, failures={})
 
-        monkeypatch.setattr("rebrew.coverage_project.load_project_coverage", load)
+        monkeypatch.setattr("rebrew.coverage.project.load_project_coverage", load)
         assert run_regen(tmp_path) is None
         assert calls == [(tmp_path, True)]
         assert [p.name for p in tmp_path.iterdir() if p.name != ".recoverage-regen.lock"] == []
@@ -167,7 +167,7 @@ class TestLiveRefresh:
         from recoverage.regen import RegenError
 
         monkeypatch.setattr(
-            "rebrew.coverage_project.load_project_coverage",
+            "rebrew.coverage.project.load_project_coverage",
             lambda *a, **k: SimpleNamespace(
                 snapshots={"GOOD": object()}, failures={"BAD": "missing binary"}
             ),

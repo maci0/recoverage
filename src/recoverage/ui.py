@@ -18,7 +18,7 @@ lazy from pathlib import Path, PurePath, PurePosixPath
 
 lazy import rcssmin
 lazy from bottle import static_file
-lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
+lazy from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError
 
 from recoverage.config import RecoError
 from recoverage.server import (

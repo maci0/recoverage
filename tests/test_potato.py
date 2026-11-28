@@ -46,7 +46,7 @@ from urllib.parse import quote, unquote, urlparse
 import pytest
 from conftest import HAS_DB, decode_body, path_the_filesystem_holds, require_target, wsgi_get
 from coverage_fixture import cell, coverage_dir, known_cell_states, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, load_coverage_from
+from rebrew.coverage.toml import CoverageSnapshot, load_coverage_from
 
 from recoverage.potato import (
     _MAX_RENDERED_COLUMNS,
@@ -2479,7 +2479,7 @@ class TestMergeCellsInvariant:
         """A document may spell `span` zero or negative, and both are arithmetic
         here: `curr_col += span` walks the column cursor backwards, and the
         renderer emits the value as a `colspan` and a pixel width. The reader
-        passes an int through with no floor (rebrew.coverage_toml._cell), so
+        passes an int through with no floor (rebrew.coverage.toml._cell), so
         this is a value a hand-edited document really can carry. `packSection`
         applies the same floor on the SPA side, and both surfaces draw one
         document at one lattice."""
@@ -2800,7 +2800,7 @@ class TestRawByteRange:
     function's "Original Bytes" dump and Data Inspector. The clamp above the
     slice is a no-op against a negative value, so a size of -1_000_000_000
     asked the slice for a gigabyte rather than the 1 MiB bound. The document is
-    untrusted input: `rebrew.coverage_toml.Function.size` is `int | None` with
+    untrusted input: `rebrew.coverage.toml.Function.size` is `int | None` with
     no floor, and the function panel hands that value straight through, so
     this is the tail both callers arrive at.
     """
@@ -4192,7 +4192,7 @@ class TestDbUnavailableContract:
         the log, which is the same defect server._db_unavailable_err avoids by
         naming the request and carrying method/path/status as fields.
         """
-        from rebrew.coverage_toml import CoverageTomlError
+        from rebrew.coverage.toml import CoverageTomlError
 
         from recoverage import potato as potato_mod
 

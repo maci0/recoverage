@@ -13,7 +13,7 @@ from test_ops import BINARY, SHA256, _contract, _project, _schema_errors
 from recoverage import documents, ops
 
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("rebrew.coverage_input_contract") is None,
+    importlib.util.find_spec("rebrew.coverage.input_contract") is None,
     reason="requires Rebrew 6.23.1 with coverage_input_contract",
 )
 
@@ -72,7 +72,7 @@ def call(config, op, request):
 
 def bound_request(config, request):
     """Model the trusted dispatch envelope; backend custody is tested separately."""
-    from rebrew.coverage_input_contract import coverage_input_digest
+    from rebrew.coverage.input_contract import coverage_input_digest
 
     status, plan = call(config, "recoverage.coverage_plan", request)
     assert status == 200, plan
@@ -127,14 +127,14 @@ def test_ops_use_project_specific_retained_snapshot(tmp_path, monkeypatch, op, e
 
     monkeypatch.setattr(ops, "_trusted_snapshot", load)
     if extra.get("format") == "decomp.dev":
-        import rebrew.report
+        import rebrew.coverage.report
 
         def report(cfg, *, trusted):
             assert trusted is not None
             seen.append((cfg.root / "src/marker.c").read_text())
             return {}, {}
 
-        monkeypatch.setattr(rebrew.report, "decomp_dev_report", report)
+        monkeypatch.setattr(rebrew.coverage.report, "decomp_dev_report", report)
     # The live files have changed after publication.
     for root in (workspace / "one", workspace / "two"):
         (root / "src/marker.c").write_text("live")
@@ -367,7 +367,7 @@ def test_coverage_plan_reports_staged_readset_and_absences(tmp_path):
 
 @retained_unsupported_on_windows
 def test_retained_scoring_requires_bound_envelope(tmp_path):
-    from rebrew.coverage_input_contract import coverage_input_digest
+    from rebrew.coverage.input_contract import coverage_input_digest
 
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()
@@ -457,7 +457,7 @@ def recorded_sample(root, backend):
 @retained_unsupported_on_windows
 @pytest.mark.parametrize("backend", ["toml", "sqlite"])
 def test_recorded_real_exact_result_passes_verified_gate(tmp_path, backend):
-    from rebrew.coverage_input_contract import coverage_input_digest, verification_records_digest
+    from rebrew.coverage.input_contract import coverage_input_digest, verification_records_digest
 
     workspace, store = tmp_path / "workspace", tmp_path / "store"
     workspace.mkdir()

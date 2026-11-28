@@ -47,7 +47,7 @@ from typing import Any
 lazy from collections.abc import Callable, Mapping
 
 import typer
-lazy from rebrew.coverage_toml import CoverageTomlError
+lazy from rebrew.coverage.toml import CoverageTomlError
 lazy from rebrew.errors import OpsError as RebrewOpsError
 lazy from rebrew.ops import RetainedFile as RebrewRetainedFile
 lazy from rebrew.ops import WorkerConfig as RebrewWorkerConfig
@@ -168,7 +168,7 @@ class ConflictError(OpsError):
         super().__init__(detail, code="coverage-input-invalid", status=409)
 
 
-# Rebrew's retained-snapshot confinement (rebrew.coverage_input_contract.confined_snapshot_config)
+# Rebrew's retained-snapshot confinement (rebrew.coverage.input_contract.confined_snapshot_config)
 # refuses any path whose text holds a backslash, which is every Windows path. The managed scope
 # is glibc linux x86_64 (pyproject.toml, [tool.uv]), so retained operations are not served on
 # Windows and the refusal names the platform instead of the unsupported path.
@@ -449,7 +449,7 @@ def _target_snapshot(root: Path, target: str) -> Any:
 
 def _trusted_snapshot(root: Path, target: str, trusted: Any) -> Any:
     from rebrew.config import load_config
-    from rebrew.coverage_project import trusted_project_coverage
+    from rebrew.coverage.project import trusted_project_coverage
 
     return trusted_project_coverage(load_config(root, target=target), trusted)
 
@@ -544,7 +544,7 @@ def _target_stats(root: Path, target: str, trusted: Any = None) -> dict[str, Any
 
 def coverage_plan(config: WorkerConfig, request: PlanRequest) -> Mapping[str, Any]:
     """List the independently discovered staged coverage inputs, including absences."""
-    from rebrew.coverage_input_contract import (
+    from rebrew.coverage.input_contract import (
         CoverageInputError,
         plan_coverage_config,
         plan_coverage_readset,
@@ -651,7 +651,7 @@ def coverage_export(
     target = request.rebrew_target or _resolve_target(root, request.sha256)
     if request.format == "decomp.dev":
         from rebrew.config import load_config
-        from rebrew.report import decomp_dev_report
+        from rebrew.coverage.report import decomp_dev_report
 
         # The document rebrew writes for `rebrew coverage report --decomp-dev`,
         # built in memory: the same bytes, no file written and read back.
@@ -743,7 +743,7 @@ def _answer(config: WorkerConfig, name: str, body: bytes) -> Mapping[str, Any]:
                         raise ConflictError(
                             "retained coverage requires the complete input envelope",
                         )
-                    from rebrew.coverage_input_contract import (
+                    from rebrew.coverage.input_contract import (
                         CoverageInputError,
                         validate_coverage_execution,
                     )

@@ -19,7 +19,7 @@ import pytest
 import typer
 from conftest import HAS_DB, path_the_filesystem_holds
 from coverage_fixture import cell, coverage_dir, write_coverage
-from rebrew.coverage_toml import CoverageTomlError
+from rebrew.coverage.toml import CoverageTomlError
 from rich.text import Text
 from typer.testing import CliRunner
 

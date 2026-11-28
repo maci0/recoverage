@@ -30,8 +30,8 @@ lazy from types import MappingProxyType
 lazy from urllib.parse import quote, unquote, urlsplit
 
 from bottle import Bottle, HTTPResponse, request, response
-from rebrew.coverage_db import KNOWN_CELL_STATES
-from rebrew.coverage_toml import (
+from rebrew.coverage.db import KNOWN_CELL_STATES
+from rebrew.coverage.toml import (
     BUCKET_OF_STATE,
     Cell,
     CoverageSnapshot,
@@ -1177,7 +1177,7 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     """
     source = coverage_source()
     if config.snapshot_override() is None and (source / "rebrew-project.toml").exists():
-        from rebrew.coverage_project import load_project_coverage
+        from rebrew.coverage.project import load_project_coverage
 
         return tuple(
             (Path(path).name, mtime, size)
@@ -1515,7 +1515,7 @@ def known_schema_versions() -> list[str]:
     would drift as rebrew advances the format.
 
     Read off the snapshots, NOT off what the reader supports, and that is a
-    tautology today: ``rebrew.coverage_toml`` raises on any document whose
+    tautology today: ``rebrew.coverage.toml`` raises on any document whose
     ``version`` is not the one it reads, so every snapshot that exists carries
     that single version and this list can only ever name it. An empty list means
     no readable document, which is the 503 ``db_unavailable`` contract the

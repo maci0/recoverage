@@ -191,7 +191,7 @@ class TestRequestId:
         default INFO level an error rate spike left no per-request line at
         all: the counter moved, the log stayed quiet.
         """
-        from rebrew.coverage_toml import CoverageTomlError
+        from rebrew.coverage.toml import CoverageTomlError
 
         def _raise() -> None:
             raise CoverageTomlError("no readable coverage document")
@@ -280,7 +280,7 @@ class TestRedCounters:
         assert body["requests"]["errors"] == 1
 
     def test_db_failure_is_counted_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from rebrew.coverage_toml import CoverageTomlError
+        from rebrew.coverage.toml import CoverageTomlError
 
         def _raise() -> None:
             raise CoverageTomlError("no readable coverage document")
@@ -576,7 +576,7 @@ class TestTargetsFallbackLogging:
     """
 
     def _reason(self, text: str) -> str:
-        from rebrew.coverage_toml import CoverageTomlError
+        from rebrew.coverage.toml import CoverageTomlError
 
         _api._log_targets_fallback(CoverageTomlError(text))
         return text

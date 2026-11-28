@@ -105,7 +105,7 @@ from coverage_fixture import (
     render_coverage,
     write_coverage,
 )
-from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage_from
+from rebrew.coverage.toml import CoverageSnapshot, Function, load_coverage_from
 from typer.testing import CliRunner
 
 from recoverage import cli, config, devserver, potato, reporting
@@ -5937,7 +5937,7 @@ class TestPersistedParseCache:
         one rebrew's own reader builds from the document, which is the oracle
         here rather than a restatement of the code under test.
         """
-        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.coverage.toml import load_coverage_from
 
         from recoverage import documents, server
 
@@ -7940,7 +7940,7 @@ class TestTomlDocumentBytes:
     """A coverage TOML document never only raises CoverageTomlError."""
 
     def test_parse_toml_never_escapes_except_as_coverage_toml_error(self, tmp_path: Path) -> None:
-        from rebrew.coverage_toml import CoverageTomlError
+        from rebrew.coverage.toml import CoverageTomlError
 
         from recoverage import documents
 
@@ -7971,7 +7971,7 @@ class TestTrustedVerificationFold:
     """An authenticated extent fold counts only well-typed EXACT bytes."""
 
     def test_hostile_records_never_escape_as_a_crash(self, tmp_path: Path) -> None:
-        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.coverage.toml import load_coverage_from
         from rebrew.workspace.status import TrustedCoverage, TrustedVerification
 
         from recoverage import ops
@@ -8081,7 +8081,7 @@ class TestTrustedVerificationFold:
         )
 
     def test_well_typed_extents_count_exactly(self, tmp_path: Path) -> None:
-        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.coverage.toml import load_coverage_from
         from rebrew.workspace.status import TrustedCoverage, TrustedVerification
 
         from recoverage.ops import InvalidRequestError, _verified_section_bytes

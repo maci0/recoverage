@@ -536,14 +536,14 @@ def test_map_matches_dashboard_and_json_export(project: Path) -> None:
 def test_decomp_dev_export_uses_rebrew_report(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import rebrew.report
+    import rebrew.coverage.report
 
     def report(cfg: Any, *, trusted: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
         assert cfg.target_name == PROJECT
         assert trusted is None
         return {"version": 2, "measures": {}, "units": []}, {}
 
-    monkeypatch.setattr(rebrew.report, "decomp_dev_report", report)
+    monkeypatch.setattr(rebrew.coverage.report, "decomp_dev_report", report)
     result = _reply(_export(project, "decomp.dev"), op="recoverage.coverage_export")
     assert result["content_type"] == "application/json"
     assert result["body"] == json.dumps({"version": 2, "measures": {}, "units": []}, indent=2)
@@ -554,7 +554,7 @@ def test_decomp_dev_export_real_project(tmp_path: Path) -> None:
     import shutil
 
     from rebrew.config import load_config
-    from rebrew.report import generate_decomp_dev_report
+    from rebrew.coverage.report import generate_decomp_dev_report
 
     retained = next(
         (

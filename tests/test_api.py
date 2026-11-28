@@ -71,7 +71,7 @@ from conftest import (
     wsgi_request,
 )
 from coverage_fixture import cell, coverage_dir, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
+from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
 
 from recoverage import api, clock, webapp
 from recoverage import server as _server
@@ -6096,7 +6096,7 @@ class TestKnownSchemaContract:
     understood" wording tracks the server instead of a stale client copy."""
 
     def test_data_payload_lists_known_schema(self) -> None:
-        from rebrew.coverage_toml import load_coverage_from
+        from rebrew.coverage.toml import load_coverage_from
 
         from recoverage import server as server_mod
 

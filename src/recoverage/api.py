@@ -25,7 +25,7 @@ lazy from pathlib import Path
 lazy from typing import Any
 
 from rebrew.workspace.status import COVERAGE_DB_STATUSES
-lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function, Global
+lazy from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError, Function, Global
 lazy from rebrew.workspace import VA_MAX, parse_va_candidates
 
 from recoverage import server as _server

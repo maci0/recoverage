@@ -42,7 +42,7 @@ def _snapshot(db_dir: Path) -> Any:
     *db_dir* is the directory the documents live in; the reader resolves the
     directory from the project ROOT, which is one level up.
     """
-    from rebrew.coverage_toml import load_coverage_from
+    from rebrew.coverage.toml import load_coverage_from
 
     return load_coverage_from(db_dir, "FAKEDLL")
 

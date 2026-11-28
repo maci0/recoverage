@@ -24,7 +24,7 @@ from typing import IO, Any, NamedTuple, NoReturn
 from urllib.parse import urlsplit
 
 import typer
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
+from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
 from rich.theme import Theme
 

@@ -1003,7 +1003,7 @@ class TestRestoreBackup:
         self, db: Path, archive: Path
     ) -> None:
         """A restore that lands bytes the reader refuses is not a restore."""
-        from rebrew.coverage_toml import load_all_coverage_from
+        from rebrew.coverage.toml import load_all_coverage_from
 
         document = next(db.glob("coverage-*.toml"))
         document.write_text("this is not toml = = =\n", encoding="utf-8")

@@ -115,7 +115,7 @@ def _project_lock(root: Path) -> Iterator[None]:
 
 def run_regen(root: Path) -> None:
     """Refresh canonical project inputs; sole file written is the regen lock."""
-    from rebrew.coverage_project import ProjectCoverageError, load_project_coverage
+    from rebrew.coverage.project import ProjectCoverageError, load_project_coverage
 
     from recoverage.config import snapshot_override
 

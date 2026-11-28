@@ -25,7 +25,7 @@ lazy from pathlib import Path
 lazy from urllib.parse import ParseResult, parse_qs, urlparse
 
 from bottle import HTTPResponse, SimpleTemplate
-lazy from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
+lazy from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError, Function
 
 from recoverage.server import (
     CACHE_NO_STORE,
@@ -875,7 +875,7 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
     thousands of unrelated bytes as that function's "Original Bytes" and Data
     Inspector, and a size of -1_000_000_000 asked the slice for a gigabyte
     while the bound above was applied to the negative number and left it
-    negative.  ``rebrew.coverage_toml.Function.size`` is ``int | None`` with no
+    negative.  ``rebrew.coverage.toml.Function.size`` is ``int | None`` with no
     floor, and this is the one tail both callers arrive at (the cell panel
     refuses a non-positive size of its own; the function panel hands the
     document's value straight through), so the refusal belongs here, beside

@@ -58,7 +58,7 @@ import pytest
 import zstandard as zstd
 from conftest import WSGI_PEER, path_the_filesystem_holds
 from coverage_fixture import TOML_VERSION, cell, coverage_dir, known_cell_states, write_coverage
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
+from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError, load_coverage_from
 
 from recoverage import clock
 from recoverage.server import (
@@ -1312,7 +1312,7 @@ class TestCoverageVersionGate:
         yet" from "this build does not understand the file"; a version in that
         list that no reader accepts would make that message wrong.
         """
-        import rebrew.coverage_toml as cov
+        import rebrew.coverage.toml as cov
 
         assert cov._TOML_VERSION == TOML_VERSION
 
@@ -3487,7 +3487,7 @@ class TestBucketReconciliation:
 
     #: The cell-state to bucket fold, written out here rather than read back
     #: from ``server._BUCKET_FOLD`` (which reads it off
-    #: ``rebrew.coverage_toml._BUCKET_OF_STATE``), so the walks below are
+    #: ``rebrew.coverage.toml._BUCKET_OF_STATE``), so the walks below are
     #: checked against a literal and the two can be held against each other.
     _FOLD_BY_STATE: ClassVar[dict[str, str]] = {
         "data": "data",
@@ -4523,7 +4523,7 @@ class TestSpaNumericBoundaries:
     each read off the coverage document and each with a bound the Python
     surfaces already applied.
 
-    `rebrew.coverage_toml` reads these columns as plain ints and whatever the
+    `rebrew.coverage.toml` reads these columns as plain ints and whatever the
     document spells (only a non-finite FLOAT is nulled on the wire, by
     `server._plain`), so every narrowing the SPA does on them is a place a
     hand-edited or hostile document silently becomes a different number. The

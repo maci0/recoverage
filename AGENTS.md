@@ -4,7 +4,7 @@
 
 **recoverage** is a coverage dashboard for binary-matching decompilation projects.
 Normal mode reads canonical Rebrew project inputs through
-`rebrew.coverage_project.load_project_coverage`; no generated coverage directory
+`rebrew.coverage.project.load_project_coverage`; no generated coverage directory
 or `db_dir` setting is needed. Source bindings, binary sections, inventory,
 metadata, link evidence and durable status history feed one immutable model.
 
@@ -516,7 +516,7 @@ simpler and strictly wider.
 
 ## Data Pipeline
 
-1. Normal project mode calls `rebrew.coverage_project.load_project_coverage`.
+1. Normal project mode calls `rebrew.coverage.project.load_project_coverage`.
    The shared catalog derives functions/data/grid cells directly from canonical
    inputs. Input versions invalidate cached views; failures remain target-scoped.
    Comparison history is stored atomically with STATUS in function metadata.
@@ -537,14 +537,14 @@ simpler and strictly wider.
      once per `/stats`, `/data` and Potato render. The counts these read are
      rebrew's, so `tests/test_server.py` (`TestBucketReconciliation`) pins
      them against an independent per-cell walk, and a cell-state vocabulary
-     change lands in `rebrew.coverage_toml.BUCKET_OF_STATE` first, not here.
+     change lands in `rebrew.coverage.toml.BUCKET_OF_STATE` first, not here.
      The byte side reads that same fold rather than re-spelling it:
      `server._BUCKET_FOLD` is grouped off rebrew's `BUCKET_OF_STATE`, because
      `Section.buckets` is keyed by cell STATE and a second hand-written copy of
      the grouping was a vocabulary this package drifted from silently (a state
      rebrew added summed into no counted bucket while `Section.covered_bytes`
      still counted it). The `other` states come from rebrew's public
-     `rebrew.coverage_db.KNOWN_CELL_STATES`: it is the one place the
+     `rebrew.coverage.db.KNOWN_CELL_STATES`: it is the one place the
      vocabulary exists, a rename fails this import loudly where the copy
      failed quietly, and `tests/test_server.py` (`TestBucketReconciliation`)
      holds what it hands over against a literal written in the test.
@@ -1296,7 +1296,7 @@ explicit upstream development only; it is never the default package source.
   work tree `git status` writes its error to stderr and yields nothing, which
   read as a clean bundle.
 - The cell-state vocabulary is owned by rebrew (published as
-  `rebrew.coverage_db.KNOWN_CELL_STATES`) and must be covered on the rendering side: `potato.COLORS`
+  `rebrew.coverage.db.KNOWN_CELL_STATES`) and must be covered on the rendering side: `potato.COLORS`
   + `LEGEND_ITEMS`, and `web/app/states.ts`
   `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats`, where `verified`
@@ -1307,7 +1307,7 @@ explicit upstream development only; it is never the default package source.
   that public name, so a rename fails the import instead of skipping the gate:
   a skipped gate reads exactly like a passing one.
 - The SPA's own arithmetic over document columns follows four rules, because
-  `rebrew.coverage_toml` reads `columns`, `start`, `end` and `span` as plain
+  `rebrew.coverage.toml` reads `columns`, `start`, `end` and `span` as plain
   ints with no ceiling, and a value past a JS typed array's range wraps
   silently. A cell's `end` is EXCLUSIVE (rebrew writes `cur = cell_end` for
   the next cell, and a cell's size is `end - start`), so

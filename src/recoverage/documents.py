@@ -2,7 +2,7 @@
 
 Live projects bypass the portable persisted-parse cache.
 
-The replacement for ``rebrew.coverage_toml.load_all_coverage_from``'s memo,
+The replacement for ``rebrew.coverage.toml.load_all_coverage_from``'s memo,
 which keys the whole directory on one stat tuple: a rebuild that rewrote one
 target re-parsed every document, and every restart re-parsed all of them.
 ``tomllib`` is about 90% of a load (632 ms of 706 ms for an 8 MB document), so
@@ -27,9 +27,9 @@ datetime) all fall back to the parse, and the first write failure in a process
 logs one WARNING.  It holds one file per document path, and every write keeps
 the :data:`_CACHE_MAX_SLOTS` most recently used.
 
-``rebrew.coverage_toml.snapshot_from_document`` is the public shared schema
+``rebrew.coverage.toml.snapshot_from_document`` is the public shared schema
 validator, and ``tests/test_documents.py`` holds every snapshot this module builds
-equal to the one ``rebrew.coverage_toml.load_coverage_from`` builds.
+equal to the one ``rebrew.coverage.toml.load_coverage_from`` builds.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ lazy import unicodedata
 lazy from collections.abc import Iterator, Mapping
 lazy from typing import Any, Final
 
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, snapshot_from_document
-lazy from rebrew.coverage_project import (
+from rebrew.coverage.toml import CoverageSnapshot, CoverageTomlError, snapshot_from_document
+lazy from rebrew.coverage.project import (
     ProjectCoverageError,
     ProjectCoverageView,
     load_project_coverage,
@@ -522,7 +522,7 @@ def relative_text(text: str, root: Path) -> str:
 def load_all(db_dir: Path) -> Mapping[str, CoverageSnapshot]:
     """Every readable document in *db_dir*, keyed by target id.
 
-    The contract of ``rebrew.coverage_toml.load_all_coverage_from``: ``{}`` for
+    The contract of ``rebrew.coverage.toml.load_all_coverage_from``: ``{}`` for
     a directory with no document, one unreadable document skipped with a
     warning naming it, and THE SAME mapping for an unchanged directory.
     """

@@ -144,10 +144,10 @@ def known_cell_states() -> frozenset[str]:
     vocabulary is owned by rebrew"), so it is READ rather than restated: a
     hard-coded copy here is a second answer that drifts the moment rebrew adds
     a state, which is exactly what the tests using this are for.  Rebrew
-    publishes it as ``rebrew.coverage_db.KNOWN_CELL_STATES``; a rename fails
+    publishes it as ``rebrew.coverage.db.KNOWN_CELL_STATES``; a rename fails
     this import instead of skipping the gate.
     """
-    from rebrew.coverage_db import KNOWN_CELL_STATES
+    from rebrew.coverage.db import KNOWN_CELL_STATES
 
     return frozenset(KNOWN_CELL_STATES)
 

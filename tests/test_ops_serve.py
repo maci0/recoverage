@@ -20,7 +20,7 @@ from test_ops_retained import request_for, retained_unsupported_on_windows
 from recoverage import __version__, ops
 
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("rebrew.coverage_input_contract") is None,
+    importlib.util.find_spec("rebrew.coverage.input_contract") is None,
     reason="requires Rebrew 6.23.1 with coverage_input_contract",
 )
 
@@ -394,11 +394,11 @@ def test_serve_logs_each_request_and_refusal_in_the_log_format(tmp_path: Path) -
     lines = log.read_text().splitlines()
     stamp = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}"
     assert any(
-        re.match(rf"{stamp} INFO \[rebrew\.ops\] .* r\d+ recoverage\.nope 404 ", line)
+        re.match(rf"{stamp} INFO \[rebrew\.ops\.core\] .* r\d+ recoverage\.nope 404 ", line)
         for line in lines
     ), lines
     assert any(
-        re.match(rf"{stamp} WARNING \[rebrew\.ops\] .*rejected unauthenticated request", line)
+        re.match(rf"{stamp} WARNING \[rebrew\.ops\.core\] .*rejected unauthenticated request", line)
         for line in lines
     ), lines
 

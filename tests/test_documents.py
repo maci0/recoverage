@@ -20,7 +20,7 @@ from typing import Any, cast
 
 import pytest
 from coverage_fixture import cell, coverage_dir, write_coverage
-from rebrew.coverage_toml import CoverageTomlError, load_all_coverage_from, load_coverage_from
+from rebrew.coverage.toml import CoverageTomlError, load_all_coverage_from, load_coverage_from
 
 from recoverage import documents, metrics, server
 
